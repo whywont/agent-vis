@@ -73,6 +73,13 @@ body {
 .resize-handle.right { right: 0; }
 .resize-handle.left { left: 0; }
 
+.sidebar-logo {
+  width: 32px;
+  height: 32px;
+  margin-left: 8px;
+  flex-shrink: 0;
+}
+
 .sidebar-header {
   padding: 0 18px;
   border-bottom: 1px solid var(--border);

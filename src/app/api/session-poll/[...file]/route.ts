@@ -3,6 +3,7 @@ import fs from "fs";
 import { resolveSessionFile } from "@/lib/server-utils";
 import { parseEvent } from "@/lib/parser";
 import { parseClaudeEvent, createTokenAccumulator } from "@/lib/claude-parser";
+import { deduplicateUserMessages, deduplicateAgentMessages } from "@/lib/dedup";
 import type { AppEvent } from "@/lib/types";
 
 export async function GET(
@@ -63,6 +64,8 @@ export async function GET(
         if (evt) events.push(evt);
       } catch {}
     }
+    deduplicateUserMessages(events as (AppEvent | null)[]);
+    deduplicateAgentMessages(events as (AppEvent | null)[]);
   }
 
   return NextResponse.json({ events, total: lines.length });

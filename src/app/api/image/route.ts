@@ -17,8 +17,14 @@ export function GET(req: NextRequest) {
   if (!filepath || !path.isAbsolute(filepath)) {
     return new NextResponse("bad path", { status: 400 });
   }
-  if (!filepath.startsWith(os.homedir())) {
-    return new NextResponse("path outside home", { status: 403 });
+  // Allow home dir and system temp dirs (Codex stores clipboard images in
+  // /var/folders/... on macOS and /tmp/ on Linux)
+  const allowed =
+    filepath.startsWith(os.homedir()) ||
+    filepath.startsWith("/var/folders/") ||
+    filepath.startsWith("/tmp/");
+  if (!allowed) {
+    return new NextResponse("path outside allowed directories", { status: 403 });
   }
   if (!fs.existsSync(filepath)) {
     return new NextResponse("not found", { status: 404 });

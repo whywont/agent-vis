@@ -102,6 +102,8 @@ export default function AppShell() {
       <nav id="sidebar" ref={sidebarRef}>
         <div className="sidebar-header">
           <h1>agent-vis</h1>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/logo.png" alt="" className="sidebar-logo" />
         </div>
         <div className="sidebar-subheader">
           <span className="subtitle">session explorer</span>
