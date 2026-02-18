@@ -1,0 +1,16 @@
+# dependencies
+node_modules/
+
+# Next.js build output
+.next/
+
+# TypeScript incremental build cache
+*.tsbuildinfo
+
+# macOS
+.DS_Store
+
+# env files
+.env
+.env.local
+.env*.local
