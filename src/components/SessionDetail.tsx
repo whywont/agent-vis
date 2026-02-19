@@ -180,7 +180,11 @@ export default function SessionDetail({
       ) : activeTab === "tree" ? (
         <TreeCanvas events={events} sessionCwd={sessionCwd} />
       ) : (
-        <TerminalTab sessionCwd={sessionCwd} sessionId={detailId} />
+        <TerminalTab
+          sessionCwd={sessionCwd}
+          sessionId={detailId}
+          sessionType={allFiles.startsWith("claude:") ? "claude" : "codex"}
+        />
       )}
     </div>
   );
