@@ -61,6 +61,19 @@ export default function SessionList({
             const isActive = currentFile === allFiles || currentFile === s.files?.[0];
             const menuOpen = menuOpenFor === allFiles;
 
+            async function handleExport() {
+              setMenuOpenFor(null);
+              const res = await fetch(`/api/session/${encodeURIComponent(allFiles)}`);
+              const data = await res.json();
+              const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement("a");
+              a.href = url;
+              a.download = `session-${s.id.slice(0, 12)}.json`;
+              a.click();
+              URL.revokeObjectURL(url);
+            }
+
             return (
               <div
                 key={s.file}
@@ -97,6 +110,12 @@ export default function SessionList({
                 {/* Dropdown */}
                 {menuOpen && (
                   <div ref={menuRef} className="session-item-dropdown">
+                    <button
+                      className="session-item-dropdown-btn"
+                      onClick={(e) => { e.stopPropagation(); handleExport(); }}
+                    >
+                      Export JSON
+                    </button>
                     <button
                       className="session-item-dropdown-btn delete"
                       onClick={(e) => {

@@ -35,6 +35,7 @@ export default function SessionDetail({
   const [events, setEvents] = useState<AppEvent[]>([]);
   const [sessionCwd, setSessionCwd] = useState("");
   const [activeTab, setActiveTab] = useState<"session" | "tree" | "terminal">("session");
+  const [collapseAllToken, setCollapseAllToken] = useState(0);
   const timelineRef = useRef<HTMLDivElement>(null);
   const fileTreePanelRef = useRef<HTMLDivElement>(null);
   const resizeHandleRef = useRef<HTMLDivElement>(null);
@@ -167,6 +168,7 @@ export default function SessionDetail({
               showTokenUsage={showTokenUsage}
               onToggleFilter={onToggleFilter}
               onToggleTokenUsage={onToggleTokenUsage}
+              onCollapseAll={() => setCollapseAllToken((t) => t + 1)}
             />
             <Timeline
               events={events}
@@ -174,6 +176,7 @@ export default function SessionDetail({
               showTokenUsage={showTokenUsage}
               sessionCwd={sessionCwd}
               onOpenImage={onOpenImage}
+              collapseAllToken={collapseAllToken}
             />
           </div>
         </div>
