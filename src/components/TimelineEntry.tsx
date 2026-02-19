@@ -190,6 +190,7 @@ export default function TimelineEntry({
 }: TimelineEntryProps) {
   const [collapsed, setCollapsed] = useState(true);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => {
     if (collapseToken) setCollapsed(true);
   }, [collapseToken]);
