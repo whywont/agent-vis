@@ -138,7 +138,7 @@ export default function TerminalTab({ sessionCwd, sessionId, sessionType = "clau
       disposed = true;
       cleanup?.();
     };
-  }, [sessionCwd, sessionId]);
+  }, [sessionCwd, sessionId, sessionType]);
 
   return (
     <div className="terminal-tab">

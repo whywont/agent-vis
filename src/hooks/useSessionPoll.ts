@@ -11,7 +11,8 @@ export function useSessionPoll(
   const fileRef = useRef(file);
   const callbackRef = useRef(onNewEvents);
 
-  // Keep callback ref current without resetting the interval
+  // Keep callback ref current without resetting the interval (standard stale-closure pattern)
+  // eslint-disable-next-line react-hooks/refs
   callbackRef.current = onNewEvents;
 
   useEffect(() => {

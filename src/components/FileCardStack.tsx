@@ -46,7 +46,8 @@ export default function FileCardStack({
   const [expanded, setExpanded] = useState(false);
   const [mounted, setMounted] = useState(false);
 
-  // Ensure portal only renders on client
+  // Ensure portal only renders on client (standard SSR-safe mount pattern)
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => setMounted(true), []);
 
   // Close expanded overlay on Escape
