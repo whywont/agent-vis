@@ -511,6 +511,7 @@ export default function TreeCanvas({ events, sessionCwd }: TreeCanvasProps) {
                       filepath={card.path}
                       changes={file.changes}
                       sessionCwd={sessionCwd}
+                      allEvents={events}
                     />
                   </div>
                 );

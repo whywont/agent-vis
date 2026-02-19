@@ -7,6 +7,7 @@ interface DiffViewProps {
   patch: string;
   files: FileInfo[];
   sessionCwd: string;
+  contextText?: string;
 }
 
 interface DiffBlock {
@@ -48,13 +49,48 @@ function parseDiff(patch: string): DiffBlock[] {
 interface DiffBlockViewProps {
   block: DiffBlock;
   sessionCwd: string;
+  contextText?: string;
 }
 
-function DiffBlockView({ block, sessionCwd }: DiffBlockViewProps) {
+function DiffBlockView({ block, sessionCwd, contextText }: DiffBlockViewProps) {
   const [showFull, setShowFull] = useState(false);
   const [fullContent, setFullContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [btnLabel, setBtnLabel] = useState("full file");
+  const [explanation, setExplanation] = useState<string | null>(null);
+  const [explaining, setExplaining] = useState(false);
+
+  async function explain() {
+    if (explaining) return;
+    setExplanation(null);
+    setExplaining(true);
+    const patch = block.lines.map((l) => l.text).join("\n");
+    try {
+      const res = await fetch("/api/explain", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filepath: block.filepath, patch, contextText }),
+      });
+      if (!res.ok) {
+        const errText = await res.text();
+        setExplanation(errText || "Failed to get explanation.");
+        return;
+      }
+      if (!res.body) throw new Error("no response body");
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      setExplanation("");
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        setExplanation((prev) => (prev ?? "") + decoder.decode(value));
+      }
+    } catch {
+      setExplanation("Failed to get explanation.");
+    } finally {
+      setExplaining(false);
+    }
+  }
 
   async function toggleFull() {
     if (showFull) {
@@ -109,6 +145,13 @@ function DiffBlockView({ block, sessionCwd }: DiffBlockViewProps) {
             {btnLabel}
           </button>
         )}
+        <button
+          className="diff-explain-btn"
+          onClick={explain}
+          disabled={explaining}
+        >
+          {explaining ? "explaining…" : "explain"}
+        </button>
       </div>
       {!showFull && (
         <div className="diff-content">
@@ -119,6 +162,15 @@ function DiffBlockView({ block, sessionCwd }: DiffBlockViewProps) {
               </div>
             ))}
           </div>
+        </div>
+      )}
+      {explanation !== null && (
+        <div className="diff-explain-panel">
+          <div className="diff-explain-label">
+            ai explanation
+            <button className="diff-explain-dismiss" onClick={() => setExplanation(null)}>×</button>
+          </div>
+          <div className="diff-explain-text">{explanation}</div>
         </div>
       )}
       {showFull && fullContent !== null && (
@@ -139,14 +191,14 @@ function DiffBlockView({ block, sessionCwd }: DiffBlockViewProps) {
   );
 }
 
-export default function DiffView({ patch, files, sessionCwd }: DiffViewProps) {
+export default function DiffView({ patch, files, sessionCwd, contextText }: DiffViewProps) {
   if (!patch) return <em>no patch content</em>;
   const blocks = parseDiff(patch);
   if (blocks.length === 0) return <>{patch}</>;
   return (
     <>
       {blocks.map((block, i) => (
-        <DiffBlockView key={i} block={block} sessionCwd={sessionCwd} />
+        <DiffBlockView key={i} block={block} sessionCwd={sessionCwd} contextText={contextText} />
       ))}
     </>
   );

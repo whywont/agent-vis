@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { AppEvent } from "@/lib/types";
 import { truncate, formatTime, formatTokens } from "@/utils/format";
 import DiffView from "./DiffView";
@@ -11,6 +11,8 @@ interface TimelineEntryProps {
   showTokenUsage: boolean;
   sessionCwd: string;
   onOpenImage: (src: string) => void;
+  contextText?: string;
+  collapseToken?: number;
 }
 
 function kindToClass(kind: string): string {
@@ -118,13 +120,15 @@ function EntryBody({
   evt,
   sessionCwd,
   onOpenImage,
+  contextText,
 }: {
   evt: AppEvent;
   sessionCwd: string;
   onOpenImage: (src: string) => void;
+  contextText?: string;
 }) {
   if (evt.kind === "file_change") {
-    return <DiffView patch={evt.patch} files={evt.files} sessionCwd={sessionCwd} />;
+    return <DiffView patch={evt.patch} files={evt.files} sessionCwd={sessionCwd} contextText={contextText} />;
   }
   if (evt.kind === "shell_command") {
     return (
@@ -181,8 +185,15 @@ export default function TimelineEntry({
   showTokenUsage,
   sessionCwd,
   onOpenImage,
+  contextText,
+  collapseToken,
 }: TimelineEntryProps) {
   const [collapsed, setCollapsed] = useState(true);
+  const [lastToken, setLastToken] = useState(collapseToken ?? 0);
+  if ((collapseToken ?? 0) !== lastToken) {
+    setLastToken(collapseToken ?? 0);
+    setCollapsed(true);
+  }
 
   if (event.kind === "token_usage") {
     return (
@@ -214,7 +225,7 @@ export default function TimelineEntry({
         <span className="entry-time">{time}</span>
       </div>
       <div className={`entry-body${collapsed ? " collapsed" : ""}`}>
-        <EntryBody evt={event} sessionCwd={sessionCwd} onOpenImage={onOpenImage} />
+        <EntryBody evt={event} sessionCwd={sessionCwd} onOpenImage={onOpenImage} contextText={contextText} />
       </div>
     </div>
   );

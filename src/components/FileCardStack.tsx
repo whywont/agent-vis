@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { createPortal } from "react-dom";
-import type { FileChangeEvent } from "@/lib/types";
+import type { AppEvent, FileChangeEvent } from "@/lib/types";
 import { formatTime } from "@/utils/format";
 import DiffView from "./DiffView";
 
@@ -10,6 +10,7 @@ interface FileCardStackProps {
   filepath: string;
   changes: FileChangeEvent[]; // ordered oldest → newest
   sessionCwd: string;
+  allEvents?: AppEvent[];
 }
 
 const CARD_W = 290;
@@ -37,10 +38,22 @@ function actionStyle(action: string) {
   };
 }
 
+function getContextText(change: FileChangeEvent, allEvents: AppEvent[]): string | undefined {
+  // Find the last user_message that occurred before this change's timestamp
+  for (let i = allEvents.length - 1; i >= 0; i--) {
+    const evt = allEvents[i];
+    if (evt.kind === "user_message" && evt.ts <= change.ts) {
+      return evt.text || undefined;
+    }
+  }
+  return undefined;
+}
+
 export default function FileCardStack({
   filepath,
   changes,
   sessionCwd,
+  allEvents,
 }: FileCardStackProps) {
   const [activeIdx, setActiveIdx] = useState(changes.length - 1);
   const [expanded, setExpanded] = useState(false);
@@ -126,6 +139,7 @@ export default function FileCardStack({
                   patch={activeChange.patch}
                   files={activeChange.files}
                   sessionCwd={sessionCwd}
+                  contextText={allEvents ? getContextText(activeChange, allEvents) : undefined}
                 />
               </div>
             </div>
@@ -211,6 +225,7 @@ export default function FileCardStack({
               patch={activeChange.patch}
               files={activeChange.files}
               sessionCwd={sessionCwd}
+              contextText={allEvents ? getContextText(activeChange, allEvents) : undefined}
             />
           </div>
         </div>

@@ -9,6 +9,7 @@ interface ToolbarProps {
   showTokenUsage: boolean;
   onToggleFilter: (key: string) => void;
   onToggleTokenUsage: () => void;
+  onCollapseAll: () => void;
 }
 
 const FILTERS = [
@@ -26,6 +27,7 @@ export default function Toolbar({
   showTokenUsage,
   onToggleFilter,
   onToggleTokenUsage,
+  onCollapseAll,
 }: ToolbarProps) {
   const fileChanges = events.filter((e) => e.kind === "file_change").length;
   const shellCmds = events.filter((e) => e.kind === "shell_command").length;
@@ -75,6 +77,10 @@ export default function Toolbar({
         onClick={onToggleTokenUsage}
       >
         tokens
+      </button>
+      <div className="toolbar-sep" />
+      <button className="filter-btn" onClick={onCollapseAll} title="Collapse all entries">
+        – all
       </button>
     </div>
   );
