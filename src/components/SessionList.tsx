@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect, useRef } from "react";
 import type { SessionMeta } from "@/lib/types";
 import { formatDate, formatTime } from "@/utils/format";
 
@@ -7,6 +8,7 @@ interface SessionListProps {
   sessions: SessionMeta[];
   currentFile: string | null;
   onSelectSession: (files: string) => void;
+  onDeleteSession: (files: string) => void;
 }
 
 function toLocalDateStr(isoStr: string | undefined): string {
@@ -22,7 +24,23 @@ export default function SessionList({
   sessions,
   currentFile,
   onSelectSession,
+  onDeleteSession,
 }: SessionListProps) {
+  const [menuOpenFor, setMenuOpenFor] = useState<string | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  // Close menu when clicking outside
+  useEffect(() => {
+    if (!menuOpenFor) return;
+    function onDown(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpenFor(null);
+      }
+    }
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [menuOpenFor]);
+
   const groups: Record<string, SessionMeta[]> = {};
   for (const s of sessions) {
     const date = toLocalDateStr(s.modified || s.timestamp);
@@ -41,13 +59,16 @@ export default function SessionList({
             const cwdShort = s.cwd ? s.cwd.replace(/^\/(?:Users|home)\/[^/]+/, "~") : "";
             const allFiles = s.files ? s.files.join(",") : s.file;
             const isActive = currentFile === allFiles || currentFile === s.files?.[0];
+            const menuOpen = menuOpenFor === allFiles;
 
             return (
-              <button
+              <div
                 key={s.file}
-                className={`session-item${isActive ? " active" : ""}`}
-                data-file={allFiles}
-                onClick={() => onSelectSession(allFiles)}
+                className={`session-item${isActive ? " active" : ""}${menuOpen ? " menu-open" : ""}`}
+                onClick={() => { if (!menuOpen) onSelectSession(allFiles); }}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => { if (e.key === "Enter") onSelectSession(allFiles); }}
               >
                 {s.source === "claude-code" ? (
                   <span className="session-source source-claude">claude</span>
@@ -60,7 +81,35 @@ export default function SessionList({
                 )}
                 <span className="session-cwd">{cwdShort}</span>
                 <span className="session-time">{modTime}</span>
-              </button>
+
+                {/* Three-dot menu trigger */}
+                <button
+                  className="session-item-menu-btn"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setMenuOpenFor(menuOpen ? null : allFiles);
+                  }}
+                  title="Options"
+                >
+                  •••
+                </button>
+
+                {/* Dropdown */}
+                {menuOpen && (
+                  <div ref={menuRef} className="session-item-dropdown">
+                    <button
+                      className="session-item-dropdown-btn delete"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setMenuOpenFor(null);
+                        onDeleteSession(allFiles);
+                      }}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                )}
+              </div>
             );
           })}
         </div>

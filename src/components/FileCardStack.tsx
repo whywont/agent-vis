@@ -80,6 +80,7 @@ export default function FileCardStack({
           <div
             className="card-expanded-overlay"
             onClick={() => setExpanded(false)}
+            onWheel={(e) => e.stopPropagation()}
           >
             <div
               className="card-expanded-modal"
@@ -149,7 +150,7 @@ export default function FileCardStack({
                 top: (i + 1) * PEEK_DY,
                 width: PEEK_W + i * PEEK_W,
                 height: CARD_H,
-                zIndex: 8 - i,
+                zIndex: peekItems.length - i,
                 background: s.bg,
                 borderTop: `1px solid ${s.border}`,
                 borderRight: `1px solid ${s.border}`,
@@ -178,6 +179,7 @@ export default function FileCardStack({
             zIndex: 10,
             borderRadius: cardRadius,
           }}
+          onWheel={(e) => e.stopPropagation()}
         >
           <div className="file-card-header">
             <span className={`file-action-dot dot-${activeAction}`} />

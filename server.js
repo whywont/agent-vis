@@ -1,6 +1,5 @@
 // Custom Next.js server — adds WebSocket terminal support via node-pty
 const { createServer } = require("http");
-const { parse } = require("url");
 const next = require("next");
 const { WebSocketServer } = require("ws");
 const pty = require("node-pty");
@@ -14,14 +13,14 @@ const handle = app.getRequestHandler();
 
 app.prepare().then(() => {
   const httpServer = createServer((req, res) => {
-    handle(req, res, parse(req.url, true));
+    handle(req, res);
   });
 
   // WebSocket server — only handles /api/terminal upgrades
   const wss = new WebSocketServer({ noServer: true });
 
   httpServer.on("upgrade", (req, socket, head) => {
-    const { pathname } = parse(req.url);
+    const { pathname } = new URL(req.url, `http://localhost:${port}`);
     if (pathname === "/api/terminal") {
       // Only allow connections from localhost — the terminal spawns a real
       // shell so we must never expose it to the network.
@@ -43,6 +42,7 @@ app.prepare().then(() => {
     const url = new URL(req.url, `http://localhost:${port}`);
     const rawCwd = url.searchParams.get("cwd") || os.homedir();
     const sessionId = url.searchParams.get("sessionId") || "";
+    const sessionType = url.searchParams.get("type") || "claude";
     // Expand ~ and ensure the directory exists; fall back to home
     const cwd = rawCwd.startsWith("~")
       ? rawCwd.replace(/^~/, os.homedir())
@@ -70,14 +70,19 @@ app.prepare().then(() => {
       return;
     }
 
-    // Resume the specific Claude Code session being viewed.
-    // `--resume <id>` continues that exact conversation thread; the output
-    // lands in the same JSONL file so agent-vis picks it up via polling.
-    // If no session ID was provided fall back to --continue (most recent).
+    // Resume the session being viewed. For Claude Code: `claude --resume <id>`.
+    // For Codex: `codex resume <id>`. Fall back to most-recent if no ID.
     // Small delay lets the shell finish rc-file init first.
-    const resumeCmd = sessionId
-      ? `claude --resume ${sessionId}\n`
-      : `claude --continue\n`;
+    let resumeCmd;
+    if (sessionType === "codex") {
+      resumeCmd = sessionId
+        ? `codex resume ${sessionId}\n`
+        : `codex resume --last\n`;
+    } else {
+      resumeCmd = sessionId
+        ? `claude --resume ${sessionId}\n`
+        : `claude --continue\n`;
+    }
     const autoLaunchTimer = setTimeout(() => {
       try { ptyProc.write(resumeCmd); } catch {}
     }, 350);

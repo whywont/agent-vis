@@ -97,6 +97,24 @@ export default function AppShell() {
     setShowTokenUsage((v) => !v);
   }
 
+  async function handleDeleteSession(files: string) {
+    // Optimistically remove from list and close detail if viewing it
+    setAllSessions((prev) =>
+      prev.filter((s) => {
+        const sf = s.files ? s.files.join(",") : s.file;
+        return sf !== files;
+      })
+    );
+    if (currentFile === files || currentFile === files.split(",")[0]) {
+      setCurrentFile(null);
+    }
+    try {
+      await fetch(`/api/sessions?files=${encodeURIComponent(files)}`, {
+        method: "DELETE",
+      });
+    } catch {}
+  }
+
   return (
     <div id="app">
       <nav id="sidebar" ref={sidebarRef}>
@@ -112,6 +130,7 @@ export default function AppShell() {
           sessions={allSessions}
           currentFile={currentFile}
           onSelectSession={handleSelectSession}
+          onDeleteSession={handleDeleteSession}
         />
         <div className="resize-handle right" data-target="sidebar" />
       </nav>

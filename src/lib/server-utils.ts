@@ -30,6 +30,20 @@ export function resolveSessionFile(fileRef: string): {
   };
 }
 
+// Cache parsed session files keyed by filepath. Entries are invalidated when
+// the file's mtime changes, so live sessions get fresh data while unchanged
+// files are served instantly without re-reading.
+interface ParsedFileCache {
+  mtime: number;
+  events: AppEvent[];
+  lineCount: number;
+}
+const parsedFileCache = new Map<string, ParsedFileCache>();
+
+export function clearParsedFileCache(filepath: string) {
+  parsedFileCache.delete(filepath);
+}
+
 /**
  * Parse a JSONL file into events using the appropriate parser.
  */
@@ -37,6 +51,12 @@ export function parseSessionFile(
   filepath: string,
   source: "claude-code" | "codex"
 ): { events: AppEvent[]; lineCount: number } {
+  const mtime = fs.statSync(filepath).mtimeMs;
+  const cached = parsedFileCache.get(filepath);
+  if (cached && cached.mtime === mtime) {
+    return { events: cached.events, lineCount: cached.lineCount };
+  }
+
   const raw = fs.readFileSync(filepath, "utf8");
   const lines = raw.split("\n").filter(Boolean);
   const events: AppEvent[] = [];
@@ -69,5 +89,7 @@ export function parseSessionFile(
     deduplicateAgentMessages(events as (AppEvent | null)[]);
   }
 
-  return { events, lineCount: lines.length };
+  const result = { events, lineCount: lines.length };
+  parsedFileCache.set(filepath, { mtime, ...result });
+  return result;
 }

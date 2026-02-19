@@ -134,6 +134,7 @@ body {
   display: block;
   width: 100%;
   text-align: left;
+  position: relative;
   background: none;
   border: none;
   border-radius: 4px;
@@ -146,6 +147,73 @@ body {
 
 .session-item:hover { background: var(--bg-surface); }
 .session-item.active { background: var(--bg-card); }
+.session-item.menu-open { background: var(--bg-surface); }
+
+/* Three-dot trigger button */
+.session-item-menu-btn {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-dim);
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  padding: 2px 5px;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.1s;
+  line-height: 1;
+  font-family: var(--font-mono);
+}
+
+.session-item:hover .session-item-menu-btn,
+.session-item.menu-open .session-item-menu-btn {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.session-item-menu-btn:hover {
+  background: var(--bg-card);
+  color: var(--text);
+}
+
+/* Dropdown */
+.session-item-dropdown {
+  position: absolute;
+  right: 6px;
+  top: calc(50% + 12px);
+  z-index: 200;
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  min-width: 100px;
+  overflow: hidden;
+}
+
+.session-item-dropdown-btn {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 8px 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.session-item-dropdown-btn.delete {
+  color: var(--red);
+}
+
+.session-item-dropdown-btn.delete:hover {
+  background: rgba(212, 106, 106, 0.12);
+}
 
 .session-source {
   font-size: 10px;
@@ -1359,12 +1427,12 @@ body.resizing {
   right: 12px;
   z-index: 50;
   border-radius: 6px;
-  overflow: hidden;
   border: 1px solid var(--border-light);
   background: rgba(22, 22, 22, 0.88);
   backdrop-filter: blur(6px);
   cursor: crosshair;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+  width: 200px;
 }
 
 .minimap-label {
@@ -1377,4 +1445,48 @@ body.resizing {
   padding: 5px 8px 3px;
   border-bottom: 1px solid var(--border);
   user-select: none;
+}
+
+.minimap-filelist {
+  max-height: 160px;
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+  padding: 3px 0;
+  cursor: default;
+}
+
+.minimap-filelist-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.minimap-filelist-item:hover,
+.minimap-filelist-item.is-hovered {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.minimap-dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.minimap-filepath {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.minimap-filelist-item:hover .minimap-filepath,
+.minimap-filelist-item.is-hovered .minimap-filepath {
+  color: var(--text-main);
 }

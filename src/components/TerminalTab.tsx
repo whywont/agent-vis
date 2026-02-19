@@ -5,9 +5,10 @@ import { useEffect, useRef, useState } from "react";
 interface TerminalTabProps {
   sessionCwd: string;
   sessionId?: string;
+  sessionType?: "claude" | "codex";
 }
 
-export default function TerminalTab({ sessionCwd, sessionId }: TerminalTabProps) {
+export default function TerminalTab({ sessionCwd, sessionId, sessionType = "claude" }: TerminalTabProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<import("@xterm/xterm").Terminal | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -66,7 +67,7 @@ export default function TerminalTab({ sessionCwd, sessionId }: TerminalTabProps)
       termRef.current = term;
 
       // Connect WebSocket
-      const params = new URLSearchParams({ cwd: sessionCwd });
+      const params = new URLSearchParams({ cwd: sessionCwd, type: sessionType });
       if (sessionId) params.set("sessionId", sessionId);
       const wsUrl = `ws://${window.location.host}/api/terminal?${params}`;
       const ws = new WebSocket(wsUrl);

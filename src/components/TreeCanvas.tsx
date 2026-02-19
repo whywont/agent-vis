@@ -283,6 +283,7 @@ export default function TreeCanvas({ events, sessionCwd }: TreeCanvasProps) {
         w: CARD_W,
         h: CARD_H,
         action: actionMap.get(card.path) ?? "update",
+        path: card.path,
       }))
     );
   }, [dirs, groups]);
