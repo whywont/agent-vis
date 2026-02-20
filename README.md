@@ -8,7 +8,7 @@
 
 <br />
 
-<video src=".github/assets/agent-vis-demo.mov" autoplay loop muted playsinline></video>
+<video src=".github/assets/agent-vis-demo.mp4" autoplay loop muted playsinline></video>
 
 ## Features
 
