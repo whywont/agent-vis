@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { eventSearchText } from "./route";
+import { eventSearchText } from "@/lib/search-utils";
 import type { AppEvent } from "@/lib/types";
 
 const TS = "2024-06-01T10:00:00Z";

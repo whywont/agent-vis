@@ -2,35 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
 import { CODEX_SESSIONS_DIR, CLAUDE_PROJECTS_DIR, parseSessionFile } from "@/lib/server-utils";
-import type { AppEvent } from "@/lib/types";
-
-/**
- * Extract only the user-authored / meaningful text from parsed events.
- * Deliberately skips system prompts, injected reminders, tool metadata, etc.
- */
-export function eventSearchText(events: AppEvent[]): string {
-  const parts: string[] = [];
-  for (const evt of events) {
-    switch (evt.kind) {
-      case "user_message":
-        parts.push(evt.text);
-        break;
-      case "agent_message":
-      case "reasoning":
-        parts.push(evt.text);
-        break;
-      case "file_change":
-        parts.push(evt.patch ?? "");
-        for (const f of evt.files) parts.push(f.path);
-        break;
-      case "shell_command":
-        parts.push(evt.cmd);
-        break;
-      // skip tool_output, token_usage, session_start
-    }
-  }
-  return parts.join("\n").toLowerCase();
-}
+import { eventSearchText } from "@/lib/search-utils";
 
 /**
  * GET /api/search?q=flask

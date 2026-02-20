@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { toCompactMarkdown } from "./[...file]/route";
+import { toCompactMarkdown } from "@/lib/compact-utils";
 import type { AppEvent } from "@/lib/types";
 
 const TS = "2024-03-15T14:30:00.000Z";
