@@ -27,8 +27,8 @@ describe("buildClaudeSessionStart", () => {
 
   it("handles missing optional fields gracefully", () => {
     const result = buildClaudeSessionStart({ timestamp: TS });
-    expect(result.id).toBe("");
-    expect(result.cwd).toBe("");
+    expect((result as { id: string }).id).toBe("");
+    expect((result as { cwd: string }).cwd).toBe("");
   });
 });
 
