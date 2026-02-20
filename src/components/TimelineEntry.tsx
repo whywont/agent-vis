@@ -4,6 +4,8 @@ import { useState, useEffect } from "react";
 import type { AppEvent } from "@/lib/types";
 import { truncate, formatTime, formatTokens } from "@/utils/format";
 import DiffView from "./DiffView";
+import DbQueryView from "./DbQueryView";
+import type { DbQuery } from "@/lib/db-parser";
 
 interface TimelineEntryProps {
   event: AppEvent;
@@ -13,9 +15,12 @@ interface TimelineEntryProps {
   onOpenImage: (src: string) => void;
   contextText?: string;
   collapseToken?: number;
+  dbQuery?: DbQuery;
+  queryOutput?: string;
 }
 
-function kindToClass(kind: string): string {
+function kindToClass(kind: string, isDb?: boolean): string {
+  if (isDb) return "db-cmd";
   return (
     ({
       user_message: "user-msg",
@@ -28,7 +33,8 @@ function kindToClass(kind: string): string {
   );
 }
 
-function kindToBadge(kind: string): string {
+function kindToBadge(kind: string, isDb?: boolean): string {
+  if (isDb) return "badge-db";
   return (
     ({
       user_message: "badge-user",
@@ -41,7 +47,8 @@ function kindToBadge(kind: string): string {
   );
 }
 
-function kindToLabel(kind: string): string {
+function kindToLabel(kind: string, isDb?: boolean): string {
+  if (isDb) return "db";
   return (
     ({
       user_message: "user",
@@ -54,14 +61,17 @@ function kindToLabel(kind: string): string {
   );
 }
 
-function getSummary(evt: AppEvent): string {
+function getSummary(evt: AppEvent, dbQuery?: DbQuery): string {
+  if (dbQuery) {
+    const verb = dbQuery.sql.trim().split(/\s+/)[0].toUpperCase();
+    const tables = dbQuery.tables.length > 0 ? ` · ${dbQuery.tables.join(", ")}` : "";
+    return `${verb}${tables}`;
+  }
   if (evt.kind === "user_message") return truncate(evt.text, 120);
   if (evt.kind === "agent_message") return truncate(evt.text, 120);
   if (evt.kind === "reasoning") return truncate(evt.text, 120);
   if (evt.kind === "file_change")
-    return (
-      evt.files.map((f) => `${f.action}: ${f.path}`).join(", ") || "patch"
-    );
+    return evt.files.map((f) => `${f.action}: ${f.path}`).join(", ") || "patch";
   if (evt.kind === "shell_command") return truncate(evt.cmd, 120);
   if (evt.kind === "tool_output") return truncate(evt.output, 120);
   return "";
@@ -121,14 +131,21 @@ function EntryBody({
   sessionCwd,
   onOpenImage,
   contextText,
+  dbQuery,
+  queryOutput,
 }: {
   evt: AppEvent;
   sessionCwd: string;
   onOpenImage: (src: string) => void;
   contextText?: string;
+  dbQuery?: DbQuery;
+  queryOutput?: string;
 }) {
   if (evt.kind === "file_change") {
     return <DiffView patch={evt.patch} files={evt.files} sessionCwd={sessionCwd} contextText={contextText} />;
+  }
+  if (evt.kind === "shell_command" && dbQuery) {
+    return <DbQueryView query={dbQuery} output={queryOutput} />;
   }
   if (evt.kind === "shell_command") {
     return (
@@ -147,17 +164,13 @@ function EntryBody({
   if (evt.kind === "tool_output") {
     return <>{evt.output}</>;
   }
-  // user_message, agent_message, reasoning
   const text =
     evt.kind === "user_message" ||
     evt.kind === "agent_message" ||
     evt.kind === "reasoning"
       ? evt.text || ""
       : "";
-  const images =
-    evt.kind === "user_message"
-      ? evt.images || []
-      : [];
+  const images = evt.kind === "user_message" ? evt.images || [] : [];
   return (
     <>
       {text}
@@ -187,28 +200,26 @@ export default function TimelineEntry({
   onOpenImage,
   contextText,
   collapseToken,
+  dbQuery,
+  queryOutput,
 }: TimelineEntryProps) {
   const [collapsed, setCollapsed] = useState(true);
-  const [lastToken, setLastToken] = useState(collapseToken ?? 0);
-  if ((collapseToken ?? 0) !== lastToken) {
-    setLastToken(collapseToken ?? 0);
-    setCollapsed(true);
-  }
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (collapseToken) setCollapsed(true);
+  }, [collapseToken]);
 
   if (event.kind === "token_usage") {
-    return (
-      <TokenUsageEntry
-        evt={event}
-        show={showTokenUsage}
-      />
-    );
+    return <TokenUsageEntry evt={event} show={showTokenUsage} />;
   }
 
+  const isDb = !!dbQuery;
   const visible = activeFilters.has(event.kind);
-  const entryClass = kindToClass(event.kind);
-  const badgeClass = kindToBadge(event.kind);
-  const badgeLabel = kindToLabel(event.kind);
-  const summary = getSummary(event);
+  const entryClass = kindToClass(event.kind, isDb);
+  const badgeClass = kindToBadge(event.kind, isDb);
+  const badgeLabel = kindToLabel(event.kind, isDb);
+  const summary = getSummary(event, dbQuery);
   const time = event.ts ? formatTime(event.ts) : "";
 
   return (
@@ -225,7 +236,14 @@ export default function TimelineEntry({
         <span className="entry-time">{time}</span>
       </div>
       <div className={`entry-body${collapsed ? " collapsed" : ""}`}>
-        <EntryBody evt={event} sessionCwd={sessionCwd} onOpenImage={onOpenImage} contextText={contextText} />
+        <EntryBody
+          evt={event}
+          sessionCwd={sessionCwd}
+          onOpenImage={onOpenImage}
+          contextText={contextText}
+          dbQuery={dbQuery}
+          queryOutput={queryOutput}
+        />
       </div>
     </div>
   );

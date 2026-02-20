@@ -682,6 +682,7 @@ body {
 .badge-file { color: var(--accent); }
 .badge-shell { color: var(--orange); }
 .badge-reasoning { color: var(--text-dim); }
+.badge-db { color: #5ec4c4; }
 
 .entry-time {
   font-size: 12px;
@@ -1562,4 +1563,123 @@ body.resizing {
 .minimap-filelist-item:hover .minimap-filepath,
 .minimap-filelist-item.is-hovered .minimap-filepath {
   color: var(--text-main);
+}
+
+/* ---- Session list wrapper ---- */
+.session-list-wrapper { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+/* ---- Controls bar ---- */
+.session-controls { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.session-search { flex: 1; background: var(--bg-card); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-family: var(--font-mono); font-size: 12px; padding: 5px 8px; outline: none; transition: border-color 0.15s; }
+.session-search:focus { border-color: var(--accent-dim); }
+.session-search::placeholder { color: var(--text-dim); }
+.session-search.searching { border-color: var(--accent-dim); opacity: 0.7; }
+
+/* ---- Options button & dropdown ---- */
+.session-options-wrap { position: relative; }
+.session-options-btn { background: var(--bg-card); border: 1px solid var(--border); border-radius: 4px; color: var(--text-dim); font-family: var(--font-mono); font-size: 12px; padding: 5px 8px; cursor: pointer; transition: color 0.1s, border-color 0.1s; white-space: nowrap; }
+.session-options-btn:hover, .session-options-btn.active { color: var(--accent); border-color: var(--accent-dim); }
+.session-options-dropdown { position: absolute; top: calc(100% + 4px); right: 0; z-index: 300; background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 6px; box-shadow: 0 6px 24px rgba(0,0,0,0.5); min-width: 160px; overflow: hidden; }
+.session-options-section { padding: 4px 0; border-bottom: 1px solid var(--border); }
+.session-options-section:last-child { border-bottom: none; }
+.session-options-label { font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.1em; padding: 4px 12px 2px; }
+.session-options-item { display: block; width: 100%; text-align: left; background: none; border: none; color: var(--text-muted); font-family: var(--font-mono); font-size: 12px; padding: 5px 12px; cursor: pointer; transition: background 0.1s, color 0.1s; }
+.session-options-item:hover { background: var(--bg-hover); color: var(--text); }
+.session-options-item.selected { color: var(--accent); }
+
+/* ---- Pinned group & empty state ---- */
+.session-group-header.pinned { color: var(--accent-dim); }
+.session-empty { padding: 24px 12px; text-align: center; color: var(--text-dim); font-family: var(--font-mono); font-size: 12px; }
+
+/* ---- DB query view ---- */
+.db-cmd > .entry-header { border-left-color: #5ec4c4; }
+
+.db-query-view { font-family: var(--font-mono); font-size: 13px; }
+
+.db-sql-block {
+  position: relative;
+  background: rgba(94, 196, 196, 0.05);
+  border: 1px solid rgba(94, 196, 196, 0.2);
+  border-radius: 4px 4px 0 0;
+  padding: 8px 12px 8px 44px;
+}
+
+.db-tool-label {
+  position: absolute;
+  left: 10px;
+  top: 9px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(94, 196, 196, 0.6);
+}
+
+.db-sql-pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+  font-family: inherit;
+  font-size: inherit;
+  line-height: 1.55;
+}
+
+.db-sql-keyword { color: #5ec4c4; font-weight: 600; }
+
+.db-result-wrap {
+  border: 1px solid rgba(94, 196, 196, 0.2);
+  border-top: none;
+  border-radius: 0 0 4px 4px;
+  overflow: auto;
+}
+
+.db-result-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.db-result-table th {
+  background: rgba(94, 196, 196, 0.08);
+  color: rgba(94, 196, 196, 0.9);
+  font-weight: 600;
+  text-align: left;
+  padding: 5px 10px;
+  border-bottom: 1px solid rgba(94, 196, 196, 0.2);
+  white-space: nowrap;
+}
+
+.db-result-table td {
+  padding: 4px 10px;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.db-result-table tr:last-child td { border-bottom: none; }
+.db-result-table tr:hover td { background: var(--bg-hover); }
+
+.db-result-overflow {
+  padding: 4px 10px;
+  font-size: 11px;
+  color: var(--text-dim);
+  border-top: 1px solid var(--border);
+  background: var(--bg-card);
+}
+
+.db-result-raw {
+  border: 1px solid rgba(94, 196, 196, 0.2);
+  border-top: none;
+  border-radius: 0 0 4px 4px;
+  padding: 8px 12px;
+  color: var(--text-muted);
+  white-space: pre;
+  font-size: 12px;
+  overflow: auto;
+  max-height: 160px;
 }

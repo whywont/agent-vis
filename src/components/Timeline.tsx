@@ -2,6 +2,8 @@
 
 import type { AppEvent } from "@/lib/types";
 import TimelineEntry from "./TimelineEntry";
+import { detectDbQuery } from "@/lib/db-parser";
+import type { DbQuery } from "@/lib/db-parser";
 
 interface TimelineProps {
   events: AppEvent[];
@@ -26,6 +28,14 @@ export default function Timeline({
   const filteredEvents = events.filter((e) => e.kind !== "session_start");
   const displayEvents = filteredEvents.slice().reverse();
 
+  // Build callId → output text map for pairing shell commands with their output
+  const callIdToOutput = new Map<string, string>();
+  for (const evt of filteredEvents) {
+    if (evt.kind === "tool_output" && evt.callId) {
+      callIdToOutput.set(evt.callId, evt.output);
+    }
+  }
+
   // For a file_change at filteredEvents[i], find the last user_message before it
   function getContextText(origIdx: number): string | undefined {
     for (let j = origIdx - 1; j >= 0; j--) {
@@ -41,6 +51,15 @@ export default function Timeline({
       {displayEvents.map((evt, i) => {
         const origIdx = filteredEvents.length - 1 - i;
         const contextText = evt.kind === "file_change" ? getContextText(origIdx) : undefined;
+        let dbQuery: DbQuery | undefined;
+        let queryOutput: string | undefined;
+        if (evt.kind === "shell_command") {
+          const detected = detectDbQuery(evt.cmd);
+          if (detected) {
+            dbQuery = detected;
+            queryOutput = evt.callId ? callIdToOutput.get(evt.callId) : undefined;
+          }
+        }
         return (
           <TimelineEntry
             key={origIdx}
@@ -51,6 +70,8 @@ export default function Timeline({
             onOpenImage={onOpenImage}
             contextText={contextText}
             collapseToken={collapseAllToken}
+            dbQuery={dbQuery}
+            queryOutput={queryOutput}
           />
         );
       })}
