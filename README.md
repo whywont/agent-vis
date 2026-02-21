@@ -20,7 +20,7 @@
 
 ## Install
 
-Requires Node.js 18+.
+Requires Node.js 18+. **macOS and Linux only** — Windows is not supported.
 
 ```bash
 git clone https://github.com/whywont/agent-vis
