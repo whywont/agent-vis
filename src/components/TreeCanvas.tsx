@@ -56,12 +56,13 @@ interface HoveredEdge {
 
 // ---- Grouping ----
 
-function groupFilesByDir(fileChanges: FileChangeEvent[]): DirGroup[] {
+function groupFilesByDir(fileChanges: FileChangeEvent[], pathRemap: Map<string, string>): DirGroup[] {
   const fileMap = new Map<string, FileChangeEvent[]>();
   for (const fc of fileChanges) {
     for (const f of fc.files) {
-      if (!fileMap.has(f.path)) fileMap.set(f.path, []);
-      fileMap.get(f.path)!.push(fc);
+      const displayPath = pathRemap.get(f.path) ?? f.path;
+      if (!fileMap.has(displayPath)) fileMap.set(displayPath, []);
+      fileMap.get(displayPath)!.push(fc);
     }
   }
 
@@ -242,7 +243,44 @@ export default function TreeCanvas({ events, sessionCwd }: TreeCanvasProps) {
     () => events.filter((e): e is FileChangeEvent => e.kind === "file_change"),
     [events]
   );
-  const groups = useMemo(() => groupFilesByDir(fileChanges), [fileChanges]);
+
+  const [pathRemap, setPathRemap] = useState<Map<string, string>>(new Map());
+
+  useEffect(() => {
+    const allPaths = new Set<string>();
+    for (const fc of fileChanges) {
+      for (const f of fc.files) allPaths.add(f.path);
+    }
+    if (allPaths.size === 0) return;
+    fetch("/api/resolve-paths", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ paths: [...allPaths], cwd: sessionCwd }),
+    })
+      .then((r) => r.json())
+      .then((data: { resolved: Record<string, string | null> }) => {
+        const groups = new Map<string, string[]>();
+        for (const [origPath, realpath] of Object.entries(data.resolved)) {
+          const key = realpath ?? origPath;
+          if (!groups.has(key)) groups.set(key, []);
+          groups.get(key)!.push(origPath);
+        }
+        const remap = new Map<string, string>();
+        for (const [canonical, origPaths] of groups) {
+          let displayKey: string;
+          if (canonical.startsWith("/") && sessionCwd && canonical.startsWith(sessionCwd + "/")) {
+            displayKey = canonical.slice(sessionCwd.length + 1);
+          } else {
+            displayKey = origPaths.reduce((a, b) => a.length <= b.length ? a : b);
+          }
+          for (const op of origPaths) remap.set(op, displayKey);
+        }
+        setPathRemap(remap);
+      })
+      .catch(() => {});
+  }, [fileChanges, sessionCwd]);
+
+  const groups = useMemo(() => groupFilesByDir(fileChanges, pathRemap), [fileChanges, pathRemap]);
   const { dirs, totalW, totalH } = useMemo(() => computeLayout(groups), [groups]);
   const edges = useMemo(() => buildEdges(groups), [groups]);
 

@@ -157,36 +157,66 @@ export default function FileTree({
 }: FileTreeProps) {
   const [historyFile, setHistoryFile] = useState<string | null>(null);
   const [goneFiles, setGoneFiles] = useState<Set<string>>(new Set());
+  const [deduped, setDeduped] = useState<Record<string, FileMapEntry> | null>(null);
   const scrollIndexRef = useRef<Record<string, number>>({});
 
-  const fileMap = buildFileMap(fileChanges);
+  const rawFileMap = buildFileMap(fileChanges);
+  const fileMap = deduped ?? rawFileMap;
   const tree = buildTreeStructure(fileMap);
 
-  // Check file existence on disk
+  // Resolve paths to canonical realpaths, deduplicate same-file entries, and
+  // detect files that no longer exist on disk — all in one API call.
   useEffect(() => {
-    if (Object.keys(fileMap).length === 0) return;
-    const paths = Object.keys(fileMap);
-    const absPaths = paths.map((p) =>
-      p.startsWith("/") ? p : sessionCwd + "/" + p
-    );
-    fetch("/api/files-exist", {
+    setDeduped(null);
+    const rawMap = buildFileMap(fileChanges);
+    if (Object.keys(rawMap).length === 0) {
+      setGoneFiles(new Set());
+      return;
+    }
+    const origPaths = Object.keys(rawMap);
+    fetch("/api/resolve-paths", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ paths: absPaths }),
+      body: JSON.stringify({ paths: origPaths, cwd: sessionCwd }),
     })
       .then((r) => r.json())
-      .then((data: { results: Record<string, boolean> }) => {
-        const gone = new Set<string>();
-        for (const [absPath, exists] of Object.entries(data.results)) {
-          if (!exists) {
-            // find the relative path
-            const relPath = paths.find(
-              (p) =>
-                (p.startsWith("/") ? p : sessionCwd + "/" + p) === absPath
-            );
-            if (relPath) gone.add(relPath);
-          }
+      .then((data: { resolved: Record<string, string | null> }) => {
+        // Group original paths by their canonical realpath.
+        // Paths that fail to resolve (null) are kept as-is and marked gone.
+        const groups = new Map<string, { origPaths: string[]; gone: boolean }>();
+        for (const origPath of origPaths) {
+          const realpath = data.resolved[origPath];
+          const key = realpath ?? origPath;
+          if (!groups.has(key)) groups.set(key, { origPaths: [], gone: !realpath });
+          groups.get(key)!.origPaths.push(origPath);
         }
+
+        const result: Record<string, FileMapEntry> = {};
+        const gone = new Set<string>();
+
+        for (const [canonical, { origPaths: group, gone: isGone }] of groups) {
+          // Use realpath relative to sessionCwd as the display key when possible,
+          // otherwise fall back to the shortest original path.
+          let displayKey: string;
+          if (!isGone && sessionCwd && canonical.startsWith(sessionCwd + "/")) {
+            displayKey = canonical.slice(sessionCwd.length + 1);
+          } else {
+            displayKey = group.reduce((a, b) => a.length <= b.length ? a : b);
+          }
+
+          let count = 0;
+          let action: FileMapEntry["action"] = "update";
+          for (const op of group) {
+            if (rawMap[op]) {
+              count += rawMap[op].count;
+              action = rawMap[op].action;
+            }
+          }
+          result[displayKey] = { action, count };
+          if (isGone) gone.add(displayKey);
+        }
+
+        setDeduped(result);
         setGoneFiles(gone);
       })
       .catch(() => {});
