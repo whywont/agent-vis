@@ -149,6 +149,11 @@ function TreeView({
   );
 }
 
+// Stable key for a fileChanges snapshot — changes when events are added or session switches.
+function dedupKey(fileChanges: AppEvent[]): string {
+  return fileChanges.length + "_" + (fileChanges[fileChanges.length - 1]?.ts ?? "");
+}
+
 export default function FileTree({
   fileChanges,
   sessionCwd,
@@ -156,41 +161,75 @@ export default function FileTree({
   timelineRef,
 }: FileTreeProps) {
   const [historyFile, setHistoryFile] = useState<string | null>(null);
-  const [goneFiles, setGoneFiles] = useState<Set<string>>(new Set());
   const scrollIndexRef = useRef<Record<string, number>>({});
 
-  const fileMap = buildFileMap(fileChanges);
+  // Resolved state: fileMap + gone set, keyed by a snapshot ID.
+  // When the key doesn't match the current fileChanges the component falls
+  // back to the raw (undeduped) map — no synchronous setState needed.
+  const [resolved, setResolved] = useState<{
+    key: string;
+    fileMap: Record<string, FileMapEntry>;
+    gone: Set<string>;
+  } | null>(null);
+
+  const rawFileMap = buildFileMap(fileChanges);
+  const currentKey = dedupKey(fileChanges);
+  const fileMap = resolved?.key === currentKey ? resolved.fileMap : rawFileMap;
+  const goneFiles = resolved?.key === currentKey ? resolved.gone : new Set<string>();
   const tree = buildTreeStructure(fileMap);
 
-  // Check file existence on disk
+  // Resolve paths to canonical realpaths, deduplicate same-file entries, and
+  // detect files that no longer exist on disk — all in one API call.
   useEffect(() => {
-    if (Object.keys(fileMap).length === 0) return;
-    const paths = Object.keys(fileMap);
-    const absPaths = paths.map((p) =>
-      p.startsWith("/") ? p : sessionCwd + "/" + p
-    );
-    fetch("/api/files-exist", {
+    const key = dedupKey(fileChanges);
+    const rawMap = buildFileMap(fileChanges);
+    if (Object.keys(rawMap).length === 0) return;
+    const origPaths = Object.keys(rawMap);
+    fetch("/api/resolve-paths", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ paths: absPaths }),
+      body: JSON.stringify({ paths: origPaths, cwd: sessionCwd }),
     })
       .then((r) => r.json())
-      .then((data: { results: Record<string, boolean> }) => {
-        const gone = new Set<string>();
-        for (const [absPath, exists] of Object.entries(data.results)) {
-          if (!exists) {
-            // find the relative path
-            const relPath = paths.find(
-              (p) =>
-                (p.startsWith("/") ? p : sessionCwd + "/" + p) === absPath
-            );
-            if (relPath) gone.add(relPath);
-          }
+      .then((data: { resolved: Record<string, string | null> }) => {
+        // Group original paths by their canonical realpath.
+        // Paths that fail to resolve (null) are kept as-is and marked gone.
+        const groups = new Map<string, { origPaths: string[]; gone: boolean }>();
+        for (const origPath of origPaths) {
+          const realpath = data.resolved[origPath];
+          const canonicalKey = realpath ?? origPath;
+          if (!groups.has(canonicalKey)) groups.set(canonicalKey, { origPaths: [], gone: !realpath });
+          groups.get(canonicalKey)!.origPaths.push(origPath);
         }
-        setGoneFiles(gone);
+
+        const result: Record<string, FileMapEntry> = {};
+        const gone = new Set<string>();
+
+        for (const [canonical, { origPaths: group, gone: isGone }] of groups) {
+          // Use realpath relative to sessionCwd as the display key when possible,
+          // otherwise fall back to the shortest original path.
+          let displayKey: string;
+          if (!isGone && sessionCwd && canonical.startsWith(sessionCwd + "/")) {
+            displayKey = canonical.slice(sessionCwd.length + 1);
+          } else {
+            displayKey = group.reduce((a, b) => a.length <= b.length ? a : b);
+          }
+
+          let count = 0;
+          let action: FileMapEntry["action"] = "update";
+          for (const op of group) {
+            if (rawMap[op]) {
+              count += rawMap[op].count;
+              action = rawMap[op].action;
+            }
+          }
+          result[displayKey] = { action, count };
+          if (isGone) gone.add(displayKey);
+        }
+
+        setResolved({ key, fileMap: result, gone });
       })
       .catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileChanges, sessionCwd]);
 
   const handleScrollToFile = useCallback(

@@ -1,0 +1,6 @@
+#!/bin/sh
+set -e
+echo "Running pre-push checks..."
+npm run typecheck
+npm run lint
+echo "All checks passed."
