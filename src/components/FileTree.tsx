@@ -149,6 +149,11 @@ function TreeView({
   );
 }
 
+// Stable key for a fileChanges snapshot — changes when events are added or session switches.
+function dedupKey(fileChanges: AppEvent[]): string {
+  return fileChanges.length + "_" + (fileChanges[fileChanges.length - 1]?.ts ?? "");
+}
+
 export default function FileTree({
   fileChanges,
   sessionCwd,
@@ -156,23 +161,29 @@ export default function FileTree({
   timelineRef,
 }: FileTreeProps) {
   const [historyFile, setHistoryFile] = useState<string | null>(null);
-  const [goneFiles, setGoneFiles] = useState<Set<string>>(new Set());
-  const [deduped, setDeduped] = useState<Record<string, FileMapEntry> | null>(null);
   const scrollIndexRef = useRef<Record<string, number>>({});
 
+  // Resolved state: fileMap + gone set, keyed by a snapshot ID.
+  // When the key doesn't match the current fileChanges the component falls
+  // back to the raw (undeduped) map — no synchronous setState needed.
+  const [resolved, setResolved] = useState<{
+    key: string;
+    fileMap: Record<string, FileMapEntry>;
+    gone: Set<string>;
+  } | null>(null);
+
   const rawFileMap = buildFileMap(fileChanges);
-  const fileMap = deduped ?? rawFileMap;
+  const currentKey = dedupKey(fileChanges);
+  const fileMap = resolved?.key === currentKey ? resolved.fileMap : rawFileMap;
+  const goneFiles = resolved?.key === currentKey ? resolved.gone : new Set<string>();
   const tree = buildTreeStructure(fileMap);
 
   // Resolve paths to canonical realpaths, deduplicate same-file entries, and
   // detect files that no longer exist on disk — all in one API call.
   useEffect(() => {
-    setDeduped(null);
+    const key = dedupKey(fileChanges);
     const rawMap = buildFileMap(fileChanges);
-    if (Object.keys(rawMap).length === 0) {
-      setGoneFiles(new Set());
-      return;
-    }
+    if (Object.keys(rawMap).length === 0) return;
     const origPaths = Object.keys(rawMap);
     fetch("/api/resolve-paths", {
       method: "POST",
@@ -186,9 +197,9 @@ export default function FileTree({
         const groups = new Map<string, { origPaths: string[]; gone: boolean }>();
         for (const origPath of origPaths) {
           const realpath = data.resolved[origPath];
-          const key = realpath ?? origPath;
-          if (!groups.has(key)) groups.set(key, { origPaths: [], gone: !realpath });
-          groups.get(key)!.origPaths.push(origPath);
+          const canonicalKey = realpath ?? origPath;
+          if (!groups.has(canonicalKey)) groups.set(canonicalKey, { origPaths: [], gone: !realpath });
+          groups.get(canonicalKey)!.origPaths.push(origPath);
         }
 
         const result: Record<string, FileMapEntry> = {};
@@ -216,8 +227,7 @@ export default function FileTree({
           if (isGone) gone.add(displayKey);
         }
 
-        setDeduped(result);
-        setGoneFiles(gone);
+        setResolved({ key, fileMap: result, gone });
       })
       .catch(() => {});
   }, [fileChanges, sessionCwd]);
