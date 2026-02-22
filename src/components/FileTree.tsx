@@ -220,7 +220,6 @@ export default function FileTree({
         setGoneFiles(gone);
       })
       .catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileChanges, sessionCwd]);
 
   const handleScrollToFile = useCallback(
