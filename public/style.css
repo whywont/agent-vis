@@ -792,6 +792,37 @@ body {
   cursor: default;
 }
 
+.diff-editor {
+  display: block;
+  width: 100%;
+  min-height: 320px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 10px 12px;
+  border: none;
+  border-top: 1px solid var(--border);
+  resize: vertical;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.diff-copy-path-btn {
+  margin-left: 2px;
+  padding: 2px 4px;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  border-radius: 3px;
+  transition: color 0.1s;
+}
+.diff-copy-path-btn:hover { color: var(--text); }
+
 .diff-explain-panel {
   padding: 10px 14px 12px;
   border-top: 1px solid rgba(155, 142, 207, 0.2);

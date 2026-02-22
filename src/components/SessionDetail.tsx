@@ -36,6 +36,16 @@ export default function SessionDetail({
   const [sessionCwd, setSessionCwd] = useState("");
   const [activeTab, setActiveTab] = useState<"session" | "tree" | "terminal">("session");
   const [collapseAllToken, setCollapseAllToken] = useState(0);
+  const [terminalSupported, setTerminalSupported] = useState(true);
+
+  useEffect(() => {
+    fetch("/api/env")
+      .then((r) => r.json())
+      .then((data: { platform: string; isDocker: boolean }) => {
+        setTerminalSupported(data.platform !== "win32" && !data.isDocker);
+      })
+      .catch(() => {});
+  }, []);
   const timelineRef = useRef<HTMLDivElement>(null);
   const fileTreePanelRef = useRef<HTMLDivElement>(null);
   const resizeHandleRef = useRef<HTMLDivElement>(null);
@@ -140,12 +150,14 @@ export default function SessionDetail({
         >
           Files
         </button>
-        <button
-          className={`session-tab-btn${activeTab === "terminal" ? " active" : ""}`}
-          onClick={() => setActiveTab("terminal")}
-        >
-          Terminal
-        </button>
+        {terminalSupported && (
+          <button
+            className={`session-tab-btn${activeTab === "terminal" ? " active" : ""}`}
+            onClick={() => setActiveTab("terminal")}
+          >
+            Terminal
+          </button>
+        )}
       </div>
 
       {activeTab === "session" ? (
