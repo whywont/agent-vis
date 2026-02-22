@@ -8,8 +8,6 @@
 
 <br />
 
-<video src=".github/assets/agent-vis-demo.mp4" autoplay loop muted playsinline></video>
-
 ## Features
 
 - **Session timeline** — all events in reverse-chronological order: file patches, shell commands, user/agent messages, reasoning, token usage; click any entry to expand
@@ -32,6 +30,32 @@ npm run dev
 Open [http://localhost:3333](http://localhost:3333).
 
 Sessions are read directly from `~/.claude/projects/` (Claude Code) and `~/.codex/sessions/` (Codex). Nothing is copied or stored.
+
+## Docker (Windows / Linux servers)
+
+Docker lets you run agent-vis on Windows by mounting your session directories into the container. The Terminal tab is automatically disabled inside Docker.
+
+```bash
+docker build -t agent-vis .
+docker run -p 3333:3333 \
+  -v ~/.claude/projects:/root/.claude/projects:ro \
+  -v ~/.codex/sessions:/root/.codex/sessions:ro \
+  agent-vis
+```
+
+Open [http://localhost:3333](http://localhost:3333).
+
+**On Windows with WSL2** — Claude Code and Codex sessions live inside your WSL2 distro, so run the command from a WSL2 terminal (not PowerShell) so `~` resolves to the right place.
+
+To pass an API key for the AI explain feature:
+
+```bash
+docker run -p 3333:3333 \
+  -v ~/.claude/projects:/root/.claude/projects:ro \
+  -v ~/.codex/sessions:/root/.codex/sessions:ro \
+  -e ANTHROPIC_API_KEY=your_key_here \
+  agent-vis
+```
 
 ## Environment
 
