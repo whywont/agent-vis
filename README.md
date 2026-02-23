@@ -31,7 +31,7 @@ Open [http://localhost:3333](http://localhost:3333).
 
 Sessions are read directly from `~/.claude/projects/` (Claude Code) and `~/.codex/sessions/` (Codex). Nothing is copied or stored.
 
-## Docker (Windows / Linux servers)
+## Docker (Windows / Linux servers) (In Progress, Not Working)
 
 Docker lets you run agent-vis on Windows by mounting your session directories into the container. The Terminal tab is automatically disabled inside Docker.
 
