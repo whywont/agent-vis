@@ -72,16 +72,13 @@ export function parseClaudeEvent(
       tokenAccum.output += usage.output_tokens || 0;
       tokenAccum.cacheRead += usage.cache_read_input_tokens || 0;
       tokenAccum.cacheCreate += usage.cache_creation_input_tokens || 0;
-      const totalTokens =
-        tokenAccum.input +
-        tokenAccum.output +
-        tokenAccum.cacheRead +
-        tokenAccum.cacheCreate;
+      // total_tokens matches Codex's reported total: input + output only.
+      // Cache tokens are tracked separately via cached_input.
+      const totalTokens = tokenAccum.input + tokenAccum.output;
       events.push({
         kind: "token_usage",
         ts,
-        total_input:
-          tokenAccum.input + tokenAccum.cacheRead + tokenAccum.cacheCreate,
+        total_input: tokenAccum.input,
         cached_input: tokenAccum.cacheRead,
         total_output: tokenAccum.output,
         reasoning_output: 0,
