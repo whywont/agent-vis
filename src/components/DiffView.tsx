@@ -76,6 +76,7 @@ function DiffBlockView({ block, sessionCwd, contextText }: DiffBlockViewProps) {
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saved" | "error">("idle");
   const [canEdit, setCanEdit] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
 
   useEffect(() => {
     getEnv().then(({ platform, isDocker }) => {
@@ -83,14 +84,16 @@ function DiffBlockView({ block, sessionCwd, contextText }: DiffBlockViewProps) {
     });
   }, []);
 
-  function copyPath() {
-    navigator.clipboard.writeText(block.filepath).then(() => {
+  function copyDiff() {
+    const diff = block.lines.map((l) => l.text).join("\n");
+    navigator.clipboard.writeText(diff).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     }).catch(() => {});
   }
 
   async function openEdit() {
+    setEditError(null);
     let content = fullContent;
     if (content === null) {
       const absPath = block.filepath.startsWith("/")
@@ -98,13 +101,18 @@ function DiffBlockView({ block, sessionCwd, contextText }: DiffBlockViewProps) {
         : sessionCwd + "/" + block.filepath;
       try {
         const res = await fetch(`/api/file?path=${encodeURIComponent(absPath)}`);
-        const data = await res.json() as { content?: string };
-        content = data.content ?? "";
+        const data = await res.json() as { content?: string; error?: string };
+        if (!res.ok || data.content == null) {
+          setEditError(data.error ?? "file not found");
+          return;
+        }
+        content = data.content;
       } catch {
-        content = "";
+        setEditError("failed to load file");
+        return;
       }
     }
-    setEditContent(content);
+    setEditContent(content ?? "");
     setEditing(true);
   }
 
@@ -238,11 +246,13 @@ function DiffBlockView({ block, sessionCwd, contextText }: DiffBlockViewProps) {
             >
               {saving ? "saving…" : saveStatus === "saved" ? "saved!" : saveStatus === "error" ? "error" : "save"}
             </button>
-            <button className="diff-explain-btn" onClick={() => { setEditing(false); setSaveStatus("idle"); }}>
+            <button className="diff-explain-btn" onClick={() => { setEditing(false); setSaveStatus("idle"); setEditError(null); }}>
               cancel
             </button>
           </>
         ) : canEdit ? (
+          <>
+          {editError && <span className="diff-edit-error">{editError}</span>}
           <button
             className="diff-copy-path-btn"
             onClick={openEdit}
@@ -252,11 +262,12 @@ function DiffBlockView({ block, sessionCwd, contextText }: DiffBlockViewProps) {
               <path d="M9.5 2.5l2 2L4 12H2v-2L9.5 2.5z" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
           </button>
+          </>
         ) : null}
         <button
           className="diff-copy-path-btn"
-          onClick={copyPath}
-          title={block.filepath}
+          onClick={copyDiff}
+          title="Copy diff"
         >
           {copied ? (
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">

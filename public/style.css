@@ -823,6 +823,12 @@ body {
 }
 .diff-copy-path-btn:hover { color: var(--text); }
 
+.diff-edit-error {
+  font-size: 11px;
+  color: #e06c75;
+  margin-left: 6px;
+}
+
 .diff-explain-panel {
   padding: 10px 14px 12px;
   border-top: 1px solid rgba(155, 142, 207, 0.2);
