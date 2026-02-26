@@ -17,7 +17,7 @@ export async function GET(
   for (const fileRef of fileRefs) {
     const { filepath, source } = resolveSessionFile(fileRef);
     if (!fs.existsSync(filepath)) continue;
-    const { events } = parseSessionFile(filepath, source);
+    const { events } = await parseSessionFile(filepath, source);
     allEvents = allEvents.concat(events);
   }
 

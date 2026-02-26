@@ -34,6 +34,7 @@ export default function SessionDetail({
 }: SessionDetailProps) {
   const [events, setEvents] = useState<AppEvent[]>([]);
   const [sessionCwd, setSessionCwd] = useState("");
+  const [branch, setBranch] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"session" | "tree" | "terminal">("session");
   const [collapseAllToken, setCollapseAllToken] = useState(0);
   const [terminalSupported, setTerminalSupported] = useState(true);
@@ -46,6 +47,14 @@ export default function SessionDetail({
       })
       .catch(() => {});
   }, []);
+  useEffect(() => {
+    if (!sessionCwd) return;
+    fetch(`/api/branch?cwd=${encodeURIComponent(sessionCwd)}`)
+      .then((r) => r.json())
+      .then((data: { branch: string | null }) => setBranch(data.branch))
+      .catch(() => {});
+  }, [sessionCwd]);
+
   const timelineRef = useRef<HTMLDivElement>(null);
   const fileTreePanelRef = useRef<HTMLDivElement>(null);
   const resizeHandleRef = useRef<HTMLDivElement>(null);
@@ -163,7 +172,17 @@ export default function SessionDetail({
       {activeTab === "session" ? (
         <div className="detail-body">
           <div className="file-tree-panel" ref={fileTreePanelRef}>
-            <div className="file-tree-header">changed files</div>
+            <div className="file-tree-header">
+              changed files
+              {branch && (
+                <span className="file-tree-branch">
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                    <path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25Z" />
+                  </svg>
+                  {branch}
+                </span>
+              )}
+            </div>
             <FileTree
               fileChanges={fileChanges}
               sessionCwd={sessionCwd}

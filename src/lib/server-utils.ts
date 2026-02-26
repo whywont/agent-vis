@@ -1,10 +1,66 @@
 import fs from "fs";
+import readline from "readline";
 import path from "path";
 import os from "os";
 import { parseEvent } from "./parser";
 import { parseClaudeEvent, buildClaudeSessionStart, createTokenAccumulator } from "./claude-parser";
 import { deduplicateUserMessages, deduplicateAgentMessages } from "./dedup";
 import type { AppEvent } from "./types";
+
+const MAX_LINE_CHARS = 10 * 1024 * 1024; // skip lines > 10MB
+
+/**
+ * Read a JSONL file line-by-line, skipping any individual line that exceeds
+ * MAX_LINE_CHARS. This prevents crashes on pathological Codex sessions where
+ * a single line can be 1GB+ (e.g. huge file contents embedded in the JSON).
+ */
+async function readLines(filepath: string): Promise<string[]> {
+  const lines: string[] = [];
+  let pending = "";
+  let pendingLen = 0;
+  let skipping = false;
+
+  const stream = fs.createReadStream(filepath, {
+    encoding: "utf8",
+    highWaterMark: 256 * 1024,
+  });
+
+  for await (const chunk of stream as AsyncIterable<string>) {
+    let searchStart = 0;
+    while (searchStart < chunk.length) {
+      const nlIdx = chunk.indexOf("\n", searchStart);
+      if (nlIdx === -1) {
+        if (!skipping) {
+          const remaining = chunk.slice(searchStart);
+          if (pendingLen + remaining.length > MAX_LINE_CHARS) {
+            skipping = true;
+            pending = "";
+            pendingLen = 0;
+          } else {
+            pending += remaining;
+            pendingLen += remaining.length;
+          }
+        }
+        break;
+      } else {
+        if (!skipping) {
+          const segment = chunk.slice(searchStart, nlIdx);
+          if (pendingLen + segment.length <= MAX_LINE_CHARS) {
+            pending += segment;
+            if (pending) lines.push(pending);
+          }
+        }
+        pending = "";
+        pendingLen = 0;
+        skipping = false;
+        searchStart = nlIdx + 1;
+      }
+    }
+  }
+
+  if (pending && !skipping) lines.push(pending);
+  return lines;
+}
 
 export const CODEX_SESSIONS_DIR = path.join(os.homedir(), ".codex", "sessions");
 export const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), ".claude", "projects");
@@ -47,18 +103,17 @@ export function clearParsedFileCache(filepath: string) {
 /**
  * Parse a JSONL file into events using the appropriate parser.
  */
-export function parseSessionFile(
+export async function parseSessionFile(
   filepath: string,
   source: "claude-code" | "codex"
-): { events: AppEvent[]; lineCount: number } {
+): Promise<{ events: AppEvent[]; lineCount: number }> {
   const mtime = fs.statSync(filepath).mtimeMs;
   const cached = parsedFileCache.get(filepath);
   if (cached && cached.mtime === mtime) {
     return { events: cached.events, lineCount: cached.lineCount };
   }
 
-  const raw = fs.readFileSync(filepath, "utf8");
-  const lines = raw.split("\n").filter(Boolean);
+  const lines = await readLines(filepath);
   const events: AppEvent[] = [];
 
   if (source === "claude-code") {

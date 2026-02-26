@@ -237,7 +237,7 @@ export default function FileTree({
       if (!timelineRef.current) return;
       const allEntries =
         timelineRef.current.querySelectorAll<HTMLElement>(
-          ".timeline-entry.file-change"
+          ".timeline-entry.file-change, .timeline-entry.file-write, .timeline-entry.file-delete"
         );
       const matching: HTMLElement[] = [];
       for (const entry of allEntries) {

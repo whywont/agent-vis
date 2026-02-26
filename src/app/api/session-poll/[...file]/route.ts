@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
+const MAX_LINE_CHARS = 10 * 1024 * 1024;
 import { resolveSessionFile } from "@/lib/server-utils";
 import { parseEvent } from "@/lib/parser";
 import { parseClaudeEvent, createTokenAccumulator } from "@/lib/claude-parser";
@@ -21,8 +22,38 @@ export async function GET(
   const offsetStr = req.nextUrl.searchParams.get("offset");
   const offset = parseInt(offsetStr || "0") || 0;
 
-  const raw = fs.readFileSync(filepath, "utf8");
-  const lines = raw.split("\n").filter(Boolean);
+  const lines: string[] = [];
+  let pending = "";
+  let pendingLen = 0;
+  let skipping = false;
+  const stream = fs.createReadStream(filepath, { encoding: "utf8", highWaterMark: 256 * 1024 });
+  for await (const chunk of stream as AsyncIterable<string>) {
+    let searchStart = 0;
+    while (searchStart < chunk.length) {
+      const nlIdx = chunk.indexOf("\n", searchStart);
+      if (nlIdx === -1) {
+        if (!skipping) {
+          const remaining = chunk.slice(searchStart);
+          if (pendingLen + remaining.length > MAX_LINE_CHARS) {
+            skipping = true; pending = ""; pendingLen = 0;
+          } else {
+            pending += remaining; pendingLen += remaining.length;
+          }
+        }
+        break;
+      } else {
+        if (!skipping) {
+          const segment = chunk.slice(searchStart, nlIdx);
+          if (pendingLen + segment.length <= MAX_LINE_CHARS) {
+            pending += segment;
+            if (pending) lines.push(pending);
+          }
+        }
+        pending = ""; pendingLen = 0; skipping = false; searchStart = nlIdx + 1;
+      }
+    }
+  }
+  if (pending && !skipping) lines.push(pending);
 
   if (lines.length <= offset) {
     return NextResponse.json({ events: [], total: lines.length });

@@ -17,15 +17,20 @@ interface TimelineEntryProps {
   collapseToken?: number;
   dbQuery?: DbQuery;
   queryOutput?: string;
+  readContent?: string;
 }
 
-function kindToClass(kind: string, isDb?: boolean): string {
+function kindToClass(kind: string, isDb?: boolean, fileAction?: string): string {
   if (isDb) return "db-cmd";
+  if (kind === "file_change") {
+    if (fileAction === "add") return "file-write";
+    if (fileAction === "delete") return "file-delete";
+    return "file-change";
+  }
   return (
     ({
       user_message: "user-msg",
       agent_message: "agent-msg",
-      file_change: "file-change",
       shell_command: "shell-cmd",
       reasoning: "reasoning",
       tool_output: "shell-cmd",
@@ -33,13 +38,17 @@ function kindToClass(kind: string, isDb?: boolean): string {
   );
 }
 
-function kindToBadge(kind: string, isDb?: boolean): string {
+function kindToBadge(kind: string, isDb?: boolean, fileAction?: string): string {
   if (isDb) return "badge-db";
+  if (kind === "file_change") {
+    if (fileAction === "add") return "badge-write";
+    if (fileAction === "delete") return "badge-delete";
+    return "badge-file";
+  }
   return (
     ({
       user_message: "badge-user",
       agent_message: "badge-agent",
-      file_change: "badge-file",
       shell_command: "badge-shell",
       reasoning: "badge-reasoning",
       tool_output: "badge-shell",
@@ -47,13 +56,17 @@ function kindToBadge(kind: string, isDb?: boolean): string {
   );
 }
 
-function kindToLabel(kind: string, isDb?: boolean): string {
+function kindToLabel(kind: string, isDb?: boolean, fileAction?: string): string {
   if (isDb) return "db";
+  if (kind === "file_change") {
+    if (fileAction === "add") return "write";
+    if (fileAction === "delete") return "delete";
+    return "patch";
+  }
   return (
     ({
       user_message: "user",
       agent_message: "agent",
-      file_change: "patch",
       shell_command: "shell",
       reasoning: "think",
       tool_output: "out",
@@ -133,6 +146,7 @@ function EntryBody({
   contextText,
   dbQuery,
   queryOutput,
+  readContent,
 }: {
   evt: AppEvent;
   sessionCwd: string;
@@ -140,55 +154,75 @@ function EntryBody({
   contextText?: string;
   dbQuery?: DbQuery;
   queryOutput?: string;
+  readContent?: string;
 }) {
   if (evt.kind === "file_change") {
     return <DiffView patch={evt.patch} files={evt.files} sessionCwd={sessionCwd} contextText={contextText} />;
   }
   if (evt.kind === "shell_command" && dbQuery) {
-    return <DbQueryView query={dbQuery} output={queryOutput} />;
-  }
-  if (evt.kind === "shell_command") {
     return (
-      <>
-        {evt.workdir && (
-          <>
-            <span style={{ color: "var(--text-dim)" }}>[{evt.workdir}]</span>
-            {"\n"}
-          </>
-        )}
-        <span style={{ color: "var(--text-dim)" }}>$ </span>
-        {evt.cmd}
-      </>
+      <div className="entry-body-section">
+        <DbQueryView query={dbQuery} output={queryOutput} />
+      </div>
     );
   }
+  if (evt.kind === "shell_command") {
+    const cmd = (
+      <>
+        {evt.workdir && <><span style={{ color: "var(--text-dim)" }}>[{evt.workdir}]</span>{"\n"}</>}
+        <span style={{ color: "var(--text-dim)" }}>$ </span>{evt.cmd}
+      </>
+    );
+    if (queryOutput !== undefined || readContent !== undefined) {
+      const output = readContent ?? queryOutput;
+      return (
+        <>
+          <div className="entry-body-section">
+            <div className="entry-body-label">Input</div>
+            {cmd}
+          </div>
+          {output !== undefined && (
+            <div className="entry-body-section">
+              <div className="entry-body-label">
+                <span className="entry-body-label-dot" />
+                Output
+              </div>
+              {output}
+            </div>
+          )}
+        </>
+      );
+    }
+    return <div className="entry-body-section">{cmd}</div>;
+  }
   if (evt.kind === "tool_output") {
-    return <>{evt.output}</>;
+    return (
+      <div className="entry-body-section">
+        <div className="entry-body-label">
+          <span className="entry-body-label-dot" />
+          Output
+        </div>
+        {evt.output}
+      </div>
+    );
   }
   const text =
-    evt.kind === "user_message" ||
-    evt.kind === "agent_message" ||
-    evt.kind === "reasoning"
+    evt.kind === "user_message" || evt.kind === "agent_message" || evt.kind === "reasoning"
       ? evt.text || ""
       : "";
   const images = evt.kind === "user_message" ? evt.images || [] : [];
   return (
-    <>
+    <div className="entry-body-section">
       {text}
       {images.length > 0 && (
         <div className="msg-images">
           {images.map((src, i) => (
             // eslint-disable-next-line @next/next/no-img-element
-            <img
-              key={i}
-              className="msg-image"
-              src={src}
-              alt={`Image ${i + 1}`}
-              onClick={() => onOpenImage(src)}
-            />
+            <img key={i} className="msg-image" src={src} alt={`Image ${i + 1}`} onClick={() => onOpenImage(src)} />
           ))}
         </div>
       )}
-    </>
+    </div>
   );
 }
 
@@ -202,6 +236,7 @@ export default function TimelineEntry({
   collapseToken,
   dbQuery,
   queryOutput,
+  readContent,
 }: TimelineEntryProps) {
   const [collapsed, setCollapsed] = useState(true);
   const entryRef = useRef<HTMLDivElement>(null);
@@ -240,10 +275,11 @@ export default function TimelineEntry({
   }
 
   const isDb = !!dbQuery;
+  const fileAction = event.kind === "file_change" ? event.files[0]?.action : undefined;
   const visible = activeFilters.has(event.kind);
-  const entryClass = kindToClass(event.kind, isDb);
-  const badgeClass = kindToBadge(event.kind, isDb);
-  const badgeLabel = kindToLabel(event.kind, isDb);
+  const entryClass = kindToClass(event.kind, isDb, fileAction);
+  const badgeClass = kindToBadge(event.kind, isDb, fileAction);
+  const badgeLabel = kindToLabel(event.kind, isDb, fileAction);
   const summary = getSummary(event, dbQuery);
   const time = event.ts ? formatTime(event.ts) : "";
 
@@ -258,7 +294,7 @@ export default function TimelineEntry({
         onClick={() => setCollapsed((c) => !c)}
       >
         <span className={`entry-badge ${badgeClass}`}>{badgeLabel}</span>
-        <span className="entry-summary">{summary}</span>
+        {collapsed && <span className="entry-summary">{summary}</span>}
         <span className="entry-time">{time}</span>
         <button
           className={`entry-highlight-btn${highlighted ? " active" : ""}`}
@@ -276,6 +312,7 @@ export default function TimelineEntry({
           contextText={contextText}
           dbQuery={dbQuery}
           queryOutput={queryOutput}
+          readContent={readContent}
         />
       </div>
     </div>

@@ -22,7 +22,12 @@ export default function FileHistory({
       (evt) =>
         evt.kind === "file_change" &&
         evt.files &&
-        evt.files.some((f) => f.path === filepath)
+        evt.files.some(
+          (f) =>
+            f.path === filepath ||
+            f.path.endsWith("/" + filepath) ||
+            filepath.endsWith("/" + f.path)
+        )
     )
     .sort((a, b) => {
       if (a.ts && b.ts) return new Date(a.ts).getTime() - new Date(b.ts).getTime();
@@ -45,7 +50,12 @@ export default function FileHistory({
       ) : (
         changes.map((evt, i) => {
           const time = evt.ts ? formatTime(evt.ts) : "";
-          const fileInfo = evt.files.find((f) => f.path === filepath);
+          const fileInfo = evt.files.find(
+            (f) =>
+              f.path === filepath ||
+              f.path.endsWith("/" + filepath) ||
+              filepath.endsWith("/" + f.path)
+          );
           const action = fileInfo ? fileInfo.action : "update";
           return (
             <div key={i} className="file-history-entry">

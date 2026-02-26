@@ -25,7 +25,7 @@ export async function GET(req: NextRequest) {
         if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
         const filepath = path.join(CODEX_SESSIONS_DIR, entry.name);
         try {
-          const { events } = parseSessionFile(filepath, "codex");
+          const { events } = await parseSessionFile(filepath, "codex");
           if (eventSearchText(events).includes(q)) {
             matches.push(entry.name);
           }
@@ -45,7 +45,7 @@ export async function GET(req: NextRequest) {
             if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
             const filepath = path.join(projDir, entry.name);
             try {
-              const { events } = parseSessionFile(filepath, "claude-code");
+              const { events } = await parseSessionFile(filepath, "claude-code");
               if (eventSearchText(events).includes(q)) {
                 matches.push(`claude:${proj.name}/${entry.name}`);
               }
