@@ -256,8 +256,7 @@ export default function FileTree({
       setTimeout(() => {
         entry.style.background = "";
       }, 1500);
-      const body = entry.querySelector<HTMLElement>(".entry-body");
-      if (body) body.classList.remove("collapsed");
+      entry.dispatchEvent(new CustomEvent("expand-entry"));
     },
     [timelineRef]
   );
