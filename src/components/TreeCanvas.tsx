@@ -106,7 +106,7 @@ function computeLayout(
       let maxRowH = 0;
 
       for (const { path, changes } of row) {
-        const peekCount = changes.length - 1;
+        const peekCount = Math.min(changes.length - 1, 9);
         const w = CARD_W + peekCount * PEEK_W;
         const h = CARD_H + peekCount * PEEK_DY;
         cards.push({ path, x: curX, y: rowY, w, h });

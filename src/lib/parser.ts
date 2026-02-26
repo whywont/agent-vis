@@ -128,6 +128,19 @@ export function parseEvent(obj: Record<string, unknown>): AppEvent | null {
       } catch {
         cmd = (p.arguments as string) || "";
       }
+
+      // Detect heredoc file writes: cat > filepath <<'DELIMITER'\ncontent\nDELIMITER
+      // These are file creations disguised as shell commands — surface them as patches.
+      const heredocMatch = cmd.match(/^cat\s+>\s+(\S+)\s+<<\s*['"]?(\w+)['"]?\n([\s\S]*?)\n\2[ \t]*$/);
+      if (heredocMatch) {
+        const filepath = heredocMatch[1];
+        const content = heredocMatch[3];
+        const patchLines = content.split("\n").map((l) => "+" + l).join("\n");
+        const patch = `*** Begin Patch\n*** Add File: ${filepath}\n${patchLines}\n*** End Patch`;
+        const files: FileInfo[] = [{ action: "add", path: filepath }];
+        return { kind: "file_change", ts, patch, files, callId: p.call_id as string };
+      }
+
       return { kind: "shell_command", ts, cmd, workdir, callId: p.call_id as string };
     }
 

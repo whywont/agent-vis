@@ -691,6 +691,28 @@ body {
   flex-shrink: 0;
 }
 
+.entry-highlight-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-dim);
+  padding: 0 2px 0 6px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.1s, color 0.1s;
+  line-height: 1;
+}
+.entry-header:hover .entry-highlight-btn { opacity: 1; }
+.entry-highlight-btn.active {
+  color: var(--accent);
+  opacity: 1;
+}
+
+.timeline-entry.highlighted > .entry-header {
+  background: rgba(201, 165, 90, 0.06);
+}
+
 .entry-summary {
   font-size: 14px;
   color: var(--text-muted);
@@ -792,21 +814,54 @@ body {
   cursor: default;
 }
 
+.diff-editor-wrap {
+  position: relative;
+  border-top: 1px solid var(--border);
+}
+
+.diff-editor-bg {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 10px 12px;
+  color: transparent;
+  background: var(--bg);
+  white-space: pre;
+  overflow: hidden;
+  pointer-events: none;
+  box-sizing: border-box;
+  tab-size: 2;
+}
+
+.diff-editor-line {
+  display: block;
+  min-height: 1.5em;
+}
+
+.diff-editor-added {
+  background: var(--green-dim);
+}
+
 .diff-editor {
   display: block;
+  position: relative;
+  z-index: 1;
   width: 100%;
-  min-height: 320px;
-  background: var(--bg);
+  background: transparent;
   color: var(--text);
+  caret-color: var(--text);
   font-family: var(--font-mono);
   font-size: 13px;
   line-height: 1.5;
   padding: 10px 12px;
   border: none;
-  border-top: 1px solid var(--border);
   resize: vertical;
   outline: none;
   box-sizing: border-box;
+  tab-size: 2;
 }
 
 .diff-copy-path-btn {
@@ -827,6 +882,15 @@ body {
   font-size: 11px;
   color: #e06c75;
   margin-left: 6px;
+}
+
+.diff-stale-warning {
+  padding: 5px 12px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--orange);
+  background: rgba(212, 149, 106, 0.08);
+  border-bottom: 1px solid rgba(212, 149, 106, 0.2);
 }
 
 .diff-explain-panel {
@@ -1145,6 +1209,8 @@ body.resizing {
   top: 0;
   left: 0;
   transform-origin: 0 0;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 /* ---- Dir group ---- */
@@ -1240,18 +1306,23 @@ body.resizing {
 
 .file-card-expand-btn {
   font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text-dim);
+  font-size: 12px;
+  color: var(--text-muted);
   background: none;
-  border: none;
+  border: 1px solid var(--border-light);
+  border-radius: 3px;
   cursor: pointer;
-  padding: 2px 5px;
+  padding: 2px 6px;
   flex-shrink: 0;
   margin-left: auto;
-  transition: color 0.1s;
+  transition: color 0.1s, border-color 0.1s, background 0.1s;
 }
 
-.file-card-expand-btn:hover { color: var(--text); }
+.file-card-expand-btn:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
+  background: var(--bg-hover);
+}
 
 .file-card-body {
   flex: 1;

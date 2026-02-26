@@ -82,7 +82,8 @@ export default function FileCardStack({
   const peekItems = changes
     .map((c, i) => ({ change: c, origIdx: i }))
     .filter(({ origIdx }) => origIdx !== activeIdx)
-    .reverse();
+    .reverse()
+    .slice(0, 9); // cap at 9 peeks (10 total including front card)
 
   const totalW = CARD_W + peekItems.length * PEEK_W;
   const totalH = CARD_H + peekItems.length * PEEK_DY;

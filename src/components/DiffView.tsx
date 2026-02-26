@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import type { FileInfo } from "@/lib/types";
 
 // Module-level cache — one fetch shared across all DiffBlockView instances.
@@ -29,32 +29,181 @@ interface DiffBlock {
 
 function parseDiff(patch: string): DiffBlock[] {
   const blocks: DiffBlock[] = [];
-  const sections = patch.split(/(?=\*\*\* (?:Update|Add|Delete) File:)/);
-  for (const section of sections) {
-    if (!section.trim()) continue;
-    const headerMatch = section.match(/\*\*\* (Update|Add|Delete) File: (.+)/);
-    if (!headerMatch) continue;
-    const action = headerMatch[1].toLowerCase();
-    const filepath = headerMatch[2].trim();
-    const rawLines = section.split("\n");
-    const lines: DiffBlock["lines"] = [];
-    for (let i = 1; i < rawLines.length; i++) {
-      const line = rawLines[i];
-      if (line.startsWith("*** End Patch") || line.startsWith("*** Begin Patch"))
-        continue;
-      if (line.startsWith("@@")) {
-        lines.push({ type: "hunk", text: line });
-      } else if (line.startsWith("+")) {
-        lines.push({ type: "added", text: line });
-      } else if (line.startsWith("-")) {
-        lines.push({ type: "removed", text: line });
-      } else {
-        lines.push({ type: "context", text: line });
-      }
+  let current: DiffBlock | null = null;
+
+  for (const line of patch.split("\n")) {
+    if (line.startsWith("*** End Patch") || line.startsWith("*** Begin Patch")) continue;
+    // Only treat lines that literally start with "*** Update/Add/Delete File:" as
+    // block headers — NOT lines where this pattern appears after a diff prefix
+    // (e.g. `+    const patch = \`*** Update File: foo.ts` in test fixtures).
+    const headerMatch = line.match(/^\*\*\* (Update|Add|Delete) File: (.+)/);
+    if (headerMatch) {
+      if (current) blocks.push(current);
+      current = { action: headerMatch[1].toLowerCase(), filepath: headerMatch[2].trim(), lines: [] };
+      continue;
     }
-    blocks.push({ action, filepath, lines });
+    if (!current) continue;
+    if (line.startsWith("@@")) {
+      current.lines.push({ type: "hunk", text: line });
+    } else if (line.startsWith("+")) {
+      current.lines.push({ type: "added", text: line });
+    } else if (line.startsWith("-")) {
+      current.lines.push({ type: "removed", text: line });
+    } else {
+      current.lines.push({ type: "context", text: line });
+    }
   }
+  if (current) blocks.push(current);
   return blocks;
+}
+
+// Returns the set of 1-indexed line numbers in the *new* file that are additions,
+// derived from hunk headers so the numbers are correct for the full file.
+function computeAddedLineNums(lines: DiffBlock["lines"]): Set<number> {
+  const added = new Set<number>();
+  let newLine = 0;
+  for (const dl of lines) {
+    if (dl.type === "hunk") {
+      const m = dl.text.match(/@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+      if (m) newLine = parseInt(m[1], 10) - 1;
+    } else if (dl.type === "added") {
+      newLine++;
+      added.add(newLine);
+    } else if (dl.type === "context") {
+      newLine++;
+    }
+    // removed lines don't exist in the new file — don't advance newLine
+  }
+  return added;
+}
+
+// Splits a diff block into editable content (context + added lines, no removed/hunk lines)
+// and records the hunk positions so we can splice the result back into the full file on save.
+interface HunkInfo {
+  newStart: number;     // 1-indexed line in the file where this hunk begins
+  newCount: number;     // number of lines this hunk covers in the new file
+  contentStart: number; // first line index in the editContent string for this hunk
+  contentEnd: number;   // exclusive end index
+}
+
+function buildPatchEdit(lines: DiffBlock["lines"]): {
+  content: string;
+  hunks: HunkInfo[];
+  addedLineNums: Set<number>; // 1-indexed positions within content that are additions
+} {
+  const contentLines: string[] = [];
+  const addedLineNums = new Set<number>();
+  const hunks: HunkInfo[] = [];
+  let hunkStart: number | null = null;
+  let hunkNewStart = 1;
+
+  for (const line of lines) {
+    if (line.type === "hunk") {
+      if (hunkStart !== null) {
+        hunks.push({ newStart: hunkNewStart, newCount: contentLines.length - hunkStart, contentStart: hunkStart, contentEnd: contentLines.length });
+      }
+      const m = line.text.match(/@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+      hunkNewStart = m ? parseInt(m[1], 10) : 1;
+      hunkStart = contentLines.length;
+    } else if (line.type === "added") {
+      addedLineNums.add(contentLines.length + 1);
+      contentLines.push(line.text.slice(1)); // strip leading '+'
+    } else if (line.type === "context") {
+      contentLines.push(line.text.slice(1)); // strip leading ' '
+    }
+    // removed lines don't exist in the new file — skip
+  }
+  if (hunkStart !== null) {
+    hunks.push({ newStart: hunkNewStart, newCount: contentLines.length - hunkStart, contentStart: hunkStart, contentEnd: contentLines.length });
+  }
+  // No hunk headers (e.g. simple add-file) — treat whole content as one hunk at line 1
+  if (hunks.length === 0 && contentLines.length > 0) {
+    hunks.push({ newStart: 1, newCount: contentLines.length, contentStart: 0, contentEnd: contentLines.length });
+  }
+
+  return { content: contentLines.join("\n"), hunks, addedLineNums };
+}
+
+// Finds the index of `target` in `fileLines` using surrounding context to disambiguate
+// when the same line appears multiple times.
+function findLineWithContext(
+  fileLines: string[],
+  target: string,
+  contextBefore: string[],
+  contextAfter: string[]
+): number {
+  let bestPos = -1;
+  let bestScore = -1;
+  for (let i = 0; i < fileLines.length; i++) {
+    if (fileLines[i] !== target) continue;
+    let score = 0;
+    for (let j = 0; j < contextBefore.length; j++) {
+      const fi = i - contextBefore.length + j;
+      if (fi >= 0 && fileLines[fi] === contextBefore[j]) score++;
+    }
+    for (let j = 0; j < contextAfter.length; j++) {
+      const fi = i + 1 + j;
+      if (fi < fileLines.length && fileLines[fi] === contextAfter[j]) score++;
+    }
+    if (score > bestScore) { bestScore = score; bestPos = i; }
+  }
+  return bestPos;
+}
+
+interface HighlightedEditorProps {
+  value: string;
+  onChange: (v: string) => void;
+  addedLines: Set<number>;
+  scrollToLine: number;
+}
+
+function HighlightedEditor({ value, onChange, addedLines, scrollToLine }: HighlightedEditorProps) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const bgRef = useRef<HTMLPreElement>(null);
+
+  useEffect(() => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    ta.focus();
+    if (scrollToLine <= 1) return;
+    const lineH = parseFloat(getComputedStyle(ta).lineHeight) || 20;
+    const scrollTop = Math.max(0, (scrollToLine - 3) * lineH);
+    ta.scrollTop = scrollTop;
+    if (bgRef.current) bgRef.current.scrollTop = scrollTop;
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function onScroll(e: React.UIEvent<HTMLTextAreaElement>) {
+    if (bgRef.current) {
+      bgRef.current.scrollTop = e.currentTarget.scrollTop;
+      bgRef.current.scrollLeft = e.currentTarget.scrollLeft;
+    }
+  }
+
+  const lines = value.split("\n");
+  const rows = Math.max(4, lines.length + 1);
+  return (
+    <div className="diff-editor-wrap">
+      <pre ref={bgRef} className="diff-editor-bg" aria-hidden>
+        {lines.map((line, i) => (
+          <span
+            key={i}
+            className={`diff-editor-line${addedLines.has(i + 1) ? " diff-editor-added" : ""}`}
+          >
+            {line}
+          </span>
+        ))}
+      </pre>
+      <textarea
+        ref={textareaRef}
+        className="diff-editor"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onScroll={onScroll}
+        rows={rows}
+        spellCheck={false}
+      />
+    </div>
+  );
 }
 
 interface DiffBlockViewProps {
@@ -73,6 +222,10 @@ function DiffBlockView({ block, sessionCwd, contextText }: DiffBlockViewProps) {
   const [copied, setCopied] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editContent, setEditContent] = useState("");
+  const [editHunks, setEditHunks] = useState<HunkInfo[]>([]);
+  const [editAddedIndices, setEditAddedIndices] = useState<Set<number>>(new Set());
+  const [staleWarning, setStaleWarning] = useState(false);
+  const originalEditRef = useRef("");
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saved" | "error">("idle");
   const [canEdit, setCanEdit] = useState(false);
@@ -94,25 +247,34 @@ function DiffBlockView({ block, sessionCwd, contextText }: DiffBlockViewProps) {
 
   async function openEdit() {
     setEditError(null);
-    let content = fullContent;
-    if (content === null) {
-      const absPath = block.filepath.startsWith("/")
-        ? block.filepath
-        : sessionCwd + "/" + block.filepath;
-      try {
-        const res = await fetch(`/api/file?path=${encodeURIComponent(absPath)}`);
-        const data = await res.json() as { content?: string; error?: string };
-        if (!res.ok || data.content == null) {
-          setEditError(data.error ?? "file not found");
-          return;
-        }
-        content = data.content;
-      } catch {
-        setEditError("failed to load file");
-        return;
+    setStaleWarning(false);
+    const { content, hunks, addedLineNums } = buildPatchEdit(block.lines);
+    originalEditRef.current = content;
+
+    // Check if the added lines from this patch still exist in the current file.
+    // If any are missing the file has moved on since this patch was applied.
+    try {
+      const absPath = block.filepath.startsWith("/") ? block.filepath : sessionCwd + "/" + block.filepath;
+      const res = await fetch(`/api/file?path=${encodeURIComponent(absPath)}`);
+      const data = await res.json() as { content?: string };
+      if (data.content != null) {
+        const fileLines = data.content.split("\n");
+        const patchLines = content.split("\n");
+        const isStale = [...addedLineNums].some(lineNum => {
+          const target = patchLines[lineNum - 1];
+          const ctxBefore = patchLines.slice(Math.max(0, lineNum - 4), lineNum - 1);
+          const ctxAfter  = patchLines.slice(lineNum, Math.min(patchLines.length, lineNum + 3));
+          return findLineWithContext(fileLines, target, ctxBefore, ctxAfter) === -1;
+        });
+        setStaleWarning(isStale);
       }
+    } catch {
+      // Can't check — don't block editing
     }
-    setEditContent(content ?? "");
+
+    setEditContent(content);
+    setEditHunks(hunks);
+    setEditAddedIndices(addedLineNums);
     setEditing(true);
   }
 
@@ -124,13 +286,39 @@ function DiffBlockView({ block, sessionCwd, contextText }: DiffBlockViewProps) {
       ? block.filepath
       : sessionCwd + "/" + block.filepath;
     try {
-      const res = await fetch("/api/file", {
+      const fileRes = await fetch(`/api/file?path=${encodeURIComponent(absPath)}`);
+      const fileData = await fileRes.json() as { content?: string; error?: string };
+      if (!fileRes.ok || fileData.content == null) { setSaveStatus("error"); return; }
+
+      const fileLines = fileData.content.split("\n");
+      const origLines = originalEditRef.current.split("\n");
+      const editLines = editContent.split("\n");
+
+      if (origLines.length === editLines.length) {
+        // Only write back lines the user actually changed.
+        // Each changed line is located in the file by its surrounding context,
+        // so this is safe even if a new agent patch shifted line numbers elsewhere.
+        for (let i = 0; i < origLines.length; i++) {
+          if (origLines[i] === editLines[i]) continue;
+          const ctxBefore = origLines.slice(Math.max(0, i - 3), i);
+          const ctxAfter  = origLines.slice(i + 1, Math.min(origLines.length, i + 4));
+          const pos = findLineWithContext(fileLines, origLines[i], ctxBefore, ctxAfter);
+          if (pos !== -1) fileLines[pos] = editLines[i];
+        }
+      } else {
+        // User added or removed lines — fall back to hunk splice
+        const sorted = [...editHunks].sort((a, b) => b.newStart - a.newStart);
+        for (const hunk of sorted) {
+          fileLines.splice(hunk.newStart - 1, hunk.newCount, ...editLines.slice(hunk.contentStart, hunk.contentEnd));
+        }
+      }
+
+      const saveRes = await fetch("/api/file", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: absPath, content: editContent }),
+        body: JSON.stringify({ path: absPath, content: fileLines.join("\n") }),
       });
-      if (res.ok) {
-        setFullContent(editContent);
+      if (saveRes.ok) {
         setSaveStatus("saved");
         setTimeout(() => { setEditing(false); setSaveStatus("idle"); }, 800);
       } else {
@@ -206,11 +394,8 @@ function DiffBlockView({ block, sessionCwd, contextText }: DiffBlockViewProps) {
     }
   }
 
-  const addedLineNums = new Set(
-    block.lines
-      .map((l, i) => (l.type === "added" ? i + 1 : null))
-      .filter(Boolean) as number[]
-  );
+  // Used only for the full-file view — highlights which file lines were added
+  const addedLineNums = useMemo(() => computeAddedLineNums(block.lines), [block.lines]);
 
   return (
     <div className="diff-block">
@@ -281,13 +466,17 @@ function DiffBlockView({ block, sessionCwd, contextText }: DiffBlockViewProps) {
           )}
         </button>
       </div>
+      {editing && staleWarning && (
+        <div className="diff-stale-warning">
+          ⚠ file has changed since this patch — your edits will apply to the current version
+        </div>
+      )}
       {editing ? (
-        <textarea
-          className="diff-editor"
+        <HighlightedEditor
           value={editContent}
-          onChange={(e) => setEditContent(e.target.value)}
-          spellCheck={false}
-          autoFocus
+          onChange={setEditContent}
+          addedLines={editAddedIndices}
+          scrollToLine={editAddedIndices.size > 0 ? Math.min(...editAddedIndices) : 1}
         />
       ) : (
         <>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import type { AppEvent } from "@/lib/types";
 import { truncate, formatTime, formatTokens } from "@/utils/format";
 import DiffView from "./DiffView";
@@ -204,11 +204,36 @@ export default function TimelineEntry({
   queryOutput,
 }: TimelineEntryProps) {
   const [collapsed, setCollapsed] = useState(true);
+  const entryRef = useRef<HTMLDivElement>(null);
+  const hlKey = `hl:${sessionCwd}:${event.ts}`;
+  const [highlighted, setHighlighted] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return localStorage.getItem(hlKey) === "1";
+  });
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (collapseToken) setCollapsed(true);
   }, [collapseToken]);
+
+  // Listen for expand requests from FileTree (which can't call setState directly)
+  useEffect(() => {
+    const el = entryRef.current;
+    if (!el) return;
+    const handler = () => setCollapsed(false);
+    el.addEventListener("expand-entry", handler);
+    return () => el.removeEventListener("expand-entry", handler);
+  }, []);
+
+  function toggleHighlight(e: React.MouseEvent) {
+    e.stopPropagation();
+    setHighlighted((h) => {
+      const next = !h;
+      if (next) localStorage.setItem(hlKey, "1");
+      else localStorage.removeItem(hlKey);
+      return next;
+    });
+  }
 
   if (event.kind === "token_usage") {
     return <TokenUsageEntry evt={event} show={showTokenUsage} />;
@@ -224,7 +249,8 @@ export default function TimelineEntry({
 
   return (
     <div
-      className={`timeline-entry ${entryClass}${visible ? "" : " hidden"}`}
+      ref={entryRef}
+      className={`timeline-entry ${entryClass}${visible ? "" : " hidden"}${highlighted ? " highlighted" : ""}`}
       data-kind={event.kind}
     >
       <div
@@ -234,6 +260,13 @@ export default function TimelineEntry({
         <span className={`entry-badge ${badgeClass}`}>{badgeLabel}</span>
         <span className="entry-summary">{summary}</span>
         <span className="entry-time">{time}</span>
+        <button
+          className={`entry-highlight-btn${highlighted ? " active" : ""}`}
+          onClick={toggleHighlight}
+          title={highlighted ? "Remove highlight" : "Highlight"}
+        >
+          ★
+        </button>
       </div>
       <div className={`entry-body${collapsed ? " collapsed" : ""}`}>
         <EntryBody
