@@ -32,7 +32,7 @@ export function formatTime(ts: string | undefined | null): string {
     return new Date(ts).toLocaleTimeString("en-US", {
       hour: "2-digit",
       minute: "2-digit",
-      hour12: true,
+      hour12: false,
     });
   } catch {
     return ts;
