@@ -304,7 +304,7 @@ export default function TimelineEntry({
           ★
         </button>
       </div>
-      <div className={`entry-body${collapsed ? " collapsed" : ""}`}>
+      <div className={`entry-body${collapsed ? " collapsed" : ""}${event.kind === "file_change" ? " diff-body" : ""}`}>
         <EntryBody
           evt={event}
           sessionCwd={sessionCwd}

@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 * {
   margin: 0;
@@ -24,8 +24,8 @@
   --red-dim: rgba(212, 106, 106, 0.12);
   --blue: #6a9fd4;
   --orange: #d4956a;
-  --font-mono: "IBM Plex Mono", "SF Mono", monospace;
-  --font-sans: "Space Grotesk", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", monospace;
+  --font-sans: "Inter", system-ui, sans-serif;
 }
 
 body {
@@ -757,6 +757,7 @@ body {
 }
 
 .entry-body.collapsed { display: none; }
+.entry-body.diff-body { background: var(--bg); padding: 0 0 6px 0; }
 
 .entry-body-section {
   padding: 8px 12px;
