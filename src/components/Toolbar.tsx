@@ -62,26 +62,28 @@ export default function Toolbar({
           </span>
         )}
       </div>
-      <div className="toolbar-sep" />
-      {FILTERS.map((f) => (
+      <div className="toolbar-sep" style={{ flexShrink: 0 }} />
+      <div className="toolbar-filters">
+        {FILTERS.map((f) => (
+          <button
+            key={f.key}
+            className={`filter-btn${activeFilters.has(f.key) ? " active" : ""}`}
+            onClick={() => onToggleFilter(f.key)}
+          >
+            {f.label}
+          </button>
+        ))}
         <button
-          key={f.key}
-          className={`filter-btn${activeFilters.has(f.key) ? " active" : ""}`}
-          onClick={() => onToggleFilter(f.key)}
+          className={`filter-btn${showTokenUsage ? " active" : ""}`}
+          onClick={onToggleTokenUsage}
         >
-          {f.label}
+          tokens
         </button>
-      ))}
-      <button
-        className={`filter-btn${showTokenUsage ? " active" : ""}`}
-        onClick={onToggleTokenUsage}
-      >
-        tokens
-      </button>
-      <div className="toolbar-sep" />
-      <button className="filter-btn" onClick={onCollapseAll} title="Collapse all entries">
-        – all
-      </button>
+        <div className="toolbar-sep" style={{ flexShrink: 0 }} />
+        <button className="filter-btn" onClick={onCollapseAll} title="Collapse all entries">
+          – all
+        </button>
+      </div>
     </div>
   );
 }

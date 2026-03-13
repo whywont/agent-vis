@@ -605,11 +605,36 @@ body {
   border-bottom: 1px solid var(--border);
   background: var(--bg);
   flex-shrink: 0;
-  flex-wrap: wrap;
   min-height: 39px;
   position: sticky;
   top: 0;
   z-index: 5;
+  overflow: hidden;
+}
+
+.toolbar-filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+  min-width: 0;
+  flex: 1;
+  padding-bottom: 2px;
+}
+
+.toolbar-filters::-webkit-scrollbar {
+  height: 4px;
+}
+
+.toolbar-filters::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.toolbar-filters::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 2px;
 }
 
 .toolbar-stats {
