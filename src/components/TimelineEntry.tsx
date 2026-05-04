@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import type { AppEvent } from "@/lib/types";
-import { truncate, formatTime, formatTokens } from "@/utils/format";
+import { truncate, formatTime, formatTokens, toDisplayString } from "@/utils/format";
 import DiffView from "./DiffView";
 import DbQueryView from "./DbQueryView";
 import type { DbQuery } from "@/lib/db-parser";
@@ -196,13 +196,14 @@ function EntryBody({
     return <div className="entry-body-section">{cmd}</div>;
   }
   if (evt.kind === "tool_output") {
+    const output = toDisplayString(evt.output);
     return (
       <div className="entry-body-section">
         <div className="entry-body-label">
           <span className="entry-body-label-dot" />
           Output
         </div>
-        {evt.output}
+        {output}
       </div>
     );
   }

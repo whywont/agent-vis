@@ -80,7 +80,42 @@ ANTHROPIC_API_KEY=your_key_here
 
 Get a key at [console.anthropic.com](https://console.anthropic.com). The app works fully without it — only the explain feature is gated.
 
+## Tailscale Access
+
+agent-vis is local-only by default. To access it from a phone over Tailscale, bind it to your Mac's Tailscale IP and require an access token.
+
+1. Find your Mac's Tailscale IP:
+
+```bash
+tailscale ip -4
+```
+
+2. Add these values to `.env.local`:
+
+```env
+HOSTS=127.0.0.1,100.x.y.z
+AGENT_VIS_AUTH_TOKEN=use-a-long-random-token
+AGENT_VIS_ALLOW_REMOTE_TERMINAL=1
+```
+
+3. Restart agent-vis:
+
+```bash
+npm run dev
+```
+
+4. Open this on your phone while Tailscale is connected:
+
+```text
+http://100.x.y.z:3333/auth
+```
+
+Enter the token once. The app stores it in an HTTP-only cookie. Remote terminal access is blocked unless both `AGENT_VIS_AUTH_TOKEN` and `AGENT_VIS_ALLOW_REMOTE_TERMINAL=1` are set.
+
+Using `HOSTS=127.0.0.1,100.x.y.z` keeps normal Mac access at `http://localhost:3333` while exposing only the Tailscale interface to your phone. Avoid `HOST=0.0.0.0` unless you intentionally want LAN devices to reach the app too.
+
 ## Notes
 
-- The server binds to `127.0.0.1` only and is not accessible from other machines
+- The server binds to `127.0.0.1` by default and is not accessible from other machines
+- Binding to a non-local host without `AGENT_VIS_AUTH_TOKEN` is refused at startup
 - On macOS, `node-pty`'s spawn-helper is fixed automatically by the `postinstall` script

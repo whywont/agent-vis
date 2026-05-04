@@ -1,4 +1,5 @@
 import type { AppEvent, TokenAccumulator, FileInfo } from "./types";
+import { toDisplayString } from "@/utils/format";
 
 /**
  * Create a token accumulator for tracking running totals across a session.
@@ -136,6 +137,8 @@ function parseToolResults(
         .filter((x) => x.type === "text")
         .map((x) => x.text)
         .join("\n");
+    } else {
+      output = toDisplayString(b.content);
     }
     if (output) {
       events.push({

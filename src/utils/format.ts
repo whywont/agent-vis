@@ -1,15 +1,32 @@
-export function escHtml(str: string | undefined | null): string {
-  if (!str) return "";
-  return str
+export function toDisplayString(value: unknown): string {
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
+    return String(value);
+  }
+  try {
+    return JSON.stringify(value) ?? "";
+  } catch {
+    return String(value);
+  }
+}
+
+export function escHtml(str: unknown): string {
+  if (str == null || str === "") return "";
+  return toDisplayString(str)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
 }
 
-export function truncate(str: string | undefined | null, max: number): string {
-  if (!str) return "";
-  const s = str.replace(/\n/g, " ").trim();
+export function truncate(str: unknown, max: number): string {
+  if (str == null || str === "") return "";
+  const s = toDisplayString(str).replace(/\n/g, " ").trim();
   return s.length > max ? s.slice(0, max) + "..." : s;
 }
 

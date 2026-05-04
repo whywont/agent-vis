@@ -32,12 +32,18 @@ export default function SessionDetail({
   onToggleTokenUsage,
   onOpenImage,
 }: SessionDetailProps) {
+  const [sessionFiles, setSessionFiles] = useState(allFiles);
   const [events, setEvents] = useState<AppEvent[]>([]);
   const [sessionCwd, setSessionCwd] = useState("");
   const [branch, setBranch] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"session" | "tree" | "terminal">("session");
   const [collapseAllToken, setCollapseAllToken] = useState(0);
   const [terminalSupported, setTerminalSupported] = useState(true);
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    setSessionFiles(allFiles);
+  }, [allFiles]);
 
   useEffect(() => {
     fetch("/api/env")
@@ -47,6 +53,21 @@ export default function SessionDetail({
       })
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 760px)");
+    const update = () => setIsMobile(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+
+  useEffect(() => {
+    if (isMobile && activeTab === "terminal") {
+      setActiveTab("session");
+    }
+  }, [activeTab, isMobile]);
+
   useEffect(() => {
     if (!sessionCwd) return;
     fetch(`/api/branch?cwd=${encodeURIComponent(sessionCwd)}`)
@@ -92,11 +113,11 @@ export default function SessionDetail({
   });
 
   // Primary file for polling (first in comma-separated list)
-  const primaryFile = allFiles.split(",")[0].trim();
+  const primaryFile = sessionFiles.split(",")[0].trim();
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`/api/session/${encodeURIComponent(allFiles)}`)
+    fetch(`/api/session/${encodeURIComponent(sessionFiles)}`)
       .then((r) => r.json())
       .then((data: { events: AppEvent[] }) => {
         if (cancelled) return;
@@ -110,7 +131,7 @@ export default function SessionDetail({
     return () => {
       cancelled = true;
     };
-  }, [allFiles]);
+  }, [sessionFiles]);
 
   useSessionPoll(primaryFile, (newEvents) => {
     setEvents((prev) => {
@@ -132,6 +153,8 @@ export default function SessionDetail({
     meta && meta.kind === "session_start" ? formatTime(meta.ts) : "";
 
   const fileChanges = events.filter((e) => e.kind === "file_change");
+  const terminalReady =
+    terminalSupported && !!sessionCwd && !!meta && meta.kind === "session_start";
 
   return (
     <div className="session-detail">
@@ -159,7 +182,7 @@ export default function SessionDetail({
         >
           Files
         </button>
-        {terminalSupported && (
+        {terminalSupported && !isMobile && (
           <button
             className={`session-tab-btn${activeTab === "terminal" ? " active" : ""}`}
             onClick={() => setActiveTab("terminal")}
@@ -210,6 +233,15 @@ export default function SessionDetail({
               collapseAllToken={collapseAllToken}
             />
           </div>
+          {isMobile && terminalReady && (
+            <div className="mobile-terminal-dock">
+              <TerminalTab
+                sessionCwd={sessionCwd}
+                sessionId={detailId}
+                sessionType={sessionFiles.startsWith("claude:") ? "claude" : "codex"}
+              />
+            </div>
+          )}
         </div>
       ) : activeTab === "tree" ? (
         <TreeCanvas events={events} sessionCwd={sessionCwd} />
@@ -217,7 +249,7 @@ export default function SessionDetail({
         <TerminalTab
           sessionCwd={sessionCwd}
           sessionId={detailId}
-          sessionType={allFiles.startsWith("claude:") ? "claude" : "codex"}
+          sessionType={sessionFiles.startsWith("claude:") ? "claude" : "codex"}
         />
       )}
     </div>
