@@ -118,6 +118,24 @@ describe("parseClaudeEvent — user array content with tool_result", () => {
     expect(events[0]).toMatchObject({ kind: "tool_output", output: "line 1\nline 2" });
   });
 
+  it("serializes object tool result content", () => {
+    const obj = {
+      timestamp: TS,
+      type: "user",
+      message: {
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "tid-object",
+            content: { result: "ok" },
+          },
+        ],
+      },
+    };
+    const events = parseClaudeEvent(obj, makeAccum());
+    expect(events[0]).toMatchObject({ kind: "tool_output", output: '{"result":"ok"}' });
+  });
+
   it("skips tool result blocks with no content", () => {
     const obj = {
       timestamp: TS,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { escHtml, truncate, formatDate, formatTime, formatTokens } from "./format";
+import { escHtml, truncate, formatDate, formatTime, formatTokens, toDisplayString } from "./format";
 
 describe("escHtml", () => {
   it("returns empty string for null/undefined/empty", () => {
@@ -58,6 +58,22 @@ describe("truncate", () => {
   it("truncates exactly at max", () => {
     const result = truncate("abcde", 5);
     expect(result).toBe("abcde");
+  });
+
+  it("handles non-string values", () => {
+    expect(truncate({ output: "ok" }, 100)).toBe('{"output":"ok"}');
+    expect(truncate(0, 100)).toBe("0");
+    expect(truncate(false, 100)).toBe("false");
+  });
+});
+
+describe("toDisplayString", () => {
+  it("returns strings unchanged", () => {
+    expect(toDisplayString("hello")).toBe("hello");
+  });
+
+  it("serializes objects for display", () => {
+    expect(toDisplayString({ output: "ok" })).toBe('{"output":"ok"}');
   });
 });
 

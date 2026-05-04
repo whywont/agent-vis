@@ -1,4 +1,5 @@
 import type { AppEvent, FileInfo } from "./types";
+import { toDisplayString } from "@/utils/format";
 
 /**
  * Parse a single JSONL object into an application event.
@@ -148,9 +149,12 @@ export function parseEvent(obj: Record<string, unknown>): AppEvent | null {
       let output = "";
       try {
         const parsed = JSON.parse(p.output as string);
-        output = parsed.output || p.output;
+        output =
+          parsed && typeof parsed === "object" && "output" in parsed
+            ? toDisplayString((parsed as Record<string, unknown>).output)
+            : toDisplayString(p.output);
       } catch {
-        output = (p.output as string) || "";
+        output = toDisplayString(p.output);
       }
       return {
         kind: "tool_output",
@@ -164,7 +168,7 @@ export function parseEvent(obj: Record<string, unknown>): AppEvent | null {
       return {
         kind: "tool_output",
         ts,
-        output: (p.output as string) || "",
+        output: toDisplayString(p.output),
         callId: p.call_id as string,
       };
     }

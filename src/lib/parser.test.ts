@@ -293,6 +293,30 @@ describe("parseEvent — response_item tool output", () => {
     const result = parseEvent(obj);
     expect(result).toMatchObject({ kind: "tool_output", output: "raw output", callId: "c6" });
   });
+
+  it("serializes object function_call_output values", () => {
+    const obj = {
+      timestamp: "2024-01-01T00:08:00Z",
+      type: "response_item",
+      payload: { type: "function_call_output", output: { result: "ok" }, call_id: "c7" },
+    };
+    const result = parseEvent(obj);
+    expect(result).toMatchObject({ kind: "tool_output", output: '{"result":"ok"}', callId: "c7" });
+  });
+
+  it("serializes nested custom_tool_call_output values", () => {
+    const obj = {
+      timestamp: "2024-01-01T00:08:00Z",
+      type: "response_item",
+      payload: {
+        type: "custom_tool_call_output",
+        output: JSON.stringify({ output: { result: "ok" } }),
+        call_id: "c8",
+      },
+    };
+    const result = parseEvent(obj);
+    expect(result).toMatchObject({ kind: "tool_output", output: '{"result":"ok"}', callId: "c8" });
+  });
 });
 
 describe("parseEvent — unknown top-level type", () => {

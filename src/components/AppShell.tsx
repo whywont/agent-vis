@@ -116,7 +116,7 @@ export default function AppShell() {
   }
 
   return (
-    <div id="app">
+    <div id="app" className={currentFile ? "has-session" : "no-session"}>
       <nav id="sidebar" ref={sidebarRef}>
         <div className="sidebar-header">
           <h1>agent-vis</h1>

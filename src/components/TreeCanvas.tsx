@@ -332,7 +332,7 @@ export default function TreeCanvas({ events, sessionCwd }: TreeCanvasProps) {
   );
 
   // Pan / zoom handlers
-  const onMouseDown = useCallback((e: React.MouseEvent) => {
+  const onPointerDown = useCallback((e: React.PointerEvent) => {
     const target = e.target as Element;
     if (
       target.closest(".file-card") ||
@@ -343,20 +343,25 @@ export default function TreeCanvas({ events, sessionCwd }: TreeCanvasProps) {
       return;
     if (hoverTimer.current) clearTimeout(hoverTimer.current);
     setHoveredEdge(null);
+    e.currentTarget.setPointerCapture(e.pointerId);
     isPanning.current = true;
     setPanning(true);
     lastMouse.current = { x: e.clientX, y: e.clientY };
   }, []);
 
-  const onMouseMove = useCallback((e: React.MouseEvent) => {
+  const onPointerMove = useCallback((e: React.PointerEvent) => {
     if (!isPanning.current) return;
+    e.preventDefault();
     const dx = e.clientX - lastMouse.current.x;
     const dy = e.clientY - lastMouse.current.y;
     lastMouse.current = { x: e.clientX, y: e.clientY };
     setPan((p) => ({ x: p.x + dx, y: p.y + dy }));
   }, []);
 
-  const onMouseUp = useCallback(() => {
+  const onPointerUp = useCallback((e: React.PointerEvent) => {
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {}
     isPanning.current = false;
     setPanning(false);
   }, []);
@@ -382,10 +387,10 @@ export default function TreeCanvas({ events, sessionCwd }: TreeCanvasProps) {
     <div
       ref={viewportRef}
       className={`tree-canvas-viewport${panning ? " panning" : ""}`}
-      onMouseDown={onMouseDown}
-      onMouseMove={onMouseMove}
-      onMouseUp={onMouseUp}
-      onMouseLeave={onMouseUp}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
       onWheel={onWheel}
     >
       {/* Panned/zoomed canvas */}

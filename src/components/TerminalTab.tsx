@@ -10,11 +10,58 @@ interface TerminalTabProps {
 
 export default function TerminalTab({ sessionCwd, sessionId, sessionType = "claude" }: TerminalTabProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
   const termRef = useRef<import("@xterm/xterm").Terminal | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const [status, setStatus] = useState<"connecting" | "connected" | "closed">(
     "connecting"
   );
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const [composerText, setComposerText] = useState("");
+
+  function writeToTerminal(data: string) {
+    const ws = wsRef.current;
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "input", data }));
+    }
+  }
+
+  function sendComposerOrEnter() {
+    const text = composerText.trim();
+    if (text) {
+      writeToTerminal(`${text}\r`);
+      setComposerText("");
+      return;
+    }
+    writeToTerminal("\r");
+  }
+
+  async function handleImageSelected(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+
+    setUploadingImage(true);
+    try {
+      const form = new FormData();
+      form.set("image", file);
+      const res = await fetch("/api/upload-image", {
+        method: "POST",
+        body: form,
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data = (await res.json()) as { path: string };
+      if (window.matchMedia("(max-width: 760px)").matches) {
+        setComposerText((text) => (text ? `${text} ${data.path}` : data.path));
+      } else {
+        writeToTerminal(` ${data.path}`);
+      }
+    } catch {
+      termRef.current?.write("\r\n\x1b[31m[image upload failed]\x1b[0m\r\n");
+    } finally {
+      setUploadingImage(false);
+    }
+  }
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -69,7 +116,8 @@ export default function TerminalTab({ sessionCwd, sessionId, sessionType = "clau
       // Connect WebSocket
       const params = new URLSearchParams({ cwd: sessionCwd, type: sessionType });
       if (sessionId) params.set("sessionId", sessionId);
-      const wsUrl = `ws://${window.location.host}/api/terminal?${params}`;
+      const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const wsUrl = `${wsProtocol}//${window.location.host}/api/terminal?${params}`;
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
@@ -144,6 +192,23 @@ export default function TerminalTab({ sessionCwd, sessionId, sessionType = "clau
     <div className="terminal-tab">
       <div className="terminal-status-bar">
         <span className="terminal-cwd">{sessionCwd}</span>
+        <span className="terminal-model">{sessionType}</span>
+        <input
+          ref={imageInputRef}
+          className="terminal-image-input"
+          type="file"
+          accept="image/*"
+          onChange={handleImageSelected}
+        />
+        <button
+          className="terminal-image-btn"
+          type="button"
+          disabled={uploadingImage || status !== "connected"}
+          onClick={() => imageInputRef.current?.click()}
+          title="Upload image and insert its local path"
+        >
+          {uploadingImage ? "uploading" : "photo"}
+        </button>
         <span
           className={`terminal-status-dot ${
             status === "connected"
@@ -156,6 +221,29 @@ export default function TerminalTab({ sessionCwd, sessionId, sessionType = "clau
         <span className="terminal-status-text">{status}</span>
       </div>
       <div ref={containerRef} className="terminal-container" />
+      <form
+        className="terminal-composer"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (status !== "connected") return;
+          sendComposerOrEnter();
+        }}
+      >
+        <textarea
+          className="terminal-composer-input"
+          value={composerText}
+          onChange={(e) => setComposerText(e.target.value)}
+          placeholder="Type message..."
+          rows={2}
+        />
+        <button
+          className="terminal-composer-send"
+          type="submit"
+          disabled={status !== "connected"}
+        >
+          send
+        </button>
+      </form>
     </div>
   );
 }
