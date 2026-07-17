@@ -1,0 +1,4 @@
+allowBuilds:
+  node-pty: true
+  sharp: true
+  unrs-resolver: true

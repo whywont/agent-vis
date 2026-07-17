@@ -32,7 +32,6 @@ export default function SessionDetail({
   onToggleTokenUsage,
   onOpenImage,
 }: SessionDetailProps) {
-  const [sessionFiles, setSessionFiles] = useState(allFiles);
   const [events, setEvents] = useState<AppEvent[]>([]);
   const [sessionCwd, setSessionCwd] = useState("");
   const [branch, setBranch] = useState<string | null>(null);
@@ -40,10 +39,6 @@ export default function SessionDetail({
   const [collapseAllToken, setCollapseAllToken] = useState(0);
   const [terminalSupported, setTerminalSupported] = useState(true);
   const [isMobile, setIsMobile] = useState(false);
-
-  useEffect(() => {
-    setSessionFiles(allFiles);
-  }, [allFiles]);
 
   useEffect(() => {
     fetch("/api/env")
@@ -61,12 +56,6 @@ export default function SessionDetail({
     media.addEventListener("change", update);
     return () => media.removeEventListener("change", update);
   }, []);
-
-  useEffect(() => {
-    if (isMobile && activeTab === "terminal") {
-      setActiveTab("session");
-    }
-  }, [activeTab, isMobile]);
 
   useEffect(() => {
     if (!sessionCwd) return;
@@ -112,12 +101,16 @@ export default function SessionDetail({
     return () => handle.removeEventListener("mousedown", onMouseDown);
   });
 
+  // The Terminal tab is not available as a standalone mobile view. Deriving
+  // this avoids a synchronous state correction when the viewport changes.
+  const visibleTab = isMobile && activeTab === "terminal" ? "session" : activeTab;
+
   // Primary file for polling (first in comma-separated list)
-  const primaryFile = sessionFiles.split(",")[0].trim();
+  const primaryFile = allFiles.split(",")[0].trim();
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`/api/session/${encodeURIComponent(sessionFiles)}`)
+    fetch(`/api/session/${encodeURIComponent(allFiles)}`)
       .then((r) => r.json())
       .then((data: { events: AppEvent[] }) => {
         if (cancelled) return;
@@ -131,7 +124,7 @@ export default function SessionDetail({
     return () => {
       cancelled = true;
     };
-  }, [sessionFiles]);
+  }, [allFiles]);
 
   useSessionPoll(primaryFile, (newEvents) => {
     setEvents((prev) => {
@@ -171,20 +164,20 @@ export default function SessionDetail({
 
       <div className="session-tabs">
         <button
-          className={`session-tab-btn${activeTab === "session" ? " active" : ""}`}
+          className={`session-tab-btn${visibleTab === "session" ? " active" : ""}`}
           onClick={() => setActiveTab("session")}
         >
           Session
         </button>
         <button
-          className={`session-tab-btn${activeTab === "tree" ? " active" : ""}`}
+          className={`session-tab-btn${visibleTab === "tree" ? " active" : ""}`}
           onClick={() => setActiveTab("tree")}
         >
           Files
         </button>
         {terminalSupported && !isMobile && (
           <button
-            className={`session-tab-btn${activeTab === "terminal" ? " active" : ""}`}
+            className={`session-tab-btn${visibleTab === "terminal" ? " active" : ""}`}
             onClick={() => setActiveTab("terminal")}
           >
             Terminal
@@ -192,7 +185,7 @@ export default function SessionDetail({
         )}
       </div>
 
-      {activeTab === "session" ? (
+      {visibleTab === "session" ? (
         <div className="detail-body">
           <div className="file-tree-panel" ref={fileTreePanelRef}>
             <div className="file-tree-header">
@@ -238,18 +231,18 @@ export default function SessionDetail({
               <TerminalTab
                 sessionCwd={sessionCwd}
                 sessionId={detailId}
-                sessionType={sessionFiles.startsWith("claude:") ? "claude" : "codex"}
+                sessionType={allFiles.startsWith("claude:") ? "claude" : "codex"}
               />
             </div>
           )}
         </div>
-      ) : activeTab === "tree" ? (
+      ) : visibleTab === "tree" ? (
         <TreeCanvas events={events} sessionCwd={sessionCwd} />
       ) : (
         <TerminalTab
           sessionCwd={sessionCwd}
           sessionId={detailId}
-          sessionType={sessionFiles.startsWith("claude:") ? "claude" : "codex"}
+          sessionType={allFiles.startsWith("claude:") ? "claude" : "codex"}
         />
       )}
     </div>

@@ -6,6 +6,7 @@ import { truncate, formatTime, formatTokens, toDisplayString } from "@/utils/for
 import DiffView from "./DiffView";
 import DbQueryView from "./DbQueryView";
 import type { DbQuery } from "@/lib/db-parser";
+import ColoredText from "./ColoredText";
 
 interface TimelineEntryProps {
   event: AppEvent;
@@ -170,7 +171,7 @@ function EntryBody({
     const cmd = (
       <>
         {evt.workdir && <><span style={{ color: "var(--text-dim)" }}>[{evt.workdir}]</span>{"\n"}</>}
-        <span style={{ color: "var(--text-dim)" }}>$ </span>{evt.cmd}
+        <span className="shell-prompt">$ </span><ColoredText text={evt.cmd} tone="shell" />
       </>
     );
     if (queryOutput !== undefined || readContent !== undefined) {
@@ -187,7 +188,7 @@ function EntryBody({
                 <span className="entry-body-label-dot" />
                 Output
               </div>
-              {output}
+              <ColoredText text={output} />
             </div>
           )}
         </>
@@ -203,7 +204,7 @@ function EntryBody({
           <span className="entry-body-label-dot" />
           Output
         </div>
-        {output}
+        <ColoredText text={output} />
       </div>
     );
   }
