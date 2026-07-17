@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseEvent, extractPatchFiles } from "./parser";
+import { parseEvent, extractPatchFiles, structuredPatchToPatch } from "./parser";
 
 // Helper: build patch header strings at runtime so the literal "*** Verb File:"
 // pattern doesn't appear in this source file (which would confuse agent-vis's
@@ -192,6 +192,41 @@ describe("parseEvent — event_msg unknown subtype", () => {
   });
 });
 
+describe("parseEvent — event_msg patch_apply_end", () => {
+  it("parses structured patches emitted by newer Codex models", () => {
+    const obj = {
+      timestamp: "2026-07-17T01:22:22Z",
+      type: "event_msg",
+      payload: {
+        type: "patch_apply_end",
+        call_id: "exec-structured-patch",
+        changes: {
+          "src/new.ts": { type: "add", content: "export const value = 1;\n" },
+          "src/existing.ts": { type: "update", unified_diff: "@@\n-old\n+new" },
+          "src/removed.ts": { type: "delete" },
+        },
+      },
+    };
+
+    expect(parseEvent(obj)).toMatchObject({
+      kind: "file_change",
+      callId: "exec-structured-patch",
+      files: [
+        { action: "add", path: "src/new.ts" },
+        { action: "update", path: "src/existing.ts" },
+        { action: "delete", path: "src/removed.ts" },
+      ],
+    });
+  });
+});
+
+describe("structuredPatchToPatch", () => {
+  it("ignores empty or invalid change sets", () => {
+    expect(structuredPatchToPatch(null)).toBe("");
+    expect(structuredPatchToPatch({})).toBe("");
+  });
+});
+
 // ---------------------------------------------------------------------------
 // parseEvent — response_item
 // ---------------------------------------------------------------------------
@@ -269,6 +304,45 @@ describe("parseEvent — response_item exec_command", () => {
   });
 });
 
+describe("parseEvent — response_item exec wrapper", () => {
+  it("extracts nested terminal commands from the current Codex exec wrapper", () => {
+    const obj = {
+      timestamp: "2024-01-01T00:06:00Z",
+      type: "response_item",
+      payload: {
+        type: "custom_tool_call",
+        name: "exec",
+        call_id: "wrapped-call",
+        input: 'const r = await tools.exec_command({"cmd":"adb shell get-state","workdir":"/project"});',
+      },
+    };
+    expect(parseEvent(obj)).toMatchObject({
+      kind: "shell_command",
+      cmd: "adb shell get-state",
+      workdir: "/project",
+      callId: "wrapped-call",
+    });
+  });
+
+  it("shows a named transcript entry for a continued terminal command", () => {
+    const obj = {
+      timestamp: "2024-01-01T00:06:10Z",
+      type: "response_item",
+      payload: {
+        type: "custom_tool_call",
+        name: "exec",
+        call_id: "wait-call",
+        input: 'const r = await tools.wait({ cell_id: "14", yield_time_ms: 30000 });',
+      },
+    };
+    expect(parseEvent(obj)).toMatchObject({
+      kind: "shell_command",
+      cmd: "# terminal transcript (cell 14)",
+      callId: "wait-call",
+    });
+  });
+});
+
 describe("parseEvent — response_item tool output", () => {
   it("parses custom_tool_call_output", () => {
     const obj = {
@@ -282,6 +356,23 @@ describe("parseEvent — response_item tool output", () => {
     };
     const result = parseEvent(obj);
     expect(result).toMatchObject({ kind: "tool_output", output: "success", callId: "c5" });
+  });
+
+  it("flattens the streamed input-text blocks emitted by current Codex exec calls", () => {
+    const obj = {
+      timestamp: "2024-01-01T00:07:00Z",
+      type: "response_item",
+      payload: {
+        type: "custom_tool_call_output",
+        output: [{ type: "input_text", text: "Script completed\\n" }, { type: "input_text", text: "full transcript" }],
+        call_id: "c5-current",
+      },
+    };
+    expect(parseEvent(obj)).toMatchObject({
+      kind: "tool_output",
+      output: "Script completed\\nfull transcript",
+      callId: "c5-current",
+    });
   });
 
   it("parses function_call_output", () => {

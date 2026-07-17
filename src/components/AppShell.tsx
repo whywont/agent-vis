@@ -5,6 +5,7 @@ import type { SessionMeta } from "@/lib/types";
 import SessionList from "./SessionList";
 import SessionDetail from "./SessionDetail";
 import ImageModal from "./ImageModal";
+import SettingsPage from "./SettingsPage";
 
 const DEFAULT_FILTERS = new Set([
   "file_change",
@@ -19,6 +20,7 @@ export default function AppShell() {
   const [activeFilters, setActiveFilters] = useState<Set<string>>(DEFAULT_FILTERS);
   const [showTokenUsage, setShowTokenUsage] = useState(false);
   const [modalSrc, setModalSrc] = useState<string | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
   const sidebarRef = useRef<HTMLElement>(null);
 
   // Poll sessions list every 5 seconds
@@ -77,6 +79,7 @@ export default function AppShell() {
   });
 
   function handleSelectSession(files: string) {
+    setShowSettings(false);
     setCurrentFile(files);
   }
 
@@ -122,6 +125,7 @@ export default function AppShell() {
           <h1>agent-vis</h1>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/logo.png" alt="" className="sidebar-logo" />
+          <button className={`settings-nav-btn${showSettings ? " active" : ""}`} onClick={() => { setShowSettings(true); setCurrentFile(null); }} title="Settings">⚙</button>
         </div>
         <div className="sidebar-subheader">
           <span className="subtitle">session explorer</span>
@@ -135,7 +139,9 @@ export default function AppShell() {
         <div className="resize-handle right" data-target="sidebar" />
       </nav>
       <main id="main-content">
-        {!currentFile ? (
+        {showSettings ? (
+          <SettingsPage onBack={() => setShowSettings(false)} />
+        ) : !currentFile ? (
           <div className="welcome">
             <div className="welcome-inner">
               <h2>Select a session</h2>

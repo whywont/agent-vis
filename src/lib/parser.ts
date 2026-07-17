@@ -1,6 +1,90 @@
 import type { AppEvent, FileInfo } from "./types";
 import { toDisplayString } from "@/utils/format";
 
+type StructuredPatchChange = {
+  type?: unknown;
+  content?: unknown;
+  unified_diff?: unknown;
+};
+
+function readStringLiteral(value: string): string {
+  try {
+    return JSON.parse(value) as string;
+  } catch {
+    return value.slice(1, -1).replace(/\\([\\'"nrt])/g, (_match, char: string) => {
+      return ({ n: "\n", r: "\r", t: "\t" } as Record<string, string>)[char] ?? char;
+    });
+  }
+}
+
+/** Extract commands from the current `exec` wrapper used by the Codex UI. */
+function extractExecCommands(input: unknown): { cmd: string; workdir: string }[] {
+  if (typeof input !== "string") return [];
+  const calls = input.matchAll(/tools\.exec_command\(\{([\s\S]*?)\}\)/g);
+  const commands: { cmd: string; workdir: string }[] = [];
+  for (const call of calls) {
+    const body = call[1];
+    const cmdMatch = body.match(/(?:\b|["'])cmd["']?\s*:\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')/);
+    if (!cmdMatch) continue;
+    const workdirMatch = body.match(/(?:\b|["'])workdir["']?\s*:\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')/);
+    commands.push({
+      cmd: readStringLiteral(cmdMatch[1]),
+      workdir: workdirMatch ? readStringLiteral(workdirMatch[1]) : "",
+    });
+  }
+  return commands;
+}
+
+function extractTerminalWait(input: unknown): string | null {
+  if (typeof input !== "string") return null;
+  const match = input.match(/tools\.(?:wait|write_stdin)\(\{[\s\S]*?\bcell_id\s*:\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\d+)/);
+  if (!match) return null;
+  return match[1].startsWith("\"") || match[1].startsWith("'")
+    ? readStringLiteral(match[1])
+    : match[1];
+}
+
+function displayToolOutput(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => {
+        if (item && typeof item === "object" && "text" in item) {
+          return toDisplayString((item as Record<string, unknown>).text);
+        }
+        return toDisplayString(item);
+      })
+      .join("");
+  }
+  return toDisplayString(value);
+}
+
+/**
+ * Codex 0.144+ records applied patches as a structured `patch_apply_end`
+ * event rather than as an `apply_patch` response item. Convert that payload to
+ * the patch format used by the rest of the viewer.
+ */
+export function structuredPatchToPatch(changes: unknown): string {
+  if (!changes || typeof changes !== "object" || Array.isArray(changes)) return "";
+
+  const lines = ["*** Begin Patch"];
+  for (const [filepath, value] of Object.entries(changes as Record<string, StructuredPatchChange>)) {
+    if (!value || typeof value !== "object") continue;
+    const type = value.type;
+    if (type === "add") {
+      lines.push(`*** Add File: ${filepath}`);
+      const content = typeof value.content === "string" ? value.content : "";
+      lines.push(...content.split("\n").map((line) => `+${line}`));
+    } else if (type === "delete") {
+      lines.push(`*** Delete File: ${filepath}`);
+    } else if (type === "update") {
+      lines.push(`*** Update File: ${filepath}`);
+      if (typeof value.unified_diff === "string") lines.push(value.unified_diff);
+    }
+  }
+  lines.push("*** End Patch");
+  return lines.length > 2 ? lines.join("\n") : "";
+}
+
 /**
  * Parse a single JSONL object into an application event.
  * Returns null for unrecognised or irrelevant lines.
@@ -23,6 +107,17 @@ export function parseEvent(obj: Record<string, unknown>): AppEvent | null {
 
   if (type === "event_msg") {
     const p = payload as Record<string, unknown>;
+    if (p.type === "patch_apply_end") {
+      const patch = structuredPatchToPatch(p.changes);
+      if (!patch) return null;
+      return {
+        kind: "file_change",
+        ts,
+        patch,
+        files: extractPatchFiles(patch),
+        callId: p.call_id as string,
+      };
+    }
     if (p.type === "user_message") {
       const images: string[] = [];
       if (Array.isArray(p.images)) {
@@ -107,6 +202,33 @@ export function parseEvent(obj: Record<string, unknown>): AppEvent | null {
       return { kind: "file_change", ts, patch, files, callId: p.call_id as string };
     }
 
+    // Recent Codex sessions wrap terminal work in a JavaScript `exec` call.
+    // The actual terminal calls are nested as tools.exec_command({...}).
+    if (p.type === "custom_tool_call" && p.name === "exec") {
+      const commands = extractExecCommands(p.input);
+      if (commands.length > 0) {
+        return {
+          kind: "shell_command",
+          ts,
+          cmd: commands.map((command) => command.cmd).join("\n\n# parallel command\n"),
+          workdir: commands.map((command) => command.workdir).filter(Boolean).join(" · "),
+          callId: p.call_id as string,
+          toolName: "exec_command",
+        };
+      }
+      const cellId = extractTerminalWait(p.input);
+      if (cellId) {
+        return {
+          kind: "shell_command",
+          ts,
+          cmd: `# terminal transcript (cell ${cellId})`,
+          workdir: "",
+          callId: p.call_id as string,
+          toolName: "terminal_wait",
+        };
+      }
+    }
+
     if (p.type === "function_call" && p.name === "apply_patch") {
       let patch = "";
       try {
@@ -151,10 +273,10 @@ export function parseEvent(obj: Record<string, unknown>): AppEvent | null {
         const parsed = JSON.parse(p.output as string);
         output =
           parsed && typeof parsed === "object" && "output" in parsed
-            ? toDisplayString((parsed as Record<string, unknown>).output)
-            : toDisplayString(p.output);
+            ? displayToolOutput((parsed as Record<string, unknown>).output)
+            : displayToolOutput(p.output);
       } catch {
-        output = toDisplayString(p.output);
+        output = displayToolOutput(p.output);
       }
       return {
         kind: "tool_output",

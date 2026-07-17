@@ -1,12 +1,9 @@
 import { NextRequest } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
+import { getRuntimeSettings } from "@/lib/runtime-settings";
 
 export async function POST(req: NextRequest) {
-  if (!process.env.ANTHROPIC_API_KEY) {
-    return new Response("No ANTHROPIC_API_KEY set. Add it to .env.local to use AI explain.", { status: 400 });
-  }
-
-  const anthropic = new Anthropic();
+  const settings = await getRuntimeSettings();
 
   const { filepath, patch, contextText } = (await req.json()) as {
     filepath: string;
@@ -22,11 +19,52 @@ export async function POST(req: NextRequest) {
     ? `User request that triggered this change:\n"${contextText}"\n\nExplain this patch for ${filepath}:\n\n${patch}`
     : `Explain this patch for ${filepath}:\n\n${patch}`;
 
+  const system =
+    "You are a code reviewer helping developers understand changes. Explain git patches concisely — what changed, what it does, and why it likely matters. Be brief (2-4 sentences for small changes, a short paragraph for complex ones). Skip obvious details like 'a line was added'. Focus on intent and impact.";
+
+  if (settings.provider === "openai-compatible" || settings.provider === "openrouter") {
+    const baseUrl = settings.provider === "openrouter"
+      ? "https://openrouter.ai/api/v1"
+      : settings.localBaseUrl;
+    const apiKey = settings.provider === "openrouter"
+      ? settings.openRouterApiKey
+      : settings.localApiKey;
+    if (settings.provider === "openrouter" && !apiKey) {
+      return new Response("Add an OpenRouter API key in Settings to use OpenRouter.", { status: 400 });
+    }
+    try {
+      const response = await fetch(`${baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+          ...(settings.provider === "openrouter" ? { "HTTP-Referer": "http://agent-vis.local", "X-Title": "agent-vis" } : {}),
+        },
+        body: JSON.stringify({
+          model: settings.model,
+          stream: false,
+          max_tokens: 512,
+          messages: [{ role: "system", content: system }, { role: "user", content: userContent }],
+        }),
+      });
+      if (!response.ok) return new Response(`Local model request failed: ${await response.text()}`, { status: 502 });
+      const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
+      const text = payload.choices?.[0]?.message?.content;
+      if (!text) return new Response("Local model returned no explanation.", { status: 502 });
+      return new Response(text, { headers: { "Content-Type": "text/plain; charset=utf-8" } });
+    } catch (error) {
+      return new Response(`Could not reach local model: ${(error as Error).message}`, { status: 502 });
+    }
+  }
+
+  if (!settings.anthropicApiKey) {
+    return new Response("Add an Anthropic API key in Settings to use hosted explanations.", { status: 400 });
+  }
+  const anthropic = new Anthropic({ apiKey: settings.anthropicApiKey });
   const stream = anthropic.messages.stream({
-    model: "claude-haiku-4-5",
+    model: settings.model,
     max_tokens: 512,
-    system:
-      "You are a code reviewer helping developers understand changes. Explain git patches concisely — what changed, what it does, and why it likely matters. Be brief (2-4 sentences for small changes, a short paragraph for complex ones). Skip obvious details like 'a line was added'. Focus on intent and impact.",
+    system,
     messages: [
       {
         role: "user",

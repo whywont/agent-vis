@@ -61,7 +61,7 @@ export default function SessionList({
   const optionsRef = useRef<HTMLDivElement | null>(null);
   // Content search state
   const [contentMatches, setContentMatches] = useState<Set<string> | null>(null);
-  const [searching, setSearching] = useState(false);
+  const [contentSearch, setContentSearch] = useState("");
 
   // Close three-dot menu when clicking outside
   useEffect(() => {
@@ -89,25 +89,37 @@ export default function SessionList({
 
   // Debounced content search — fires 350ms after the user stops typing
   useEffect(() => {
-    if (search.length < 2) {
-      setContentMatches(null);
-      setSearching(false);
-      return;
-    }
-    setSearching(true);
+    if (search.length < 2) return;
+    let cancelled = false;
     const timer = setTimeout(async () => {
       try {
         const res = await fetch(`/api/search?q=${encodeURIComponent(search)}`);
         const data = await res.json() as { matches: string[] };
+        if (cancelled) return;
         setContentMatches(new Set(data.matches));
       } catch {
+        if (cancelled) return;
         setContentMatches(new Set());
       } finally {
-        setSearching(false);
+        if (!cancelled) setContentSearch(search);
       }
     }, 350);
-    return () => clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [search]);
+
+  const searching = search.length >= 2 && contentSearch !== search;
+  const visibleContentMatches = contentSearch === search ? contentMatches : null;
+
+  function handleSearchChange(value: string) {
+    setSearch(value);
+    if (value.length < 2) {
+      setContentMatches(null);
+      setContentSearch("");
+    }
+  }
 
   function togglePin(fileKey: string) {
     setPinned((prev) => {
@@ -133,7 +145,7 @@ export default function SessionList({
       const metaMatch = hay.includes(q);
       // Check all file refs for this session against content search results
       const allRefs = s.files ?? [s.file];
-      const contentMatch = contentMatches !== null && allRefs.some((f) => contentMatches.has(f));
+      const contentMatch = visibleContentMatches !== null && allRefs.some((f) => visibleContentMatches.has(f));
       if (!metaMatch && !contentMatch) return false;
     }
     return true;
@@ -209,7 +221,7 @@ export default function SessionList({
           type="text"
           placeholder={searching ? "searching…" : "Search…"}
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(e) => handleSearchChange(e.target.value)}
         />
         <div className="session-options-wrap" ref={optionsRef}>
           <button

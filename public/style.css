@@ -7,10 +7,10 @@
 }
 
 :root {
-  --bg: #1a1a1a;
-  --bg-surface: #222;
-  --bg-card: #2a2a2a;
-  --bg-hover: #313131;
+  --bg: #101010;
+  --bg-surface: #171717;
+  --bg-card: #1d1d1d;
+  --bg-hover: #282828;
   --border: #3a3a3a;
   --border-light: #444;
   --text: #d4d4d4;
@@ -24,6 +24,8 @@
   --red-dim: rgba(212, 106, 106, 0.12);
   --blue: #6a9fd4;
   --orange: #d4956a;
+  --purple: #c59cf5;
+  --cyan: #88c0d0;
   --font-mono: "JetBrains Mono", "SF Mono", monospace;
   --font-sans: "Inter", system-ui, sans-serif;
 }
@@ -81,6 +83,42 @@ body {
   margin-left: 8px;
   flex-shrink: 0;
 }
+
+.settings-nav-btn {
+  margin-left: auto;
+  border: 0;
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 18px;
+  padding: 6px;
+}
+.settings-nav-btn:hover, .settings-nav-btn.active { color: var(--accent); }
+
+/* ---- Settings ---- */
+.settings-page { padding: 26px; max-width: 760px; overflow: auto; height: 100%; }
+.settings-header { display: flex; align-items: center; gap: 16px; margin-bottom: 22px; }
+.settings-header h2 { font-family: var(--font-mono); font-size: 20px; color: var(--text); }
+.settings-back { border: 0; color: var(--text-muted); background: none; font-family: var(--font-mono); cursor: pointer; }
+.settings-back:hover { color: var(--accent); }
+.settings-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+.settings-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 18px; }
+.settings-card h3 { font-family: var(--font-mono); color: var(--accent); font-size: 14px; margin-bottom: 8px; }
+.settings-card p { color: var(--text-muted); font-size: 13px; line-height: 1.5; margin-bottom: 16px; }
+.settings-card label { display: grid; gap: 6px; color: var(--text-muted); font-family: var(--font-mono); font-size: 12px; margin-top: 13px; }
+.settings-card input, .settings-card select { width: 100%; background: var(--bg); border: 1px solid var(--border-light); border-radius: 4px; color: var(--text); padding: 9px 10px; font: 13px var(--font-mono); }
+.settings-card input:focus, .settings-card select:focus { outline: 1px solid var(--accent-dim); border-color: var(--accent-dim); }
+.settings-card small { color: var(--text-dim); }
+.settings-remove { margin-top: 8px; border: 0; background: transparent; color: var(--text-dim); cursor: pointer; font: 12px var(--font-mono); padding: 0; text-align: left; width: fit-content; }
+.settings-remove:hover { color: var(--red); }
+.settings-checkbox { grid-template-columns: auto 1fr; align-items: center; cursor: pointer; }
+.settings-checkbox input { width: auto; accent-color: var(--accent); }
+.settings-tip { font-size: 12px !important; color: var(--text-dim) !important; margin-top: 14px; margin-bottom: 0 !important; }
+.settings-tip code { color: var(--cyan); }
+.settings-actions { display: flex; gap: 12px; align-items: center; margin-top: 18px; font: 12px var(--font-mono); color: var(--text-muted); }
+.settings-save { border: 1px solid var(--accent-dim); border-radius: 4px; background: rgba(201,165,90,.12); color: var(--accent); padding: 9px 12px; font: 600 12px var(--font-mono); cursor: pointer; }
+.settings-save:hover:not(:disabled) { background: rgba(201,165,90,.2); }
+.settings-save:disabled { opacity: .5; cursor: default; }
 
 .sidebar-header {
   padding: 0 18px;
@@ -812,6 +850,40 @@ body {
   flex-shrink: 0;
 }
 
+/* Terminal-like color in recorded commands and output. ANSI sequences are
+   converted to these classes in React, so historical sessions stay readable. */
+.shell-prompt { color: var(--green); font-weight: 600; }
+.ansi-black { color: #777; }
+.ansi-red, .ansi-bright-red { color: #e07a7a; }
+.ansi-green, .ansi-bright-green { color: #7fcf7e; }
+.ansi-yellow, .ansi-bright-yellow { color: #d9b96e; }
+.ansi-blue, .ansi-bright-blue { color: #7aaee0; }
+.ansi-magenta, .ansi-bright-magenta { color: #c49ec0; }
+.ansi-cyan, .ansi-bright-cyan { color: #9ed0dc; }
+.ansi-white, .ansi-bright-white { color: #e8e8e8; }
+.ansi-bright-black, .ansi-dim { color: var(--text-muted); }
+.ansi-bold { font-weight: 600; }
+
+.token-command { color: #7aaee0; font-weight: 600; }
+.token-variable { color: var(--purple); }
+.token-flag { color: #c49ec0; }
+.token-path { color: #7fcf7e; }
+.token-string { color: #9ed0dc; }
+.token-literal, .token-number { color: #d4956a; }
+.token-operator { color: var(--cyan); }
+.token-keyword { color: var(--purple); }
+.token-comment { color: var(--text-dim); font-style: italic; }
+
+/* Source code uses a separate palette from shell commands: closer to the
+   Codex diff presentation while preserving add/remove line backgrounds. */
+.code-keyword { color: #c49ec0; }
+.code-function { color: #8ab4f8; }
+.code-type { color: #c49ec0; }
+.code-string { color: #9ed0dc; }
+.code-number { color: #d4956a; }
+.code-comment { color: #767676; font-style: italic; }
+.code-selector { color: #d9c48f; }
+
 /* ---- Diff rendering ---- */
 .diff-block { margin-bottom: 8px; }
 
@@ -1034,14 +1106,22 @@ body {
 }
 
 .diff-line.added {
-  background: var(--green-dim);
-  color: var(--green);
+  background: #27392c;
+  color: var(--text);
 }
 
 .diff-line.removed {
-  background: var(--red-dim);
-  color: var(--red);
+  background: #45241f;
+  color: var(--text);
 }
+
+.diff-prefix {
+  display: inline-block;
+  width: 1ch;
+  user-select: none;
+}
+.diff-line.added .diff-prefix { color: var(--green); }
+.diff-line.removed .diff-prefix { color: var(--red); }
 
 .diff-line.context { color: var(--text-dim); }
 

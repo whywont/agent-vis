@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useMemo } from "react";
 import type { FileInfo } from "@/lib/types";
+import ColoredText from "./ColoredText";
 
 // Module-level cache — one fetch shared across all DiffBlockView instances.
 let envPromise: Promise<{ platform: string; isDocker: boolean }> | null = null;
@@ -485,7 +486,14 @@ function DiffBlockView({ block, sessionCwd, contextText }: DiffBlockViewProps) {
               <div className="diff-lines-inner">
                 {block.lines.map((line, i) => (
                   <div key={i} className={`diff-line ${line.type}`}>
-                    {line.text}
+                    {line.type === "added" || line.type === "removed" ? (
+                      <>
+                        <span className="diff-prefix">{line.text[0]}</span>
+                        <ColoredText text={line.text.slice(1)} tone="code" />
+                      </>
+                    ) : (
+                      <ColoredText text={line.text} tone="code" />
+                    )}
                   </div>
                 ))}
               </div>
@@ -508,7 +516,7 @@ function DiffBlockView({ block, sessionCwd, contextText }: DiffBlockViewProps) {
                 return (
                   <div key={i} className={`full-file-line${changed ? " changed-line" : ""}`}>
                     <span className="line-num">{lineNum}</span>
-                    <span className="line-text">{lineText}</span>
+                    <span className="line-text"><ColoredText text={lineText} tone="code" /></span>
                   </div>
                 );
               })}
