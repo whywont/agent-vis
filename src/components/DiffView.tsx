@@ -337,11 +337,22 @@ function DiffBlockView({ block, sessionCwd, contextText }: DiffBlockViewProps) {
     setExplanation(null);
     setExplaining(true);
     const patch = block.lines.map((l) => l.text).join("\n");
+    const absPath = block.filepath.startsWith("/")
+      ? block.filepath
+      : sessionCwd + "/" + block.filepath;
+    // The displayed diff records the change; the current file gives the
+    // explainer its surrounding types, helpers, and call sites automatically.
+    let fileContent = fullContent;
     try {
+      if (fileContent === null) {
+        const fileRes = await fetch(`/api/file?path=${encodeURIComponent(absPath)}`);
+        const fileData = await fileRes.json() as { content?: string };
+        if (fileRes.ok && fileData.content != null) fileContent = fileData.content;
+      }
       const res = await fetch("/api/explain", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filepath: block.filepath, patch, contextText }),
+        body: JSON.stringify({ filepath: block.filepath, patch, contextText, fileContent }),
       });
       if (!res.ok) {
         const errText = await res.text();
