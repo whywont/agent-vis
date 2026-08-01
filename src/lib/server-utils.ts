@@ -5,6 +5,7 @@ import os from "os";
 import { parseEvent } from "./parser";
 import { parseClaudeEvent, buildClaudeSessionStart, createTokenAccumulator } from "./claude-parser";
 import { deduplicateUserMessages, deduplicateAgentMessages } from "./dedup";
+import { isInsideDir } from "./path-safety";
 import type { AppEvent } from "./types";
 
 const MAX_LINE_CHARS = 10 * 1024 * 1024; // skip lines > 10MB
@@ -73,17 +74,20 @@ export function resolveSessionFile(fileRef: string): {
   filepath: string;
   source: "claude-code" | "codex";
 } {
-  if (fileRef.startsWith("claude:")) {
-    const relPath = fileRef.slice("claude:".length);
-    return {
-      filepath: path.join(CLAUDE_PROJECTS_DIR, relPath),
-      source: "claude-code",
-    };
+  const source: "claude-code" | "codex" = fileRef.startsWith("claude:")
+    ? "claude-code"
+    : "codex";
+  const root = source === "claude-code" ? CLAUDE_PROJECTS_DIR : CODEX_SESSIONS_DIR;
+  const relPath = source === "claude-code" ? fileRef.slice("claude:".length) : fileRef;
+  const filepath = path.join(root, relPath);
+
+  // Reject traversal: a fileRef like "../../etc/passwd" would otherwise escape
+  // the session root. Point escapes at a sentinel that will not exist so
+  // callers' existsSync checks turn it into a 404 rather than reading it.
+  if (!isInsideDir(filepath, root)) {
+    return { filepath: path.join(root, ".__agentvis_invalid__"), source };
   }
-  return {
-    filepath: path.join(CODEX_SESSIONS_DIR, fileRef),
-    source: "codex",
-  };
+  return { filepath, source };
 }
 
 // Cache parsed session files keyed by filepath. Entries are invalidated when

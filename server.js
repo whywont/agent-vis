@@ -46,6 +46,23 @@ const authToken = process.env.AGENT_VIS_AUTH_TOKEN || "";
 const allowRemoteTerminal = process.env.AGENT_VIS_ALLOW_REMOTE_TERMINAL === "1";
 const COOKIE_NAME = "agent_vis_auth";
 
+// A cross-origin page in the victim's browser can open a WebSocket to
+// ws://127.0.0.1:PORT/api/terminal — WebSocket connections are not gated by the
+// same-origin policy, and the source IP is loopback, so without this check any
+// website could spawn a shell. Browsers always send an Origin header on a WS
+// handshake, and it cannot be forged by page JavaScript, so we require it to
+// match the host the app is served on. Requests with no Origin are non-browser
+// clients (native ws tooling), which are not the drive-by threat.
+function isSameOriginUpgrade(req) {
+  const origin = req.headers.origin;
+  if (!origin) return true;
+  try {
+    return new URL(origin).host === req.headers.host;
+  } catch {
+    return false;
+  }
+}
+
 function isLoopbackAddress(ip) {
   return (
     ip === "127.0.0.1" ||
@@ -178,6 +195,10 @@ app.prepare().then(() => {
     const url = new URL(req.url, `http://localhost:${port}`);
     const { pathname } = url;
     if (pathname === "/api/terminal") {
+      if (!isSameOriginUpgrade(req)) {
+        socket.destroy();
+        return;
+      }
       const ip = req.socket.remoteAddress;
       const localClient = isLoopbackAddress(ip);
       if (!localClient && (!allowRemoteTerminal || !authToken || !isAuthenticated(req, url))) {
@@ -196,7 +217,11 @@ app.prepare().then(() => {
   wss.on("connection", (ws, req) => {
     const url = new URL(req.url, `http://localhost:${port}`);
     const rawCwd = url.searchParams.get("cwd") || os.homedir();
-    const sessionId = url.searchParams.get("sessionId") || "";
+    // sessionId is interpolated into a shell command (`claude --resume <id>`),
+    // so restrict it to the characters a real session id uses. Anything else is
+    // dropped, falling back to --continue / resume --last.
+    const rawSessionId = url.searchParams.get("sessionId") || "";
+    const sessionId = /^[A-Za-z0-9._-]+$/.test(rawSessionId) ? rawSessionId : "";
     const sessionType = url.searchParams.get("type") || "claude";
     // Expand ~ and ensure the directory exists; fall back to home
     const cwd = rawCwd.startsWith("~")

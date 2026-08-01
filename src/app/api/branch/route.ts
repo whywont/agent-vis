@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { execFile } from "child_process";
 import path from "path";
 import os from "os";
+import { isInsideDir } from "@/lib/path-safety";
 
 export async function GET(req: NextRequest) {
   const cwd = req.nextUrl.searchParams.get("cwd");
@@ -9,7 +10,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ branch: null }, { status: 400 });
   }
   const home = os.homedir();
-  if (!cwd.startsWith(home)) {
+  if (!isInsideDir(cwd, home)) {
     return NextResponse.json({ branch: null }, { status: 403 });
   }
 
