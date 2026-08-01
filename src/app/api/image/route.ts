@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
 import os from "os";
+import { isInsideDir } from "@/lib/path-safety";
 
 const MIME_MAP: Record<string, string> = {
   ".png": "image/png",
@@ -18,11 +19,12 @@ export function GET(req: NextRequest) {
     return new NextResponse("bad path", { status: 400 });
   }
   // Allow home dir and system temp dirs (Codex stores clipboard images in
-  // /var/folders/... on macOS and /tmp/ on Linux)
+  // /var/folders/... on macOS and /tmp/ on Linux). isInsideDir normalizes the
+  // path first so "../" cannot escape these roots.
   const allowed =
-    filepath.startsWith(os.homedir()) ||
-    filepath.startsWith("/var/folders/") ||
-    filepath.startsWith("/tmp/");
+    isInsideDir(filepath, os.homedir()) ||
+    isInsideDir(filepath, "/var/folders") ||
+    isInsideDir(filepath, "/tmp");
   if (!allowed) {
     return new NextResponse("path outside allowed directories", { status: 403 });
   }

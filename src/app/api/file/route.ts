@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
 import os from "os";
+import { isInsideDir } from "@/lib/path-safety";
 
 export async function POST(req: NextRequest) {
   const body = await req.json() as { path?: unknown; content?: unknown };
@@ -12,7 +13,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "absolute path required" }, { status: 400 });
   }
   const home = os.homedir();
-  if (!filepath.startsWith(home)) {
+  if (!isInsideDir(filepath, home)) {
     return NextResponse.json({ error: "path outside home" }, { status: 403 });
   }
   if (content === null) {
@@ -33,7 +34,7 @@ export function GET(req: NextRequest) {
     return NextResponse.json({ error: "absolute path required" }, { status: 400 });
   }
   const home = os.homedir();
-  if (!filepath.startsWith(home)) {
+  if (!isInsideDir(filepath, home)) {
     return NextResponse.json({ error: "path outside home" }, { status: 403 });
   }
   if (!fs.existsSync(filepath)) {
