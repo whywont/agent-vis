@@ -55,6 +55,7 @@ export function walkClaudeDir(dir: string, out: SessionMeta[]): void {
       if (!meta) continue;
 
       const stat = fs.statSync(full);
+      const lastEventTimestamp = readLastClaudeTimestamp(full);
       const projParts = proj.name.split("-").filter(Boolean);
       let projectName = "";
       if (projParts.length > 2) {
@@ -67,12 +68,67 @@ export function walkClaudeDir(dir: string, out: SessionMeta[]): void {
         cwd: meta.cwd || "",
         model: "claude",
         timestamp: meta.timestamp || "",
-        modified: stat.mtime.toISOString(),
+        // Claude may append timestamp-less bookkeeping records to an idle
+        // session. Use conversation data so those writes do not reorder it.
+        modified: lastEventTimestamp || stat.mtime.toISOString(),
         cli_version: meta.version || "",
         source: "claude-code",
         project: projectName,
       });
     }
+  }
+}
+
+/**
+ * Find the newest timestamped Claude record, reading from the end so session
+ * listing stays cheap even for large histories.
+ */
+export function readLastClaudeTimestamp(filepath: string): string | null {
+  const fd = fs.openSync(filepath, "r");
+  const chunkSize = 65536;
+  const size = fs.fstatSync(fd).size;
+  let offset = size;
+  let leadingFragment = "";
+
+  try {
+    while (offset > 0) {
+      const bytesToRead = Math.min(chunkSize, offset);
+      offset -= bytesToRead;
+      const buf = Buffer.alloc(bytesToRead);
+      fs.readSync(fd, buf, 0, bytesToRead, offset);
+
+      const text = buf.toString("utf8") + leadingFragment;
+      const lines = text.split("\n");
+      leadingFragment = lines.shift() || "";
+
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        try {
+          const obj = JSON.parse(line) as { timestamp?: unknown };
+          if (typeof obj.timestamp === "string" && !Number.isNaN(Date.parse(obj.timestamp))) {
+            return obj.timestamp;
+          }
+        } catch {
+          // Keep scanning past malformed records.
+        }
+      }
+    }
+
+    const firstLine = leadingFragment.trim();
+    if (firstLine) {
+      try {
+        const obj = JSON.parse(firstLine) as { timestamp?: unknown };
+        if (typeof obj.timestamp === "string" && !Number.isNaN(Date.parse(obj.timestamp))) {
+          return obj.timestamp;
+        }
+      } catch {
+        // No usable timestamp in the file.
+      }
+    }
+    return null;
+  } finally {
+    fs.closeSync(fd);
   }
 }
 

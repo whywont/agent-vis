@@ -5,22 +5,27 @@ import { getRuntimeSettings } from "@/lib/runtime-settings";
 export async function POST(req: NextRequest) {
   const settings = await getRuntimeSettings();
 
-  const { filepath, patch, contextText } = (await req.json()) as {
+  const { filepath, patch, contextText, fileContent } = (await req.json()) as {
     filepath: string;
     patch: string;
     contextText?: string;
+    fileContent?: string | null;
   };
 
   if (!patch?.trim()) {
     return new Response("No patch content", { status: 400 });
   }
 
-  const userContent = contextText?.trim()
-    ? `User request that triggered this change:\n"${contextText}"\n\nExplain this patch for ${filepath}:\n\n${patch}`
-    : `Explain this patch for ${filepath}:\n\n${patch}`;
+  const requestContext = contextText?.trim()
+    ? `User request that triggered this change:\n"${contextText}"\n\n`
+    : "";
+  const fileContext = typeof fileContent === "string"
+    ? `\n\nCurrent complete file for context:\n\n${fileContent}`
+    : "";
+  const userContent = `${requestContext}Explain this patch for ${filepath}:\n\n${patch}${fileContext}`;
 
   const system =
-    "You are a code reviewer helping developers understand changes. Explain git patches concisely — what changed, what it does, and why it likely matters. Be brief (2-4 sentences for small changes, a short paragraph for complex ones). Skip obvious details like 'a line was added'. Focus on intent and impact.";
+    "You are a code reviewer helping developers understand changes. Explain git patches concisely — what changed, what it does, and why it likely matters. The current complete file is supplied for surrounding context; the patch is authoritative about the change itself. Be brief (2-4 sentences for small changes, a short paragraph for complex ones). Skip obvious details like 'a line was added'. Focus on intent and impact.";
 
   if (settings.provider === "openai-compatible" || settings.provider === "openrouter") {
     const baseUrl = settings.provider === "openrouter"
