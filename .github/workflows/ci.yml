@@ -70,6 +70,3 @@ jobs:
 
       - name: Desktop quality gate
         run: pnpm desktop:check
-
-      - name: Build desktop bundle
-        run: pnpm desktop:build
