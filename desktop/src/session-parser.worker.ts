@@ -1,8 +1,8 @@
 /// <reference lib="webworker" />
 
-import { parseSessionRecords, type SessionRecordFile } from "./session-parser";
+import { SessionRecordParser, type SessionRecordFile } from "./session-parser";
 
-const files = new Map<string, SessionRecordFile>();
+const parser = new SessionRecordParser();
 
 self.onmessage = (event: MessageEvent<
   | { type: "append"; files: SessionRecordFile[] }
@@ -10,15 +10,11 @@ self.onmessage = (event: MessageEvent<
 >) => {
   try {
     if (event.data.type === "append") {
-      for (const incoming of event.data.files) {
-        const existing = files.get(incoming.file);
-        if (existing) existing.lines.push(...incoming.lines);
-        else files.set(incoming.file, { ...incoming, lines: [...incoming.lines] });
-      }
+      parser.append(event.data.files);
       self.postMessage({ ok: true, appended: true });
       return;
     }
-    self.postMessage({ ok: true, events: parseSessionRecords([...files.values()]) });
+    self.postMessage({ ok: true, events: parser.finish() });
   } catch (reason) {
     self.postMessage({
       ok: false,

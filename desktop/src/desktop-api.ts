@@ -24,8 +24,7 @@ export function readSession(
   const cached = sessionCache.get(cacheKey);
   if (cached) return cached;
 
-  const pending = readSessionBatches(fileRefs, onProgress)
-    .catch((reason) => {
+  const pending = readSessionBatches(fileRefs, onProgress).catch((reason) => {
       sessionCache.delete(cacheKey);
       throw reason;
     });

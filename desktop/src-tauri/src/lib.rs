@@ -8,6 +8,7 @@ use std::time::SystemTime;
 
 const CLAUDE_PREFIX: &str = "claude:";
 const DEFAULT_BATCH_BYTES: usize = 64 * 1024 * 1024;
+const MAX_SESSION_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_GROUPED_FILES: usize = 32;
 
 #[derive(Serialize)]
@@ -143,12 +144,20 @@ fn collect_codex(dir: &Path, root: &Path, output: &mut Vec<SessionMeta>) {
         return;
     };
     for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_symlink() {
+            continue;
+        }
         let path = entry.path();
-        if path.is_dir() {
+        if file_type.is_dir() {
             collect_codex(&path, root, output);
             continue;
         }
-        if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
+        if !file_type.is_file()
+            || path.extension().and_then(|value| value.to_str()) != Some("jsonl")
+        {
             continue;
         }
         let Some(meta) = read_first_json_line(&path) else {
@@ -181,10 +190,13 @@ fn collect_claude(root: &Path, output: &mut Vec<SessionMeta>) {
         return;
     };
     for project in projects.flatten() {
-        let project_path = project.path();
-        if !project_path.is_dir() {
+        let Ok(project_type) = project.file_type() else {
+            continue;
+        };
+        if project_type.is_symlink() || !project_type.is_dir() {
             continue;
         }
+        let project_path = project.path();
         let project_dir_name = project.file_name().to_string_lossy().into_owned();
         let project_name = project_dir_name
             .split('-')
@@ -196,6 +208,12 @@ fn collect_claude(root: &Path, output: &mut Vec<SessionMeta>) {
             continue;
         };
         for entry in entries.flatten() {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_symlink() || !file_type.is_file() {
+                continue;
+            }
             let path = entry.path();
             if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
                 continue;
@@ -362,18 +380,41 @@ fn read_session_records(request: SessionReadRequest) -> Result<SessionRecordBatc
     }
 
     let home = dirs::home_dir().ok_or("Could not resolve the home directory")?;
-    let mut remaining = request.max_bytes.unwrap_or(DEFAULT_BATCH_BYTES).max(1);
+    let resolved = refs
+        .iter()
+        .map(|file_ref| resolve_session_ref(&home, file_ref))
+        .collect::<Result<Vec<_>, _>>()?;
+    let total_bytes = resolved.iter().try_fold(0_u64, |total, (path, _)| {
+        let bytes = path.metadata().map_err(|error| error.to_string())?.len();
+        total
+            .checked_add(bytes)
+            .ok_or_else(|| "Grouped session size overflowed".to_owned())
+    })?;
+    if total_bytes > MAX_SESSION_BYTES {
+        return Err(format!(
+            "Session is larger than the {} MiB desktop safety limit",
+            MAX_SESSION_BYTES / (1024 * 1024)
+        ));
+    }
+
+    // The renderer controls this request, so never let it turn one IPC call into
+    // an unbounded allocation. Oversized individual records are still returned
+    // whole to preserve the lossless session contract.
+    let mut remaining = request
+        .max_bytes
+        .unwrap_or(DEFAULT_BATCH_BYTES)
+        .clamp(1, DEFAULT_BATCH_BYTES);
     let mut cursor = request.cursor.unwrap_or_default();
     cursor.resize(refs.len(), 0);
+    cursor.truncate(refs.len());
     let mut records = Vec::with_capacity(refs.len());
     let mut done = true;
-    for (index, file_ref) in refs.iter().enumerate() {
-        let (path, source) = resolve_session_ref(&home, file_ref)?;
+    for (index, (file_ref, (path, source))) in refs.iter().zip(resolved.iter()).enumerate() {
         if cursor[index] == u64::MAX {
             continue;
         }
         let (record, next_offset, file_done) =
-            read_session_batch(&path, source, file_ref, cursor[index], &mut remaining)?;
+            read_session_batch(path, source, file_ref, cursor[index], &mut remaining)?;
         cursor[index] = if file_done { u64::MAX } else { next_offset };
         done &= file_done;
         if !record.lines.is_empty() {
@@ -483,6 +524,50 @@ mod tests {
         assert_eq!(sessions[0].id, "parent");
         assert_eq!(sessions[0].files, vec![sessions[0].file.clone()]);
         assert_eq!(sessions[0].project.as_deref(), Some("project"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn session_discovery_ignores_symlinked_files_and_directories() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_dir("discovery-symlinks");
+        let codex_root = root.join("codex");
+        let outside = root.join("outside");
+        fs::create_dir_all(&codex_root).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(
+            outside.join("outside.jsonl"),
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{",
+                "\"id\":\"outside\",\"cwd\":\"/private\"}}\n"
+            ),
+        )
+        .unwrap();
+        symlink(outside.join("outside.jsonl"), codex_root.join("file.jsonl")).unwrap();
+        symlink(&outside, codex_root.join("directory")).unwrap();
+
+        let mut sessions = Vec::new();
+        collect_codex(&codex_root, &codex_root, &mut sessions);
+        assert!(sessions.is_empty());
+
+        let claude_root = root.join("claude");
+        let real_project = root.join("-Users-alice-private");
+        fs::create_dir_all(&claude_root).unwrap();
+        fs::create_dir_all(&real_project).unwrap();
+        fs::write(
+            real_project.join("outside.jsonl"),
+            concat!(
+                "{\"type\":\"user\",\"sessionId\":\"outside\",",
+                "\"cwd\":\"/private\",\"timestamp\":\"2026-08-02T00:00:00Z\"}\n"
+            ),
+        )
+        .unwrap();
+        symlink(&real_project, claude_root.join("-Users-alice-private")).unwrap();
+
+        collect_claude(&claude_root, &mut sessions);
+        assert!(sessions.is_empty());
         fs::remove_dir_all(root).unwrap();
     }
 
