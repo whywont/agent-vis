@@ -1,17 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
-import type { SessionMeta } from "../../src/lib/types";
+import { useEffect, useRef, useState } from "react";
+import type { SessionMeta } from "@/lib/types";
 import { listSessions } from "./desktop-api";
-
-function displayDate(value: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "unknown" : date.toLocaleString();
-}
+import DesktopSessionDetail from "./DesktopSessionDetail";
+import DesktopSessionList from "./DesktopSessionList";
 
 export default function App() {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [selected, setSelected] = useState<SessionMeta | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const sidebarRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     listSessions()
@@ -22,14 +20,35 @@ export default function App() {
       .finally(() => setLoading(false));
   }, []);
 
-  const sourceCounts = useMemo(() => ({
-    claude: sessions.filter((session) => session.source === "claude-code").length,
-    codex: sessions.filter((session) => session.source === "codex").length,
-  }), [sessions]);
+  useEffect(() => {
+    const sidebar = sidebarRef.current;
+    const handle = sidebar?.querySelector<HTMLElement>(".resize-handle.right");
+    if (!sidebar || !handle) return;
+    function onMouseDown(event: MouseEvent) {
+      event.preventDefault();
+      const startX = event.clientX;
+      const startWidth = sidebar!.getBoundingClientRect().width;
+      document.body.classList.add("resizing");
+      function onMove(moveEvent: MouseEvent) {
+        sidebar!.style.width = `${Math.max(220, Math.min(520, startWidth + moveEvent.clientX - startX))}px`;
+      }
+      function onUp() {
+        document.body.classList.remove("resizing");
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+      }
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    }
+    handle.addEventListener("mousedown", onMouseDown);
+    return () => handle.removeEventListener("mousedown", onMouseDown);
+  }, []);
+
+  const selectedFiles = selected ? selected.files?.join(",") || selected.file : null;
 
   return (
     <div id="app" className={selected ? "has-session" : "no-session"}>
-      <nav id="sidebar">
+      <nav id="sidebar" ref={sidebarRef}>
         <div className="sidebar-header">
           <h1>agent-vis</h1>
           {/* The desktop renderer uses Vite, so Next's Image component is unavailable. */}
@@ -37,56 +56,29 @@ export default function App() {
           <img src="/logo.png" alt="" className="sidebar-logo" />
         </div>
         <div className="sidebar-subheader">
-          <span className="subtitle">secure desktop preview</span>
+          <span className="subtitle">session explorer</span>
         </div>
-        <div className="desktop-source-counts">
-          <span>{sourceCounts.claude} Claude</span>
-          <span>{sourceCounts.codex} Codex</span>
-        </div>
-        <div className="session-list">
-          {loading && <div className="desktop-status">Reading local sessions...</div>}
-          {error && <div className="desktop-status error">{error}</div>}
-          {!loading && !error && sessions.length === 0 && (
-            <div className="desktop-status">No local sessions found.</div>
-          )}
-          {sessions.map((session) => (
-            <button
-              key={session.file}
-              className={`session-item desktop-session${selected?.file === session.file ? " active" : ""}`}
-              onClick={() => setSelected(session)}
-            >
-              <span className={`session-source ${session.source === "claude-code" ? "source-claude" : "source-codex"}`}>
-                {session.source === "claude-code" ? "claude" : "codex"}
-              </span>
-              <span className="session-id">{session.id.slice(0, 12)}</span>
-              <span className="session-cwd">{session.cwd}</span>
-              <span className="session-time">{displayDate(session.modified)}</span>
-            </button>
-          ))}
-        </div>
+        <DesktopSessionList
+          sessions={sessions}
+          currentFile={selectedFiles}
+          loading={loading}
+          error={error}
+          onSelectSession={(files) => setSelected(sessions.find((session) => (session.files?.join(",") || session.file) === files) || null)}
+        />
+        <div className="resize-handle right" />
       </nav>
       <main id="main-content">
         {!selected ? (
           <div className="welcome">
             <div className="welcome-inner">
-              <h2>Desktop foundation</h2>
-              <p>Session discovery now crosses one narrow Tauri command instead of a localhost API.</p>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/logo.png" alt="" className="desktop-welcome-logo" />
+              <h2>Select a session</h2>
+              <p>Explore local Claude Code and Codex work without starting a server.</p>
             </div>
           </div>
         ) : (
-          <div className="desktop-session-preview">
-            <span className="desktop-eyebrow">Read-only first slice</span>
-            <h2>{selected.project || selected.id}</h2>
-            <dl>
-              <dt>Source</dt><dd>{selected.source}</dd>
-              <dt>Working directory</dt><dd>{selected.cwd || "unknown"}</dd>
-              <dt>Last activity</dt><dd>{displayDate(selected.modified)}</dd>
-              <dt>Session reference</dt><dd>{selected.file}</dd>
-            </dl>
-            <p className="desktop-next-note">
-              The next slice ports session parsing and the existing timeline UI without adding shell or arbitrary file capabilities.
-            </p>
-          </div>
+          <DesktopSessionDetail key={selectedFiles} session={selected} onBack={() => setSelected(null)} />
         )}
       </main>
     </div>
