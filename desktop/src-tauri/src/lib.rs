@@ -41,10 +41,12 @@ struct SessionReadRequest {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct SessionRecordBatch {
     files: Vec<SessionRecordFile>,
     cursor: Vec<u64>,
     done: bool,
+    total_bytes: u64,
 }
 
 fn system_time_iso(value: SystemTime) -> String {
@@ -429,6 +431,7 @@ fn read_session_records(request: SessionReadRequest) -> Result<SessionRecordBatc
         files: records,
         cursor,
         done,
+        total_bytes,
     })
 }
 

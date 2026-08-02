@@ -1,14 +1,18 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { AppEvent, SessionMeta } from "@/lib/types";
 import type { SessionRecordFile } from "./session-parser";
+import { WeightedLruCache } from "./weighted-lru-cache";
 
-const sessionCache = new Map<string, Promise<AppEvent[]>>();
+const SESSION_CACHE_BYTES = 512 * 1024 * 1024;
+const sessionCache = new WeightedLruCache<AppEvent[]>(SESSION_CACHE_BYTES);
+const sessionReads = new Map<string, Promise<AppEvent[]>>();
 const SESSION_BATCH_BYTES = 64 * 1024 * 1024;
 
 interface SessionRecordBatch {
   files: SessionRecordFile[];
   cursor: number[];
   done: boolean;
+  totalBytes: number;
 }
 
 export function listSessions(): Promise<SessionMeta[]> {
@@ -22,26 +26,34 @@ export function readSession(
 ): Promise<AppEvent[]> {
   const cacheKey = `${fileRefs}:${modified}`;
   const cached = sessionCache.get(cacheKey);
-  if (cached) return cached;
+  if (cached) return Promise.resolve(cached);
+  const activeRead = sessionReads.get(cacheKey);
+  if (activeRead) return activeRead;
 
-  const pending = readSessionBatches(fileRefs, onProgress).catch((reason) => {
+  const pending = readSessionBatches(fileRefs, onProgress).then(({ events, totalBytes }) => {
+    sessionCache.set(cacheKey, events, totalBytes);
+    return events;
+  }).catch((reason) => {
       sessionCache.delete(cacheKey);
       throw reason;
+    }).finally(() => {
+      sessionReads.delete(cacheKey);
     });
-  sessionCache.set(cacheKey, pending);
+  sessionReads.set(cacheKey, pending);
   return pending;
 }
 
 function readSessionBatches(
   fileRefs: string,
   onProgress?: (batches: number) => void,
-): Promise<AppEvent[]> {
+): Promise<{ events: AppEvent[]; totalBytes: number }> {
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL("./session-parser.worker.ts", import.meta.url), { type: "module" });
     let cursor: number[] | undefined;
     let batches = 0;
     let awaitingAppend = false;
     let doneReading = false;
+    let totalBytes = 0;
 
     async function requestBatch() {
       try {
@@ -49,6 +61,7 @@ function readSessionBatches(
           request: { fileRefs, cursor, maxBytes: SESSION_BATCH_BYTES },
         });
         cursor = batch.cursor;
+        totalBytes = batch.totalBytes;
         batches += 1;
         onProgress?.(batches);
         doneReading = batch.done;
@@ -72,7 +85,7 @@ function readSessionBatches(
       }
       if ("events" in event.data) {
         worker.terminate();
-        resolve(event.data.events);
+        resolve({ events: event.data.events, totalBytes });
         return;
       }
       if (awaitingAppend) {
