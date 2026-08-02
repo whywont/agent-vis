@@ -1,15 +1,89 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
+use std::fs::{self, File, OpenOptions};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
+use tauri::Manager;
 
 const CLAUDE_PREFIX: &str = "claude:";
 const DEFAULT_BATCH_BYTES: usize = 64 * 1024 * 1024;
 const MAX_SESSION_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_GROUPED_FILES: usize = 32;
+const MAX_SETTINGS_FILE_BYTES: usize = 64 * 1024;
+const MAX_SECRET_LENGTH: usize = 16 * 1024;
+const SETTINGS_FILE: &str = "settings.json";
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum ExplainProvider {
+    Anthropic,
+    OpenaiCompatible,
+    Openrouter,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopSettingsFile {
+    provider: ExplainProvider,
+    model: String,
+    local_base_url: String,
+    anthropic_api_key: String,
+    local_api_key: String,
+    open_router_api_key: String,
+}
+
+impl Default for DesktopSettingsFile {
+    fn default() -> Self {
+        Self {
+            provider: ExplainProvider::Anthropic,
+            model: "claude-haiku-4-5".to_owned(),
+            local_base_url: "http://127.0.0.1:11434/v1".to_owned(),
+            anthropic_api_key: String::new(),
+            local_api_key: String::new(),
+            open_router_api_key: String::new(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopSettings {
+    provider: ExplainProvider,
+    model: String,
+    local_base_url: String,
+    anthropic_key_configured: bool,
+    local_key_configured: bool,
+    open_router_key_configured: bool,
+}
+
+impl From<&DesktopSettingsFile> for DesktopSettings {
+    fn from(settings: &DesktopSettingsFile) -> Self {
+        Self {
+            provider: settings.provider,
+            model: settings.model.clone(),
+            local_base_url: settings.local_base_url.clone(),
+            anthropic_key_configured: !settings.anthropic_api_key.is_empty(),
+            local_key_configured: !settings.local_api_key.is_empty(),
+            open_router_key_configured: !settings.open_router_api_key.is_empty(),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveDesktopSettingsRequest {
+    provider: ExplainProvider,
+    model: String,
+    local_base_url: String,
+    anthropic_api_key: String,
+    local_api_key: String,
+    open_router_api_key: String,
+    clear_anthropic_api_key: bool,
+    clear_local_api_key: bool,
+    clear_open_router_api_key: bool,
+}
 
 #[derive(Serialize)]
 struct SessionMeta {
@@ -47,6 +121,136 @@ struct SessionRecordBatch {
     cursor: Vec<u64>,
     done: bool,
     total_bytes: u64,
+}
+
+fn desktop_settings_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_config_dir()
+        .map(|directory| directory.join(SETTINGS_FILE))
+        .map_err(|error| error.to_string())
+}
+
+fn read_desktop_settings(path: &Path) -> Result<DesktopSettingsFile, String> {
+    match fs::read(path) {
+        Ok(contents) => {
+            if contents.len() > MAX_SETTINGS_FILE_BYTES {
+                return Err("Desktop settings file is too large".to_owned());
+            }
+            serde_json::from_slice(&contents).map_err(|error| error.to_string())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(DesktopSettingsFile::default())
+        }
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn validate_desktop_settings(settings: &mut DesktopSettingsFile) -> Result<(), String> {
+    settings.model = settings.model.trim().to_owned();
+    settings.local_base_url = settings
+        .local_base_url
+        .trim()
+        .trim_end_matches('/')
+        .to_owned();
+    settings.anthropic_api_key = settings.anthropic_api_key.trim().to_owned();
+    settings.local_api_key = settings.local_api_key.trim().to_owned();
+    settings.open_router_api_key = settings.open_router_api_key.trim().to_owned();
+
+    if settings.model.is_empty() {
+        return Err("A model name is required.".to_owned());
+    }
+    if settings.model.len() > 256 {
+        return Err("Model name is too long.".to_owned());
+    }
+    if settings.local_base_url.len() > 2048 {
+        return Err("Local model endpoint is too long.".to_owned());
+    }
+    if settings.provider == ExplainProvider::OpenaiCompatible {
+        let valid_scheme = settings.local_base_url.starts_with("http://")
+            || settings.local_base_url.starts_with("https://");
+        let remainder = settings
+            .local_base_url
+            .split_once("://")
+            .map(|(_, value)| value)
+            .unwrap_or_default();
+        if !valid_scheme || remainder.is_empty() || remainder.chars().any(char::is_whitespace) {
+            return Err("Use a valid HTTP(S) local model endpoint.".to_owned());
+        }
+    }
+    for secret in [
+        &settings.anthropic_api_key,
+        &settings.local_api_key,
+        &settings.open_router_api_key,
+    ] {
+        if secret.len() > MAX_SECRET_LENGTH {
+            return Err("API key is too long.".to_owned());
+        }
+    }
+    Ok(())
+}
+
+fn write_desktop_settings(path: &Path, settings: &DesktopSettingsFile) -> Result<(), String> {
+    let parent = path.parent().ok_or("Desktop settings path is invalid")?;
+    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    let bytes = serde_json::to_vec_pretty(settings).map_err(|error| error.to_string())?;
+    if bytes.len() > MAX_SETTINGS_FILE_BYTES {
+        return Err("Desktop settings file is too large".to_owned());
+    }
+    let mut options = OpenOptions::new();
+    options.create(true).write(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path).map_err(|error| error.to_string())?;
+    file.write_all(&bytes).map_err(|error| error.to_string())?;
+    file.sync_all().map_err(|error| error.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn get_desktop_settings(app: tauri::AppHandle) -> Result<DesktopSettings, String> {
+    let settings = read_desktop_settings(&desktop_settings_path(&app)?)?;
+    Ok(DesktopSettings::from(&settings))
+}
+
+#[tauri::command]
+fn save_desktop_settings(
+    app: tauri::AppHandle,
+    request: SaveDesktopSettingsRequest,
+) -> Result<DesktopSettings, String> {
+    let path = desktop_settings_path(&app)?;
+    let mut settings = read_desktop_settings(&path)?;
+    settings.provider = request.provider;
+    settings.model = request.model;
+    settings.local_base_url = request.local_base_url;
+
+    if !request.anthropic_api_key.trim().is_empty() {
+        settings.anthropic_api_key = request.anthropic_api_key;
+    } else if request.clear_anthropic_api_key {
+        settings.anthropic_api_key.clear();
+    }
+    if !request.local_api_key.trim().is_empty() {
+        settings.local_api_key = request.local_api_key;
+    } else if request.clear_local_api_key {
+        settings.local_api_key.clear();
+    }
+    if !request.open_router_api_key.trim().is_empty() {
+        settings.open_router_api_key = request.open_router_api_key;
+    } else if request.clear_open_router_api_key {
+        settings.open_router_api_key.clear();
+    }
+
+    validate_desktop_settings(&mut settings)?;
+    write_desktop_settings(&path, &settings)?;
+    Ok(DesktopSettings::from(&settings))
 }
 
 fn system_time_iso(value: SystemTime) -> String {
@@ -440,7 +644,9 @@ pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             list_sessions,
-            read_session_records
+            read_session_records,
+            get_desktop_settings,
+            save_desktop_settings
         ])
         .run(tauri::generate_context!())
         .expect("error while running agent-vis desktop");
@@ -468,6 +674,63 @@ mod tests {
             system_time_iso(SystemTime::UNIX_EPOCH),
             "1970-01-01T00:00:00.000Z"
         );
+    }
+
+    #[test]
+    fn desktop_settings_hide_secrets_and_preserve_configured_flags() {
+        let settings = DesktopSettingsFile {
+            anthropic_api_key: "secret".to_owned(),
+            ..DesktopSettingsFile::default()
+        };
+        let public = DesktopSettings::from(&settings);
+
+        assert!(public.anthropic_key_configured);
+        assert!(!public.local_key_configured);
+        let value = serde_json::to_value(public).unwrap();
+        assert!(value.get("anthropicApiKey").is_none());
+        assert!(value.get("anthropicKeyConfigured").is_some());
+    }
+
+    #[test]
+    fn validates_desktop_settings_provider_inputs() {
+        let mut settings = DesktopSettingsFile {
+            provider: ExplainProvider::OpenaiCompatible,
+            model: "  qwen3:8b  ".to_owned(),
+            local_base_url: "http://127.0.0.1:11434/v1/".to_owned(),
+            ..DesktopSettingsFile::default()
+        };
+        validate_desktop_settings(&mut settings).unwrap();
+        assert_eq!(settings.model, "qwen3:8b");
+        assert_eq!(settings.local_base_url, "http://127.0.0.1:11434/v1");
+
+        settings.local_base_url = "file:///tmp/model".to_owned();
+        assert_eq!(
+            validate_desktop_settings(&mut settings).unwrap_err(),
+            "Use a valid HTTP(S) local model endpoint."
+        );
+    }
+
+    #[test]
+    fn desktop_settings_round_trip_with_private_permissions() {
+        let directory = temp_dir("settings");
+        let path = directory.join(SETTINGS_FILE);
+        let settings = DesktopSettingsFile {
+            provider: ExplainProvider::Openrouter,
+            model: "google/gemini-2.5-flash-lite".to_owned(),
+            open_router_api_key: "secret".to_owned(),
+            ..DesktopSettingsFile::default()
+        };
+
+        write_desktop_settings(&path, &settings).unwrap();
+        let loaded = read_desktop_settings(&path).unwrap();
+        assert_eq!(loaded.provider, ExplainProvider::Openrouter);
+        assert_eq!(loaded.open_router_api_key, "secret");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(path.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
