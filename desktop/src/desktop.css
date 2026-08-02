@@ -199,6 +199,56 @@
   width: 250px;
 }
 
+.desktop-file-card-stack {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.desktop-file-card {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 10;
+}
+
+.desktop-file-edges {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.desktop-file-edges .tc-edge-hit {
+  cursor: crosshair;
+  pointer-events: stroke;
+}
+
+.desktop-file-edge-line {
+  pointer-events: none;
+}
+
+.desktop-files-zoom {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: var(--text-dim);
+  font: 11px var(--font-mono);
+  pointer-events: none;
+}
+
+.desktop-file-card .diff-file-header {
+  gap: 7px;
+}
+
+.desktop-file-card .desktop-diff-path {
+  display: none;
+}
+
+.desktop-file-card .diff-copy-path-btn {
+  margin-left: auto;
+}
+
 .session-list-wrapper {
   min-height: 0;
 }
