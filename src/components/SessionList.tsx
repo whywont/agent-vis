@@ -2,11 +2,17 @@
 
 import { useState, useEffect, useRef } from "react";
 import type { SessionMeta } from "@/lib/types";
+import {
+  filterSessions,
+  sessionFileKey,
+  sortSessions,
+  type SortBy,
+  type SourceFilter,
+} from "@/lib/session-list";
+import { sessionExportDescriptor } from "@/lib/session-export";
 import { formatDate, formatTime } from "@/utils/format";
 
-type SortBy = "newest" | "oldest" | "project";
 type GroupBy = "date" | "project" | "none";
-type SourceFilter = "all" | "claude" | "codex";
 
 interface SessionListProps {
   sessions: SessionMeta[];
@@ -136,43 +142,18 @@ export default function SessionList({
 
   // --- Data pipeline ---
   // 1. Filter
-  const filtered = sessions.filter((s) => {
-    if (sourceFilter === "claude" && s.source !== "claude-code") return false;
-    if (sourceFilter === "codex" && s.source === "claude-code") return false;
-    if (search) {
-      const q = search.toLowerCase();
-      const hay = [s.cwd || "", s.project || "", s.id || "", s.file || ""].join(" ").toLowerCase();
-      const metaMatch = hay.includes(q);
-      // Check all file refs for this session against content search results
-      const allRefs = s.files ?? [s.file];
-      const contentMatch = visibleContentMatches !== null && allRefs.some((f) => visibleContentMatches.has(f));
-      if (!metaMatch && !contentMatch) return false;
-    }
-    return true;
+  const filtered = filterSessions(sessions, {
+    source: sourceFilter,
+    search,
+    contentMatches: visibleContentMatches,
   });
 
   // 2. Sort
-  const sorted = [...filtered].sort((a, b) => {
-    if (sortBy === "newest") {
-      const ta = new Date(a.modified || a.timestamp || 0).getTime();
-      const tb = new Date(b.modified || b.timestamp || 0).getTime();
-      return tb - ta;
-    }
-    if (sortBy === "oldest") {
-      const ta = new Date(a.modified || a.timestamp || 0).getTime();
-      const tb = new Date(b.modified || b.timestamp || 0).getTime();
-      return ta - tb;
-    }
-    // project
-    const pa = a.project || a.cwd || "";
-    const pb = b.project || b.cwd || "";
-    return pa.localeCompare(pb);
-  });
+  const sorted = sortSessions(filtered, sortBy);
 
   // 3. Split pinned / unpinned
-  const getFileKey = (s: SessionMeta) => (s.files ? s.files.join(",") : s.file);
-  const pinnedSessions = sorted.filter((s) => pinned.has(getFileKey(s)));
-  const unpinnedSessions = sorted.filter((s) => !pinned.has(getFileKey(s)));
+  const pinnedSessions = sorted.filter((s) => pinned.has(sessionFileKey(s)));
+  const unpinnedSessions = sorted.filter((s) => !pinned.has(sessionFileKey(s)));
 
   // 4. Build groups
   type Group = { label: string; items: SessionMeta[] };
@@ -292,7 +273,7 @@ export default function SessionList({
               const shortId = s.id.slice(0, 12);
               const modTime = s.modified ? formatTime(s.modified) : "";
               const cwdShort = s.cwd ? s.cwd.replace(/^\/(?:Users|home)\/[^/]+/, "~") : "";
-              const allFiles = getFileKey(s);
+              const allFiles = sessionFileKey(s);
               const isActive = currentFile === allFiles || currentFile === s.files?.[0];
               const menuOpen = menuOpenFor === allFiles;
               const isPinned = pinned.has(allFiles);
@@ -348,13 +329,14 @@ export default function SessionList({
                         onClick={async (e) => {
                           e.stopPropagation();
                           setMenuOpenFor(null);
-                          const res = await fetch(`/api/session/${encodeURIComponent(allFiles)}`);
+                          const exportInfo = sessionExportDescriptor(s, "json");
+                          const res = await fetch(exportInfo.href);
                           const data = await res.json();
                           const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
                           const url = URL.createObjectURL(blob);
                           const a = document.createElement("a");
                           a.href = url;
-                          a.download = `session-${s.id.slice(0, 12)}.json`;
+                          a.download = exportInfo.filename;
                           a.click();
                           URL.revokeObjectURL(url);
                         }}
@@ -366,9 +348,10 @@ export default function SessionList({
                         onClick={(e) => {
                           e.stopPropagation();
                           setMenuOpenFor(null);
+                          const exportInfo = sessionExportDescriptor(s, "compact");
                           const a = document.createElement("a");
-                          a.href = `/api/session-compact/${encodeURIComponent(allFiles)}`;
-                          a.download = `context-${s.id.slice(0, 12)}.md`;
+                          a.href = exportInfo.href;
+                          a.download = exportInfo.filename;
                           a.click();
                         }}
                       >
