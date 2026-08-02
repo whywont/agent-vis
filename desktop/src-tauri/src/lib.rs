@@ -2,7 +2,7 @@ use serde::Serialize;
 use serde_json::Value;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::SystemTime;
 
 const CLAUDE_PREFIX: &str = "claude:";
