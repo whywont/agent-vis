@@ -80,6 +80,11 @@ web_modules/
 .next
 out
 
+# Tauri desktop build output
+desktop/dist/
+desktop/src-tauri/target/
+desktop/node_modules/
+
 # Nuxt.js build / generate output
 .nuxt
 dist

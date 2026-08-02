@@ -1,6 +1,7 @@
 #!/bin/sh
 set -e
-echo "Running pre-push checks..."
-npm run typecheck
-npm run lint
+echo "Running pre-commit checks..."
+pnpm typecheck
+pnpm lint
+pnpm desktop:rust:fmt
 echo "All checks passed."
