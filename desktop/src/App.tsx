@@ -3,12 +3,14 @@ import type { SessionMeta } from "@/lib/types";
 import { listSessions } from "./desktop-api";
 import DesktopSessionDetail from "./DesktopSessionDetail";
 import DesktopSessionList from "./DesktopSessionList";
+import DesktopSettingsPage from "./DesktopSettingsPage";
 
 export default function App() {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [selected, setSelected] = useState<SessionMeta | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [showSettings, setShowSettings] = useState(false);
   const sidebarRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -54,6 +56,14 @@ export default function App() {
           {/* The desktop renderer uses Vite, so Next's Image component is unavailable. */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/logo.png" alt="" className="sidebar-logo" />
+          <button
+            className={`settings-nav-btn${showSettings ? " active" : ""}`}
+            onClick={() => { setShowSettings(true); setSelected(null); }}
+            title="Settings"
+            aria-label="Open settings"
+          >
+            &#9881;
+          </button>
         </div>
         <div className="sidebar-subheader">
           <span className="subtitle">session explorer</span>
@@ -63,12 +73,17 @@ export default function App() {
           currentFile={selectedFiles}
           loading={loading}
           error={error}
-          onSelectSession={(files) => setSelected(sessions.find((session) => (session.files?.join(",") || session.file) === files) || null)}
+          onSelectSession={(files) => {
+            setShowSettings(false);
+            setSelected(sessions.find((session) => (session.files?.join(",") || session.file) === files) || null);
+          }}
         />
         <div className="resize-handle right" />
       </nav>
       <main id="main-content">
-        {!selected ? (
+        {showSettings ? (
+          <DesktopSettingsPage onBack={() => setShowSettings(false)} />
+        ) : !selected ? (
           <div className="welcome">
             <div className="welcome-inner">
               {/* eslint-disable-next-line @next/next/no-img-element */}

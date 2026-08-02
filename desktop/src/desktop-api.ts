@@ -15,8 +15,39 @@ interface SessionRecordBatch {
   totalBytes: number;
 }
 
+export type ExplainProvider = "anthropic" | "openai-compatible" | "openrouter";
+
+export interface DesktopSettings {
+  provider: ExplainProvider;
+  model: string;
+  localBaseUrl: string;
+  anthropicKeyConfigured: boolean;
+  localKeyConfigured: boolean;
+  openRouterKeyConfigured: boolean;
+}
+
+export interface SaveDesktopSettingsRequest {
+  provider: ExplainProvider;
+  model: string;
+  localBaseUrl: string;
+  anthropicApiKey: string;
+  localApiKey: string;
+  openRouterApiKey: string;
+  clearAnthropicApiKey: boolean;
+  clearLocalApiKey: boolean;
+  clearOpenRouterApiKey: boolean;
+}
+
 export function listSessions(): Promise<SessionMeta[]> {
   return invoke<SessionMeta[]>("list_sessions");
+}
+
+export function getDesktopSettings(): Promise<DesktopSettings> {
+  return invoke<DesktopSettings>("get_desktop_settings");
+}
+
+export function saveDesktopSettings(request: SaveDesktopSettingsRequest): Promise<DesktopSettings> {
+  return invoke<DesktopSettings>("save_desktop_settings", { request });
 }
 
 export function readSession(

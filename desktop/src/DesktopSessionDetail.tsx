@@ -3,6 +3,7 @@ import type { CSSProperties } from "react";
 import type { AppEvent, SessionMeta } from "@/lib/types";
 import { formatTime } from "@/utils/format";
 import DesktopFileTree from "./DesktopFileTree";
+import DesktopFilesCanvas from "./DesktopFilesCanvas";
 import DesktopTimeline from "./DesktopTimeline";
 import { readSession } from "./desktop-api";
 
@@ -17,6 +18,7 @@ export default function DesktopSessionDetail({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [loadedBatches, setLoadedBatches] = useState(0);
+  const [activeTab, setActiveTab] = useState<"session" | "files">("session");
   const fileTreeRef = useRef<HTMLDivElement>(null);
   const resizeHandleRef = useRef<HTMLDivElement>(null);
   const files = session.files?.join(",") || session.file;
@@ -78,13 +80,26 @@ export default function DesktopSessionDetail({
         </div>
       </div>
       <div className="session-tabs">
-        <button className="session-tab-btn active">Session</button>
+        <button
+          className={`session-tab-btn${activeTab === "session" ? " active" : ""}`}
+          onClick={() => setActiveTab("session")}
+        >
+          Session
+        </button>
+        <button
+          className={`session-tab-btn${activeTab === "files" ? " active" : ""}`}
+          onClick={() => setActiveTab("files")}
+        >
+          Files
+        </button>
         <span className="desktop-readonly-badge">read-only desktop</span>
       </div>
       {loading ? (
         <SessionLoadingShell loadedBatches={loadedBatches} />
       ) : error ? (
         <div className="desktop-detail-state error">{error}</div>
+      ) : activeTab === "files" ? (
+        <DesktopFilesCanvas events={events} />
       ) : (
         <div className="detail-body">
           <div className="file-tree-panel" ref={fileTreeRef}>
