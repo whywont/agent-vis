@@ -100,14 +100,27 @@
 }
 
 .desktop-diff-path {
+  flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.desktop-diff-path + .diff-copy-path-btn {
+.desktop-diff-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   margin-left: auto;
+  flex-shrink: 0;
+}
+
+.desktop-diff-actions .diff-explain-btn,
+.desktop-diff-actions .diff-copy-path-btn {
+  margin-left: 0;
+}
+
+.desktop-diff-actions .diff-copy-path-btn {
   font-family: var(--font-mono);
   font-size: 13px;
 }
@@ -285,12 +298,7 @@
   display: none;
 }
 
-.desktop-file-card .diff-copy-path-btn {
-  margin-left: 0;
-}
-
 .desktop-file-card .diff-explain-btn {
-  margin-left: auto;
   padding: 2px 5px;
   font-size: 10px;
 }

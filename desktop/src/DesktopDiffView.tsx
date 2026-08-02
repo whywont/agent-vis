@@ -76,21 +76,23 @@ function DesktopDiffBlock({ block, contextText }: { block: DiffBlock; contextTex
       <div className="diff-file-header">
         <span className={`diff-file-action action-${block.action}`}>{block.action}</span>
         <span className="desktop-diff-path">{block.filepath}</span>
-        <button className="diff-explain-btn" disabled={explaining} onClick={() => void explain()}>
-          {explaining ? "explaining..." : "explain"}
-        </button>
-        <button
-          className="diff-copy-path-btn"
-          title="Copy diff"
-          onClick={() => {
-            navigator.clipboard.writeText(patch).then(() => {
-              setCopied(true);
-              window.setTimeout(() => setCopied(false), 1200);
-            }).catch(() => {});
-          }}
-        >
-          {copied ? "✓" : "⧉"}
-        </button>
+        <div className="desktop-diff-actions">
+          <button className="diff-explain-btn" disabled={explaining} onClick={() => void explain()}>
+            {explaining ? "explaining..." : "explain"}
+          </button>
+          <button
+            className="diff-copy-path-btn"
+            title="Copy diff"
+            onClick={() => {
+              navigator.clipboard.writeText(patch).then(() => {
+                setCopied(true);
+                window.setTimeout(() => setCopied(false), 1200);
+              }).catch(() => {});
+            }}
+          >
+            {copied ? "✓" : "⧉"}
+          </button>
+        </div>
       </div>
       {explanation !== null && (
         <div className="diff-explain-panel">
