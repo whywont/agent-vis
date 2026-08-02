@@ -32,6 +32,8 @@ export default function App() {
       <nav id="sidebar">
         <div className="sidebar-header">
           <h1>agent-vis</h1>
+          {/* The desktop renderer uses Vite, so Next's Image component is unavailable. */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/logo.png" alt="" className="sidebar-logo" />
         </div>
         <div className="sidebar-subheader">
