@@ -44,6 +44,10 @@ export interface ExplainDiffRequest {
   contextText?: string;
 }
 
+interface WorkspaceFile {
+  content: string;
+}
+
 export function listSessions(): Promise<SessionMeta[]> {
   return invoke<SessionMeta[]>("list_sessions");
 }
@@ -58,6 +62,25 @@ export function saveDesktopSettings(request: SaveDesktopSettingsRequest): Promis
 
 export function explainDiff(request: ExplainDiffRequest): Promise<string> {
   return invoke<string>("explain_diff", { request });
+}
+
+export async function readWorkspaceFile(workspaceRoot: string, filepath: string): Promise<string> {
+  const result = await invoke<WorkspaceFile>("read_workspace_file", {
+    request: { workspaceRoot, filepath },
+  });
+  return result.content;
+}
+
+export async function saveWorkspaceFile(
+  workspaceRoot: string,
+  filepath: string,
+  expectedContent: string,
+  content: string,
+): Promise<string> {
+  const result = await invoke<WorkspaceFile>("save_workspace_file", {
+    request: { workspaceRoot, filepath, expectedContent, content },
+  });
+  return result.content;
 }
 
 export function readSession(

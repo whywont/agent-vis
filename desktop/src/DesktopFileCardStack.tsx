@@ -25,10 +25,12 @@ export default function DesktopFileCardStack({
   filepath,
   changes,
   events,
+  sessionCwd,
 }: {
   filepath: string;
   changes: FileChangeEvent[];
   events: AppEvent[];
+  sessionCwd: string;
 }) {
   const [activeIndex, setActiveIndex] = useState(changes.length - 1);
   const [expanded, setExpanded] = useState(false);
@@ -109,7 +111,7 @@ export default function DesktopFileCardStack({
             </button>
           </div>
           <div className="file-card-body">
-            <DesktopDiffView patch={activeChange.patch} contextText={contextText} />
+            <DesktopDiffView patch={activeChange.patch} contextText={contextText} workspaceRoot={sessionCwd} />
           </div>
         </div>
       </div>
@@ -142,7 +144,7 @@ export default function DesktopFileCardStack({
               <button type="button" className="card-expanded-close" onClick={() => setExpanded(false)}>close esc</button>
             </div>
             <div className="card-expanded-body">
-              <DesktopDiffView patch={activeChange.patch} contextText={contextText} />
+              <DesktopDiffView patch={activeChange.patch} contextText={contextText} workspaceRoot={sessionCwd} />
             </div>
           </div>
         </div>,

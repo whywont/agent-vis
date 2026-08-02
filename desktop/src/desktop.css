@@ -125,6 +125,42 @@
   font-size: 13px;
 }
 
+.desktop-diff-actions .diff-copy-path-btn:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.desktop-full-file-editor {
+  display: block;
+  width: 100%;
+  min-height: 360px;
+  max-height: 70vh;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-top: 0;
+  border-radius: 0 0 3px 3px;
+  outline: none;
+  resize: vertical;
+  overflow: auto;
+  background: var(--bg);
+  color: var(--text);
+  caret-color: var(--text);
+  font: 13px/1.55 var(--font-mono);
+  tab-size: 2;
+  white-space: pre;
+}
+
+.desktop-full-file-editor:focus {
+  box-shadow: inset 0 0 0 1px var(--accent-dim);
+}
+
+.desktop-diff-actions .diff-edit-error {
+  max-width: min(360px, 30vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .desktop-loading-shell {
   animation: desktop-shell-in 120ms ease-out both;
 }
@@ -301,6 +337,26 @@
 .desktop-file-card .diff-explain-btn {
   padding: 2px 5px;
   font-size: 10px;
+}
+
+.desktop-file-card .diff-view-toggle {
+  padding: 2px 5px;
+  font-size: 10px;
+}
+
+.desktop-file-card .desktop-diff-actions {
+  gap: 3px;
+}
+
+.desktop-file-card .desktop-diff-actions .diff-edit-error {
+  display: none;
+}
+
+.desktop-file-card .desktop-full-file-editor {
+  min-height: 300px;
+  height: 100%;
+  resize: none;
+  font-size: 11px;
 }
 
 .desktop-file-card .diff-explain-panel {
