@@ -38,6 +38,12 @@ export interface SaveDesktopSettingsRequest {
   clearOpenRouterApiKey: boolean;
 }
 
+export interface ExplainDiffRequest {
+  filepath: string;
+  patch: string;
+  contextText?: string;
+}
+
 export function listSessions(): Promise<SessionMeta[]> {
   return invoke<SessionMeta[]>("list_sessions");
 }
@@ -48,6 +54,10 @@ export function getDesktopSettings(): Promise<DesktopSettings> {
 
 export function saveDesktopSettings(request: SaveDesktopSettingsRequest): Promise<DesktopSettings> {
   return invoke<DesktopSettings>("save_desktop_settings", { request });
+}
+
+export function explainDiff(request: ExplainDiffRequest): Promise<string> {
+  return invoke<string>("explain_diff", { request });
 }
 
 export function readSession(

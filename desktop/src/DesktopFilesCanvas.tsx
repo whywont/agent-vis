@@ -206,7 +206,7 @@ export default function DesktopFilesCanvas({ events }: { events: AppEvent[] }) {
                 const file = group.files.find((entry) => entry.path === card.path)!;
                 return (
                   <div key={card.path} style={{ position: "absolute", left: card.x, top: card.y }}>
-                    <DesktopFileCardStack filepath={card.path} changes={file.changes} />
+                    <DesktopFileCardStack filepath={card.path} changes={file.changes} events={events} />
                   </div>
                 );
               })}

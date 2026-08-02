@@ -286,7 +286,26 @@
 }
 
 .desktop-file-card .diff-copy-path-btn {
+  margin-left: 0;
+}
+
+.desktop-file-card .diff-explain-btn {
   margin-left: auto;
+  padding: 2px 5px;
+  font-size: 10px;
+}
+
+.desktop-file-card .diff-explain-panel {
+  padding: 8px 10px;
+}
+
+.desktop-file-card .diff-explain-text {
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.card-expanded-body .desktop-diff-path {
+  display: inline;
 }
 
 .session-list-wrapper {

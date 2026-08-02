@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import ColoredText from "@/components/ColoredText";
+import { explainDiff } from "./desktop-api";
 
 interface DiffBlock {
   action: "update" | "add" | "delete";
@@ -38,49 +39,90 @@ function parseDiff(patch: string): DiffBlock[] {
   return blocks;
 }
 
-export default function DesktopDiffView({ patch }: { patch: string }) {
+export default function DesktopDiffView({ patch, contextText }: { patch: string; contextText?: string }) {
   const blocks = useMemo(() => parseDiff(patch), [patch]);
-  const [copied, setCopied] = useState<string | null>(null);
   if (!patch) return <em>no patch content</em>;
   if (blocks.length === 0) return <>{patch}</>;
   return (
     <>
       {blocks.map((block) => (
-        <div className="diff-block" key={`${block.action}:${block.filepath}`}>
-          <div className="diff-file-header">
-            <span className={`diff-file-action action-${block.action}`}>{block.action}</span>
-            <span className="desktop-diff-path">{block.filepath}</span>
-            <button
-              className="diff-copy-path-btn"
-              title="Copy diff"
-              onClick={() => {
-                navigator.clipboard.writeText(block.lines.map((line) => line.text).join("\n")).then(() => {
-                  setCopied(block.filepath);
-                  window.setTimeout(() => setCopied(null), 1200);
-                }).catch(() => {});
-              }}
-            >
-              {copied === block.filepath ? "✓" : "⧉"}
-            </button>
-          </div>
-          <div className="diff-content">
-            <div className="diff-lines-inner">
-              {block.lines.map((line, index) => (
-                <div className={`diff-line ${line.type}`} key={index}>
-                  {line.type === "added" || line.type === "removed" ? (
-                    <>
-                      <span className="diff-prefix">{line.text[0]}</span>
-                      <ColoredText text={line.text.slice(1)} tone="code" />
-                    </>
-                  ) : (
-                    <ColoredText text={line.text} tone="code" />
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
+        <DesktopDiffBlock block={block} contextText={contextText} key={`${block.action}:${block.filepath}`} />
       ))}
     </>
   );
+}
+
+function DesktopDiffBlock({ block, contextText }: { block: DiffBlock; contextText?: string }) {
+  const [copied, setCopied] = useState(false);
+  const [explanation, setExplanation] = useState<string | null>(null);
+  const [explaining, setExplaining] = useState(false);
+  const patch = block.lines.map((line) => line.text).join("\n");
+
+  async function explain() {
+    if (explaining) return;
+    setExplanation(null);
+    setExplaining(true);
+    try {
+      setExplanation(await explainDiff({ filepath: block.filepath, patch, contextText }));
+    } catch (reason: unknown) {
+      setExplanation(explainError(reason));
+    } finally {
+      setExplaining(false);
+    }
+  }
+
+  return (
+    <div className="diff-block">
+      <div className="diff-file-header">
+        <span className={`diff-file-action action-${block.action}`}>{block.action}</span>
+        <span className="desktop-diff-path">{block.filepath}</span>
+        <button className="diff-explain-btn" disabled={explaining} onClick={() => void explain()}>
+          {explaining ? "explaining..." : "explain"}
+        </button>
+        <button
+          className="diff-copy-path-btn"
+          title="Copy diff"
+          onClick={() => {
+            navigator.clipboard.writeText(patch).then(() => {
+              setCopied(true);
+              window.setTimeout(() => setCopied(false), 1200);
+            }).catch(() => {});
+          }}
+        >
+          {copied ? "✓" : "⧉"}
+        </button>
+      </div>
+      {explanation !== null && (
+        <div className="diff-explain-panel">
+          <div className="diff-explain-label">
+            native explanation
+            <button className="diff-explain-dismiss" onClick={() => setExplanation(null)} aria-label="Dismiss explanation">&times;</button>
+          </div>
+          <div className="diff-explain-text">{explanation}</div>
+        </div>
+      )}
+      <div className="diff-content">
+        <div className="diff-lines-inner">
+          {block.lines.map((line, index) => (
+            <div className={`diff-line ${line.type}`} key={index}>
+              {line.type === "added" || line.type === "removed" ? (
+                <>
+                  <span className="diff-prefix">{line.text[0]}</span>
+                  <ColoredText text={line.text.slice(1)} tone="code" />
+                </>
+              ) : (
+                <ColoredText text={line.text} tone="code" />
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function explainError(reason: unknown): string {
+  if (reason instanceof Error) return reason.message;
+  if (typeof reason === "string") return reason;
+  return "Could not explain this diff.";
 }
