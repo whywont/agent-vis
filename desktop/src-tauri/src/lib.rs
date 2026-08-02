@@ -19,6 +19,7 @@ const MAX_EXPLAIN_PATH_BYTES: usize = 4 * 1024;
 const MAX_EXPLAIN_PATCH_BYTES: usize = 2 * 1024 * 1024;
 const MAX_EXPLAIN_CONTEXT_BYTES: usize = 32 * 1024;
 const MAX_EXPLAIN_RESPONSE_BYTES: usize = 1024 * 1024;
+const MAX_EDIT_FILE_BYTES: u64 = 8 * 1024 * 1024;
 const EXPLAIN_SYSTEM_PROMPT: &str = "You are a code reviewer helping developers understand changes. Explain git patches concisely - what changed, what it does, and why it likely matters. The patch is authoritative about the change itself. Be brief (2-4 sentences for small changes, a short paragraph for complex ones). Skip obvious details like 'a line was added'. Focus on intent and impact.";
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
@@ -124,6 +125,27 @@ struct AnthropicContent {
     #[serde(rename = "type")]
     content_type: String,
     text: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReadWorkspaceFileRequest {
+    workspace_root: String,
+    filepath: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveWorkspaceFileRequest {
+    workspace_root: String,
+    filepath: String,
+    expected_content: String,
+    content: String,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkspaceFile {
+    content: String,
 }
 
 #[derive(Serialize)]
@@ -485,6 +507,96 @@ async fn explain_diff(
             explain_openai_compatible(&client, &settings, &prompt).await
         }
     }
+}
+
+fn validate_workspace_root(value: &str) -> Result<PathBuf, String> {
+    let path = Path::new(value.trim());
+    if !path.is_absolute() {
+        return Err("Session workspace path must be absolute.".to_owned());
+    }
+    let canonical = path
+        .canonicalize()
+        .map_err(|_| "Session workspace is unavailable.".to_owned())?;
+    if !canonical.is_dir() {
+        return Err("Session workspace is unavailable.".to_owned());
+    }
+    Ok(canonical)
+}
+
+fn validate_workspace_filepath(value: &str) -> Result<&Path, String> {
+    let path = Path::new(value.trim());
+    if value.trim().is_empty() {
+        return Err("Use a file path inside the session workspace.".to_owned());
+    }
+    if !path.is_absolute()
+        && path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err("File path escapes the session workspace.".to_owned());
+    }
+    Ok(path)
+}
+
+fn resolve_workspace_file(workspace_root: &str, filepath: &str) -> Result<PathBuf, String> {
+    let root = validate_workspace_root(workspace_root)?;
+    let requested = validate_workspace_filepath(filepath)?;
+    let candidate = if requested.is_absolute() {
+        requested.to_path_buf()
+    } else {
+        root.join(requested)
+    };
+    let canonical = candidate
+        .canonicalize()
+        .map_err(|_| "File was not found in the session workspace.".to_owned())?;
+    if !canonical.starts_with(&root) || !canonical.is_file() {
+        return Err("File path escapes the session workspace.".to_owned());
+    }
+    let metadata = canonical.metadata().map_err(|error| error.to_string())?;
+    if metadata.len() > MAX_EDIT_FILE_BYTES {
+        return Err("File is too large to open in the desktop editor.".to_owned());
+    }
+    Ok(canonical)
+}
+
+fn read_workspace_file_content(path: &Path) -> Result<String, String> {
+    let bytes = fs::read(path).map_err(|error| error.to_string())?;
+    String::from_utf8(bytes)
+        .map_err(|_| "Desktop editing only supports UTF-8 text files.".to_owned())
+}
+
+#[tauri::command]
+fn read_workspace_file(request: ReadWorkspaceFileRequest) -> Result<WorkspaceFile, String> {
+    let path = resolve_workspace_file(&request.workspace_root, &request.filepath)?;
+    Ok(WorkspaceFile {
+        content: read_workspace_file_content(&path)?,
+    })
+}
+
+#[tauri::command]
+fn save_workspace_file(request: SaveWorkspaceFileRequest) -> Result<WorkspaceFile, String> {
+    if request.content.len() as u64 > MAX_EDIT_FILE_BYTES {
+        return Err("Edited file is too large to save.".to_owned());
+    }
+    let path = resolve_workspace_file(&request.workspace_root, &request.filepath)?;
+    let mut options = OpenOptions::new();
+    options.read(true).write(true);
+    let mut file = options.open(&path).map_err(|error| error.to_string())?;
+    let mut current = String::new();
+    file.read_to_string(&mut current)
+        .map_err(|_| "Desktop editing only supports UTF-8 text files.".to_owned())?;
+    if current != request.expected_content {
+        return Err("File changed on disk. Reopen it before saving your edits.".to_owned());
+    }
+    file.seek(SeekFrom::Start(0))
+        .map_err(|error| error.to_string())?;
+    file.set_len(0).map_err(|error| error.to_string())?;
+    file.write_all(request.content.as_bytes())
+        .map_err(|error| error.to_string())?;
+    file.sync_all().map_err(|error| error.to_string())?;
+    Ok(WorkspaceFile {
+        content: request.content,
+    })
 }
 
 fn system_time_iso(value: SystemTime) -> String {
@@ -881,7 +993,9 @@ pub fn run() {
             read_session_records,
             get_desktop_settings,
             save_desktop_settings,
-            explain_diff
+            explain_diff,
+            read_workspace_file,
+            save_workspace_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running agent-vis desktop");
@@ -1024,6 +1138,64 @@ mod tests {
             anthropic.content[0].text.as_deref(),
             Some("Anthropic explanation")
         );
+    }
+
+    #[test]
+    fn workspace_file_reads_and_compare_before_write_saves() {
+        let root = temp_dir("workspace-edit");
+        let nested = root.join("src");
+        fs::create_dir_all(&nested).unwrap();
+        let path = nested.join("app.ts");
+        fs::write(&path, "const value = 1;\n").unwrap();
+
+        let resolved = resolve_workspace_file(root.to_str().unwrap(), "src/app.ts").unwrap();
+        assert_eq!(resolved, path.canonicalize().unwrap());
+        let saved = save_workspace_file(SaveWorkspaceFileRequest {
+            workspace_root: root.to_string_lossy().into_owned(),
+            filepath: "src/app.ts".to_owned(),
+            expected_content: "const value = 1;\n".to_owned(),
+            content: "const value = 2;\n".to_owned(),
+        })
+        .unwrap();
+        assert_eq!(saved.content, "const value = 2;\n");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "const value = 2;\n");
+
+        let error = save_workspace_file(SaveWorkspaceFileRequest {
+            workspace_root: root.to_string_lossy().into_owned(),
+            filepath: "src/app.ts".to_owned(),
+            expected_content: "const value = 1;\n".to_owned(),
+            content: "const value = 3;\n".to_owned(),
+        })
+        .unwrap_err();
+        assert_eq!(
+            error,
+            "File changed on disk. Reopen it before saving your edits."
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn workspace_file_rejects_parent_and_symlink_escapes() {
+        let root = temp_dir("workspace-boundary");
+        let outside = temp_dir("workspace-outside");
+        fs::write(outside.join("secret.txt"), "secret").unwrap();
+
+        assert_eq!(
+            resolve_workspace_file(root.to_str().unwrap(), "../secret.txt").unwrap_err(),
+            "File path escapes the session workspace."
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            symlink(outside.join("secret.txt"), root.join("linked.txt")).unwrap();
+            assert_eq!(
+                resolve_workspace_file(root.to_str().unwrap(), "linked.txt").unwrap_err(),
+                "File path escapes the session workspace."
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(outside).unwrap();
     }
 
     #[test]
