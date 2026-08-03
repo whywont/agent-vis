@@ -10,13 +10,27 @@ import {
   type TimelineEvent,
   visibleTimelineEvents,
 } from "./timeline-pagination";
+import {
+  loadTimelineFilterPreferences,
+  saveTimelineFilterPreferences,
+  type TimelineFilterPreferences,
+} from "./timeline-filter-preferences";
 
-const DEFAULT_FILTERS = new Set(["file_change", "user_message", "agent_message", "shell_command"]);
 const INITIAL_EVENT_LIMIT = 350;
 
-export default function DesktopTimeline({ events, sessionCwd }: { events: AppEvent[]; sessionCwd: string }) {
-  const [activeFilters, setActiveFilters] = useState(DEFAULT_FILTERS);
-  const [showTokenUsage, setShowTokenUsage] = useState(false);
+export default function DesktopTimeline({
+  events,
+  sessionCwd,
+  sessionKey,
+}: {
+  events: AppEvent[];
+  sessionCwd: string;
+  sessionKey: string;
+}) {
+  const [filterPreferences, setFilterPreferences] = useState<TimelineFilterPreferences>(() =>
+    loadTimelineFilterPreferences(sessionKey)
+  );
+  const { activeFilters, showTokenUsage } = filterPreferences;
   const [collapseToken, setCollapseToken] = useState(0);
   const [eventLimit, setEventLimit] = useState(INITIAL_EVENT_LIMIT);
   const displayEvents = useMemo<TimelineEvent[]>(() => {
@@ -45,10 +59,20 @@ export default function DesktopTimeline({ events, sessionCwd }: { events: AppEve
   const page = paginateTimelineEvents(visibleEvents, eventLimit, INITIAL_EVENT_LIMIT);
 
   function toggleFilter(key: string) {
-    setActiveFilters((current) => {
-      const next = new Set(current);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
+    setFilterPreferences((current) => {
+      const activeFilters = new Set(current.activeFilters);
+      if (activeFilters.has(key)) activeFilters.delete(key);
+      else activeFilters.add(key);
+      const next = { ...current, activeFilters };
+      saveTimelineFilterPreferences(sessionKey, next);
+      return next;
+    });
+  }
+
+  function toggleTokenUsage() {
+    setFilterPreferences((current) => {
+      const next = { ...current, showTokenUsage: !current.showTokenUsage };
+      saveTimelineFilterPreferences(sessionKey, next);
       return next;
     });
   }
@@ -60,7 +84,7 @@ export default function DesktopTimeline({ events, sessionCwd }: { events: AppEve
         activeFilters={activeFilters}
         showTokenUsage={showTokenUsage}
         onToggleFilter={toggleFilter}
-        onToggleTokenUsage={() => setShowTokenUsage((visible) => !visible)}
+        onToggleTokenUsage={toggleTokenUsage}
         onCollapseAll={() => setCollapseToken((token) => token + 1)}
       />
       <div className="timeline">

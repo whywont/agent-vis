@@ -11,6 +11,9 @@ interface DesktopSessionListProps {
   currentFile: string | null;
   loading: boolean;
   error: string;
+  settingsActive: boolean;
+  onOpenSettings: () => void;
+  onHideSessions: () => void;
   onSelectSession: (files: string) => void;
 }
 
@@ -34,8 +37,14 @@ function localDate(value: string): string {
 
 function visibleProject(session: SessionMeta): string | null {
   if (!session.project) return null;
-  const workspaceName = session.cwd.replace(/\/+$/, "").split("/").pop();
-  return workspaceName === session.project ? null : session.project;
+  const workspacePath = session.cwd
+    .replace(/^\/(?:Users|home)\/[^/]+\/?/, "")
+    .replace(/\/+$/, "");
+  const workspaceName = workspacePath.split("/").pop();
+  const encodedWorkspacePath = workspacePath.replaceAll("/", "-");
+  return workspaceName === session.project || encodedWorkspacePath === session.project
+    ? null
+    : session.project;
 }
 
 export default function DesktopSessionList({
@@ -43,6 +52,9 @@ export default function DesktopSessionList({
   currentFile,
   loading,
   error,
+  settingsActive,
+  onOpenSettings,
+  onHideSessions,
   onSelectSession,
 }: DesktopSessionListProps) {
   const [search, setSearch] = useState("");
@@ -96,33 +108,23 @@ export default function DesktopSessionList({
           value={search}
           onChange={(event) => setSearch(event.target.value)}
         />
-        <div className="session-options-wrap">
-          <button
-            className={`session-options-btn${activeOptions ? " active" : ""}`}
-            onClick={() => setOptionsOpen((open) => !open)}
-            title="Sort, group, and filter"
-          >
-            {activeOptions ? `⊞ ${activeOptions}` : "⊞"}
-          </button>
-          {optionsOpen && (
-            <div className="session-options-dropdown">
-              <OptionGroup label="Sort" values={[
-                ["newest", "Newest first"],
-                ["oldest", "Oldest first"],
-                ["project", "By project"],
-              ]} selected={sortBy} onSelect={(value) => setSortBy(value as SortBy)} />
-              <OptionGroup label="Group" values={[
-                ["date", "By date"],
-                ["project", "By project"],
-                ["none", "No grouping"],
-              ]} selected={groupBy} onSelect={(value) => setGroupBy(value as GroupBy)} />
-              <OptionGroup label="Source" values={[
-                ["all", "All sources"],
-                ["claude", "Claude Code"],
-                ["codex", "Codex"],
-              ]} selected={sourceFilter} onSelect={(value) => setSourceFilter(value as SourceFilter)} />
-            </div>
-          )}
+        <div className="desktop-session-actions">
+          <SessionOptions
+            activeOptions={activeOptions}
+            optionsOpen={optionsOpen}
+            setOptionsOpen={setOptionsOpen}
+            sortBy={sortBy}
+            setSortBy={setSortBy}
+            groupBy={groupBy}
+            setGroupBy={setGroupBy}
+            sourceFilter={sourceFilter}
+            setSourceFilter={setSourceFilter}
+          />
+          <SessionUtilityActions
+            settingsActive={settingsActive}
+            onOpenSettings={onOpenSettings}
+            onHideSessions={onHideSessions}
+          />
         </div>
       </div>
       <div className="session-list">
@@ -158,6 +160,90 @@ export default function DesktopSessionList({
         )}
       </div>
     </div>
+  );
+}
+
+function SessionOptions({
+  activeOptions,
+  optionsOpen,
+  setOptionsOpen,
+  sortBy,
+  setSortBy,
+  groupBy,
+  setGroupBy,
+  sourceFilter,
+  setSourceFilter,
+}: {
+  activeOptions: number;
+  optionsOpen: boolean;
+  setOptionsOpen: (value: boolean | ((open: boolean) => boolean)) => void;
+  sortBy: SortBy;
+  setSortBy: (value: SortBy) => void;
+  groupBy: GroupBy;
+  setGroupBy: (value: GroupBy) => void;
+  sourceFilter: SourceFilter;
+  setSourceFilter: (value: SourceFilter) => void;
+}) {
+  return (
+    <div className="session-options-wrap">
+      <button
+        className={`session-options-btn${activeOptions ? " active" : ""}`}
+        onClick={() => setOptionsOpen((open) => !open)}
+        title="Sort, group, and filter"
+      >
+        {activeOptions ? `⊞ ${activeOptions}` : "⊞"}
+      </button>
+      {optionsOpen && (
+        <div className="session-options-dropdown">
+          <OptionGroup label="Sort" values={[
+            ["newest", "Newest first"],
+            ["oldest", "Oldest first"],
+            ["project", "By project"],
+          ]} selected={sortBy} onSelect={(value) => setSortBy(value as SortBy)} />
+          <OptionGroup label="Group" values={[
+            ["date", "By date"],
+            ["project", "By project"],
+            ["none", "No grouping"],
+          ]} selected={groupBy} onSelect={(value) => setGroupBy(value as GroupBy)} />
+          <OptionGroup label="Source" values={[
+            ["all", "All sources"],
+            ["claude", "Claude Code"],
+            ["codex", "Codex"],
+          ]} selected={sourceFilter} onSelect={(value) => setSourceFilter(value as SourceFilter)} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SessionUtilityActions({
+  settingsActive,
+  onOpenSettings,
+  onHideSessions,
+}: {
+  settingsActive: boolean;
+  onOpenSettings: () => void;
+  onHideSessions: () => void;
+}) {
+  return (
+    <>
+      <button
+        className={`settings-nav-btn desktop-session-control${settingsActive ? " active" : ""}`}
+        onClick={onOpenSettings}
+        title="Settings"
+        aria-label="Open settings"
+      >
+        &#9881;
+      </button>
+      <button
+        className="desktop-panel-toggle desktop-session-control"
+        onClick={onHideSessions}
+        title="Hide sessions"
+        aria-label="Hide sessions sidebar"
+      >
+        &#8249;
+      </button>
+    </>
   );
 }
 

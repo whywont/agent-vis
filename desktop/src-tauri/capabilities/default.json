@@ -3,5 +3,5 @@
   "identifier": "main-window",
   "description": "Minimal capabilities for the agent-vis desktop renderer",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "core:window:allow-start-dragging"]
 }
