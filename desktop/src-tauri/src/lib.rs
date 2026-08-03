@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
@@ -16,6 +16,10 @@ const MAX_GROUPED_FILES: usize = 32;
 const MAX_SETTINGS_FILE_BYTES: usize = 64 * 1024;
 const MAX_SECRET_LENGTH: usize = 16 * 1024;
 const SETTINGS_FILE: &str = "settings.json";
+const KEYCHAIN_SERVICE: &str = "dev.agentvis.desktop";
+const ANTHROPIC_KEY_ACCOUNT: &str = "anthropic-api-key";
+const LOCAL_KEY_ACCOUNT: &str = "local-api-key";
+const OPENROUTER_KEY_ACCOUNT: &str = "openrouter-api-key";
 const MAX_EXPLAIN_PATH_BYTES: usize = 4 * 1024;
 const MAX_EXPLAIN_PATCH_BYTES: usize = 2 * 1024 * 1024;
 const MAX_EXPLAIN_CONTEXT_BYTES: usize = 32 * 1024;
@@ -43,8 +47,11 @@ struct DesktopSettingsFile {
     local_base_url: String,
     #[serde(default = "default_explain_instructions")]
     explain_instructions: String,
+    #[serde(default, skip_serializing)]
     anthropic_api_key: String,
+    #[serde(default, skip_serializing)]
     local_api_key: String,
+    #[serde(default, skip_serializing)]
     open_router_api_key: String,
 }
 
@@ -62,7 +69,7 @@ impl Default for DesktopSettingsFile {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DesktopSettings {
     provider: ExplainProvider,
@@ -74,17 +81,86 @@ struct DesktopSettings {
     open_router_key_configured: bool,
 }
 
-impl From<&DesktopSettingsFile> for DesktopSettings {
-    fn from(settings: &DesktopSettingsFile) -> Self {
+impl DesktopSettings {
+    fn new(settings: &DesktopSettingsFile, secrets: &ExplainSecrets) -> Self {
         Self {
             provider: settings.provider,
             model: settings.model.clone(),
             local_base_url: settings.local_base_url.clone(),
             explain_instructions: settings.explain_instructions.clone(),
-            anthropic_key_configured: !settings.anthropic_api_key.is_empty(),
-            local_key_configured: !settings.local_api_key.is_empty(),
-            open_router_key_configured: !settings.open_router_api_key.is_empty(),
+            anthropic_key_configured: secrets.anthropic_api_key.is_some(),
+            local_key_configured: secrets.local_api_key.is_some(),
+            open_router_key_configured: secrets.open_router_api_key.is_some(),
         }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BoundLocalSecret {
+    endpoint: String,
+    api_key: String,
+}
+
+#[derive(Default)]
+struct ExplainSecrets {
+    anthropic_api_key: Option<String>,
+    local_api_key: Option<String>,
+    open_router_api_key: Option<String>,
+}
+
+trait SecretStore {
+    fn get(&self, account: &str) -> Result<Option<String>, String>;
+    fn set(&self, account: &str, secret: &str) -> Result<(), String>;
+    fn delete(&self, account: &str) -> Result<(), String>;
+}
+
+struct SystemSecretStore;
+
+#[cfg(target_os = "macos")]
+impl SecretStore for SystemSecretStore {
+    fn get(&self, account: &str) -> Result<Option<String>, String> {
+        const ITEM_NOT_FOUND: i32 = -25_300;
+        match security_framework::passwords::get_generic_password(KEYCHAIN_SERVICE, account) {
+            Ok(secret) => String::from_utf8(secret)
+                .map(Some)
+                .map_err(|_| "A Keychain API key is not valid UTF-8.".to_owned()),
+            Err(error) if error.code() == ITEM_NOT_FOUND => Ok(None),
+            Err(error) => Err(format!("Could not read API key from Keychain: {error}")),
+        }
+    }
+
+    fn set(&self, account: &str, secret: &str) -> Result<(), String> {
+        security_framework::passwords::set_generic_password(
+            KEYCHAIN_SERVICE,
+            account,
+            secret.as_bytes(),
+        )
+        .map_err(|error| format!("Could not save API key to Keychain: {error}"))
+    }
+
+    fn delete(&self, account: &str) -> Result<(), String> {
+        const ITEM_NOT_FOUND: i32 = -25_300;
+        match security_framework::passwords::delete_generic_password(KEYCHAIN_SERVICE, account) {
+            Ok(()) => Ok(()),
+            Err(error) if error.code() == ITEM_NOT_FOUND => Ok(()),
+            Err(error) => Err(format!("Could not remove API key from Keychain: {error}")),
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+impl SecretStore for SystemSecretStore {
+    fn get(&self, _account: &str) -> Result<Option<String>, String> {
+        Ok(None)
+    }
+
+    fn set(&self, _account: &str, _secret: &str) -> Result<(), String> {
+        Err("Secure API key storage currently requires macOS Keychain.".to_owned())
+    }
+
+    fn delete(&self, _account: &str) -> Result<(), String> {
+        Err("Secure API key storage currently requires macOS Keychain.".to_owned())
     }
 }
 
@@ -232,10 +308,6 @@ fn validate_desktop_settings(settings: &mut DesktopSettingsFile) -> Result<(), S
         .trim_end_matches('/')
         .to_owned();
     settings.explain_instructions = settings.explain_instructions.trim().to_owned();
-    settings.anthropic_api_key = settings.anthropic_api_key.trim().to_owned();
-    settings.local_api_key = settings.local_api_key.trim().to_owned();
-    settings.open_router_api_key = settings.open_router_api_key.trim().to_owned();
-
     if settings.model.is_empty() {
         return Err("A model name is required.".to_owned());
     }
@@ -252,27 +324,108 @@ fn validate_desktop_settings(settings: &mut DesktopSettingsFile) -> Result<(), S
         return Err("Local model endpoint is too long.".to_owned());
     }
     if settings.provider == ExplainProvider::OpenaiCompatible {
-        let valid_scheme = settings.local_base_url.starts_with("http://")
-            || settings.local_base_url.starts_with("https://");
-        let remainder = settings
-            .local_base_url
-            .split_once("://")
-            .map(|(_, value)| value)
-            .unwrap_or_default();
-        if !valid_scheme || remainder.is_empty() || remainder.chars().any(char::is_whitespace) {
+        let endpoint = reqwest::Url::parse(&settings.local_base_url)
+            .map_err(|_| "Use a valid HTTP(S) model endpoint.".to_owned())?;
+        let host = endpoint
+            .host_str()
+            .ok_or_else(|| "Use a valid HTTP(S) model endpoint.".to_owned())?;
+        let loopback_host = host.trim_start_matches('[').trim_end_matches(']');
+        let loopback = loopback_host.eq_ignore_ascii_case("localhost")
+            || loopback_host
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|address| address.is_loopback());
+        if endpoint.scheme() != "https" && !(endpoint.scheme() == "http" && loopback) {
             return Err("Use a valid HTTP(S) local model endpoint.".to_owned());
         }
-    }
-    for secret in [
-        &settings.anthropic_api_key,
-        &settings.local_api_key,
-        &settings.open_router_api_key,
-    ] {
-        if secret.len() > MAX_SECRET_LENGTH {
-            return Err("API key is too long.".to_owned());
+        if !endpoint.username().is_empty() || endpoint.password().is_some() {
+            return Err("Model endpoints cannot contain credentials.".to_owned());
         }
     }
     Ok(())
+}
+
+fn validate_secret(secret: &str) -> Result<String, String> {
+    let secret = secret.trim().to_owned();
+    if secret.len() > MAX_SECRET_LENGTH {
+        return Err("API key is too long.".to_owned());
+    }
+    Ok(secret)
+}
+
+fn read_bound_local_secret(store: &impl SecretStore) -> Result<Option<BoundLocalSecret>, String> {
+    store
+        .get(LOCAL_KEY_ACCOUNT)?
+        .map(|value| {
+            serde_json::from_str(&value)
+                .map_err(|_| "The local API key stored in Keychain is invalid.".to_owned())
+        })
+        .transpose()
+}
+
+fn read_explain_secrets(
+    store: &impl SecretStore,
+    local_base_url: &str,
+) -> Result<ExplainSecrets, String> {
+    let local = read_bound_local_secret(store)?
+        .filter(|secret| secret.endpoint == local_base_url)
+        .map(|secret| secret.api_key);
+    Ok(ExplainSecrets {
+        anthropic_api_key: store.get(ANTHROPIC_KEY_ACCOUNT)?,
+        local_api_key: local,
+        open_router_api_key: store.get(OPENROUTER_KEY_ACCOUNT)?,
+    })
+}
+
+fn migrate_legacy_secrets(
+    path: &Path,
+    settings: &mut DesktopSettingsFile,
+    store: &impl SecretStore,
+) -> Result<(), String> {
+    let legacy_anthropic = validate_secret(&settings.anthropic_api_key)?;
+    let legacy_local = validate_secret(&settings.local_api_key)?;
+    let legacy_openrouter = validate_secret(&settings.open_router_api_key)?;
+    let has_legacy =
+        !legacy_anthropic.is_empty() || !legacy_local.is_empty() || !legacy_openrouter.is_empty();
+    if !legacy_anthropic.is_empty() {
+        store.set(ANTHROPIC_KEY_ACCOUNT, &legacy_anthropic)?;
+        if store.get(ANTHROPIC_KEY_ACCOUNT)?.as_deref() != Some(legacy_anthropic.as_str()) {
+            return Err("Could not verify the migrated Anthropic API key.".to_owned());
+        }
+    }
+    if !legacy_local.is_empty() {
+        let bound = serde_json::to_string(&BoundLocalSecret {
+            endpoint: settings.local_base_url.clone(),
+            api_key: legacy_local,
+        })
+        .map_err(|error| error.to_string())?;
+        store.set(LOCAL_KEY_ACCOUNT, &bound)?;
+        if store.get(LOCAL_KEY_ACCOUNT)?.as_deref() != Some(bound.as_str()) {
+            return Err("Could not verify the migrated local API key.".to_owned());
+        }
+    }
+    if !legacy_openrouter.is_empty() {
+        store.set(OPENROUTER_KEY_ACCOUNT, &legacy_openrouter)?;
+        if store.get(OPENROUTER_KEY_ACCOUNT)?.as_deref() != Some(legacy_openrouter.as_str()) {
+            return Err("Could not verify the migrated OpenRouter API key.".to_owned());
+        }
+    }
+    settings.anthropic_api_key.clear();
+    settings.local_api_key.clear();
+    settings.open_router_api_key.clear();
+    if has_legacy {
+        write_desktop_settings(path, settings)?;
+    }
+    Ok(())
+}
+
+fn load_desktop_settings(
+    path: &Path,
+    store: &impl SecretStore,
+) -> Result<(DesktopSettingsFile, ExplainSecrets), String> {
+    let mut settings = read_desktop_settings(path)?;
+    migrate_legacy_secrets(path, &mut settings, store)?;
+    let secrets = read_explain_secrets(store, &settings.local_base_url)?;
+    Ok((settings, secrets))
 }
 
 fn write_desktop_settings(path: &Path, settings: &DesktopSettingsFile) -> Result<(), String> {
@@ -303,8 +456,9 @@ fn write_desktop_settings(path: &Path, settings: &DesktopSettingsFile) -> Result
 
 #[tauri::command]
 fn get_desktop_settings(app: tauri::AppHandle) -> Result<DesktopSettings, String> {
-    let settings = read_desktop_settings(&desktop_settings_path(&app)?)?;
-    Ok(DesktopSettings::from(&settings))
+    let (settings, secrets) =
+        load_desktop_settings(&desktop_settings_path(&app)?, &SystemSecretStore)?;
+    Ok(DesktopSettings::new(&settings, &secrets))
 }
 
 #[tauri::command]
@@ -313,31 +467,77 @@ fn save_desktop_settings(
     request: SaveDesktopSettingsRequest,
 ) -> Result<DesktopSettings, String> {
     let path = desktop_settings_path(&app)?;
-    let mut settings = read_desktop_settings(&path)?;
+    let store = SystemSecretStore;
+    save_desktop_settings_with_store(&path, request, &store)
+}
+
+fn save_desktop_settings_with_store(
+    path: &Path,
+    request: SaveDesktopSettingsRequest,
+    store: &impl SecretStore,
+) -> Result<DesktopSettings, String> {
+    let (mut settings, _) = load_desktop_settings(path, store)?;
+    let previous_local_base_url = settings.local_base_url.clone();
     settings.provider = request.provider;
     settings.model = request.model;
     settings.local_base_url = request.local_base_url;
     settings.explain_instructions = request.explain_instructions;
-
-    if !request.anthropic_api_key.trim().is_empty() {
-        settings.anthropic_api_key = request.anthropic_api_key;
-    } else if request.clear_anthropic_api_key {
-        settings.anthropic_api_key.clear();
-    }
-    if !request.local_api_key.trim().is_empty() {
-        settings.local_api_key = request.local_api_key;
-    } else if request.clear_local_api_key {
-        settings.local_api_key.clear();
-    }
-    if !request.open_router_api_key.trim().is_empty() {
-        settings.open_router_api_key = request.open_router_api_key;
-    } else if request.clear_open_router_api_key {
-        settings.open_router_api_key.clear();
-    }
-
     validate_desktop_settings(&mut settings)?;
-    write_desktop_settings(&path, &settings)?;
-    Ok(DesktopSettings::from(&settings))
+    let anthropic_key = validate_secret(&request.anthropic_api_key)?;
+    let local_key = validate_secret(&request.local_api_key)?;
+    let openrouter_key = validate_secret(&request.open_router_api_key)?;
+    let stored_local = read_bound_local_secret(store)?;
+    if previous_local_base_url != settings.local_base_url
+        && local_key.is_empty()
+        && !request.clear_local_api_key
+        && stored_local.is_some()
+    {
+        return Err(
+            "The model endpoint changed. Re-enter the local API key or clear it before saving."
+                .to_owned(),
+        );
+    }
+
+    update_secret(
+        store,
+        ANTHROPIC_KEY_ACCOUNT,
+        &anthropic_key,
+        request.clear_anthropic_api_key,
+    )?;
+    if !local_key.is_empty() {
+        let bound = serde_json::to_string(&BoundLocalSecret {
+            endpoint: settings.local_base_url.clone(),
+            api_key: local_key,
+        })
+        .map_err(|error| error.to_string())?;
+        store.set(LOCAL_KEY_ACCOUNT, &bound)?;
+    } else if request.clear_local_api_key {
+        store.delete(LOCAL_KEY_ACCOUNT)?;
+    }
+    update_secret(
+        store,
+        OPENROUTER_KEY_ACCOUNT,
+        &openrouter_key,
+        request.clear_open_router_api_key,
+    )?;
+    write_desktop_settings(path, &settings)?;
+    let secrets = read_explain_secrets(store, &settings.local_base_url)?;
+    Ok(DesktopSettings::new(&settings, &secrets))
+}
+
+fn update_secret(
+    store: &impl SecretStore,
+    account: &str,
+    secret: &str,
+    clear: bool,
+) -> Result<(), String> {
+    if !secret.is_empty() {
+        store.set(account, secret)
+    } else if clear {
+        store.delete(account)
+    } else {
+        Ok(())
+    }
 }
 
 fn validate_explain_request(request: &mut ExplainDiffRequest) -> Result<(), String> {
@@ -431,6 +631,7 @@ async fn response_bytes_limited(response: reqwest::Response) -> Result<Vec<u8>, 
 async fn explain_openai_compatible(
     client: &reqwest::Client,
     settings: &DesktopSettingsFile,
+    secrets: &ExplainSecrets,
     user_prompt: &str,
 ) -> Result<String, String> {
     let open_router = settings.provider == ExplainProvider::Openrouter;
@@ -440,9 +641,9 @@ async fn explain_openai_compatible(
         settings.local_base_url.as_str()
     };
     let api_key = if open_router {
-        settings.open_router_api_key.as_str()
+        secrets.open_router_api_key.as_deref().unwrap_or_default()
     } else {
-        settings.local_api_key.as_str()
+        secrets.local_api_key.as_deref().unwrap_or_default()
     };
     if open_router {
         required_explain_api_key(api_key)?;
@@ -497,9 +698,11 @@ async fn explain_openai_compatible(
 async fn explain_anthropic(
     client: &reqwest::Client,
     settings: &DesktopSettingsFile,
+    secrets: &ExplainSecrets,
     user_prompt: &str,
 ) -> Result<String, String> {
-    let api_key = required_explain_api_key(&settings.anthropic_api_key)?;
+    let api_key =
+        required_explain_api_key(secrets.anthropic_api_key.as_deref().unwrap_or_default())?;
     let response = client
         .post("https://api.anthropic.com/v1/messages")
         .header("x-api-key", api_key)
@@ -545,18 +748,25 @@ async fn explain_diff(
     mut request: ExplainDiffRequest,
 ) -> Result<String, String> {
     validate_explain_request(&mut request)?;
-    let settings = read_desktop_settings(&desktop_settings_path(&app)?)?;
+    let (mut settings, secrets) =
+        load_desktop_settings(&desktop_settings_path(&app)?, &SystemSecretStore)?;
+    validate_desktop_settings(&mut settings)?;
     let client = explain_http_client()?;
     let prompt = explain_user_prompt(&request);
     match settings.provider {
-        ExplainProvider::Anthropic => explain_anthropic(&client, &settings, &prompt).await,
+        ExplainProvider::Anthropic => {
+            explain_anthropic(&client, &settings, &secrets, &prompt).await
+        }
         ExplainProvider::OpenaiCompatible | ExplainProvider::Openrouter => {
-            explain_openai_compatible(&client, &settings, &prompt).await
+            explain_openai_compatible(&client, &settings, &secrets, &prompt).await
         }
     }
 }
 
-fn validate_workspace_root(value: &str) -> Result<PathBuf, String> {
+fn validate_workspace_root(
+    value: &str,
+    trusted_roots: &HashSet<PathBuf>,
+) -> Result<PathBuf, String> {
     let path = Path::new(value.trim());
     if !path.is_absolute() {
         return Err("Session workspace path must be absolute.".to_owned());
@@ -567,11 +777,20 @@ fn validate_workspace_root(value: &str) -> Result<PathBuf, String> {
     if !canonical.is_dir() {
         return Err("Session workspace is unavailable.".to_owned());
     }
+    if canonical.parent().is_none() {
+        return Err("The filesystem root cannot be used as a session workspace.".to_owned());
+    }
+    if !trusted_roots.contains(&canonical) {
+        return Err("Session workspace is not authorized.".to_owned());
+    }
     Ok(canonical)
 }
 
-fn git_branch_for_workspace(workspace_root: &str) -> Result<Option<String>, String> {
-    let root = validate_workspace_root(workspace_root)?;
+fn git_branch_for_workspace(
+    workspace_root: &str,
+    trusted_roots: &HashSet<PathBuf>,
+) -> Result<Option<String>, String> {
+    let root = validate_workspace_root(workspace_root, trusted_roots)?;
     let output = Command::new("git")
         .args(["branch", "--show-current"])
         .current_dir(root)
@@ -586,7 +805,8 @@ fn git_branch_for_workspace(workspace_root: &str) -> Result<Option<String>, Stri
 
 #[tauri::command]
 fn get_git_branch(workspace_root: String) -> Result<Option<String>, String> {
-    git_branch_for_workspace(&workspace_root)
+    let roots = trusted_workspace_roots()?;
+    git_branch_for_workspace(&workspace_root, &roots)
 }
 
 fn validate_workspace_filepath(value: &str) -> Result<&Path, String> {
@@ -604,8 +824,12 @@ fn validate_workspace_filepath(value: &str) -> Result<&Path, String> {
     Ok(path)
 }
 
-fn resolve_workspace_file(workspace_root: &str, filepath: &str) -> Result<PathBuf, String> {
-    let root = validate_workspace_root(workspace_root)?;
+fn resolve_workspace_file(
+    workspace_root: &str,
+    filepath: &str,
+    trusted_roots: &HashSet<PathBuf>,
+) -> Result<PathBuf, String> {
+    let root = validate_workspace_root(workspace_root, trusted_roots)?;
     let requested = validate_workspace_filepath(filepath)?;
     let candidate = if requested.is_absolute() {
         requested.to_path_buf()
@@ -633,7 +857,8 @@ fn read_workspace_file_content(path: &Path) -> Result<String, String> {
 
 #[tauri::command]
 fn read_workspace_file(request: ReadWorkspaceFileRequest) -> Result<WorkspaceFile, String> {
-    let path = resolve_workspace_file(&request.workspace_root, &request.filepath)?;
+    let roots = trusted_workspace_roots()?;
+    let path = resolve_workspace_file(&request.workspace_root, &request.filepath, &roots)?;
     Ok(WorkspaceFile {
         content: read_workspace_file_content(&path)?,
     })
@@ -641,10 +866,18 @@ fn read_workspace_file(request: ReadWorkspaceFileRequest) -> Result<WorkspaceFil
 
 #[tauri::command]
 fn save_workspace_file(request: SaveWorkspaceFileRequest) -> Result<WorkspaceFile, String> {
+    let roots = trusted_workspace_roots()?;
+    save_workspace_file_with_roots(request, &roots)
+}
+
+fn save_workspace_file_with_roots(
+    request: SaveWorkspaceFileRequest,
+    roots: &HashSet<PathBuf>,
+) -> Result<WorkspaceFile, String> {
     if request.content.len() as u64 > MAX_EDIT_FILE_BYTES {
         return Err("Edited file is too large to save.".to_owned());
     }
-    let path = resolve_workspace_file(&request.workspace_root, &request.filepath)?;
+    let path = resolve_workspace_file(&request.workspace_root, &request.filepath, roots)?;
     let mut options = OpenOptions::new();
     options.read(true).write(true);
     let mut file = options.open(&path).map_err(|error| error.to_string())?;
@@ -867,9 +1100,20 @@ fn collect_claude(root: &Path, output: &mut Vec<SessionMeta>) {
     }
 }
 
-#[tauri::command]
-fn list_sessions() -> Result<Vec<SessionMeta>, String> {
-    let home = dirs::home_dir().ok_or("Could not resolve the home directory")?;
+fn collect_trusted_workspace_roots(sessions: &[SessionMeta]) -> HashSet<PathBuf> {
+    sessions
+        .iter()
+        .filter_map(|session| {
+            let path = Path::new(session.cwd.trim());
+            if !path.is_absolute() {
+                return None;
+            }
+            path.canonicalize().ok().filter(|root| root.is_dir())
+        })
+        .collect()
+}
+
+fn discover_sessions(home: &Path) -> Vec<SessionMeta> {
     let mut sessions = Vec::new();
     collect_codex(
         &home.join(".codex/sessions"),
@@ -877,6 +1121,18 @@ fn list_sessions() -> Result<Vec<SessionMeta>, String> {
         &mut sessions,
     );
     collect_claude(&home.join(".claude/projects"), &mut sessions);
+    sessions
+}
+
+fn trusted_workspace_roots() -> Result<HashSet<PathBuf>, String> {
+    let home = dirs::home_dir().ok_or("Could not resolve the home directory")?;
+    Ok(collect_trusted_workspace_roots(&discover_sessions(&home)))
+}
+
+#[tauri::command]
+fn list_sessions() -> Result<Vec<SessionMeta>, String> {
+    let home = dirs::home_dir().ok_or("Could not resolve the home directory")?;
+    let mut sessions = discover_sessions(&home);
     sessions.sort_by(|left, right| right.modified.cmp(&left.modified));
 
     let mut grouped = Vec::<SessionMeta>::new();
@@ -1078,8 +1334,55 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::{Cell, RefCell};
     use std::io::Write;
     use std::path::PathBuf;
+
+    #[derive(Default)]
+    struct MemorySecretStore {
+        values: RefCell<HashMap<String, String>>,
+        fail_writes: Cell<bool>,
+    }
+
+    impl SecretStore for MemorySecretStore {
+        fn get(&self, account: &str) -> Result<Option<String>, String> {
+            Ok(self.values.borrow().get(account).cloned())
+        }
+
+        fn set(&self, account: &str, secret: &str) -> Result<(), String> {
+            if self.fail_writes.get() {
+                return Err("simulated Keychain failure".to_owned());
+            }
+            self.values
+                .borrow_mut()
+                .insert(account.to_owned(), secret.to_owned());
+            Ok(())
+        }
+
+        fn delete(&self, account: &str) -> Result<(), String> {
+            self.values.borrow_mut().remove(account);
+            Ok(())
+        }
+    }
+
+    fn save_settings_request(local_base_url: &str) -> SaveDesktopSettingsRequest {
+        SaveDesktopSettingsRequest {
+            provider: ExplainProvider::OpenaiCompatible,
+            model: "qwen3:8b".to_owned(),
+            local_base_url: local_base_url.to_owned(),
+            explain_instructions: DEFAULT_EXPLAIN_INSTRUCTIONS.to_owned(),
+            anthropic_api_key: String::new(),
+            local_api_key: String::new(),
+            open_router_api_key: String::new(),
+            clear_anthropic_api_key: false,
+            clear_local_api_key: false,
+            clear_open_router_api_key: false,
+        }
+    }
+
+    fn trusted_roots(root: &Path) -> HashSet<PathBuf> {
+        HashSet::from([root.canonicalize().unwrap()])
+    }
 
     fn temp_dir(name: &str) -> PathBuf {
         let nonce = SystemTime::now()
@@ -1101,11 +1404,12 @@ mod tests {
 
     #[test]
     fn desktop_settings_hide_secrets_and_preserve_configured_flags() {
-        let settings = DesktopSettingsFile {
-            anthropic_api_key: "secret".to_owned(),
-            ..DesktopSettingsFile::default()
+        let settings = DesktopSettingsFile::default();
+        let secrets = ExplainSecrets {
+            anthropic_api_key: Some("secret".to_owned()),
+            ..ExplainSecrets::default()
         };
-        let public = DesktopSettings::from(&settings);
+        let public = DesktopSettings::new(&settings, &secrets);
 
         assert!(public.anthropic_key_configured);
         assert!(!public.local_key_configured);
@@ -1148,8 +1452,18 @@ mod tests {
         settings.local_base_url = "file:///tmp/model".to_owned();
         assert_eq!(
             validate_desktop_settings(&mut settings).unwrap_err(),
+            "Use a valid HTTP(S) model endpoint."
+        );
+
+        settings.local_base_url = "http://models.example.com/v1".to_owned();
+        assert_eq!(
+            validate_desktop_settings(&mut settings).unwrap_err(),
             "Use a valid HTTP(S) local model endpoint."
         );
+        settings.local_base_url = "https://models.example.com/v1".to_owned();
+        validate_desktop_settings(&mut settings).unwrap();
+        settings.local_base_url = "http://[::1]:11434/v1".to_owned();
+        validate_desktop_settings(&mut settings).unwrap();
     }
 
     #[test]
@@ -1166,12 +1480,106 @@ mod tests {
         write_desktop_settings(&path, &settings).unwrap();
         let loaded = read_desktop_settings(&path).unwrap();
         assert_eq!(loaded.provider, ExplainProvider::Openrouter);
-        assert_eq!(loaded.open_router_api_key, "secret");
+        assert!(loaded.open_router_api_key.is_empty());
+        let json = fs::read_to_string(&path).unwrap();
+        assert!(!json.contains("secret"));
+        assert!(!json.contains("ApiKey"));
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(path.metadata().unwrap().permissions().mode() & 0o777, 0o600);
         }
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn migrates_plaintext_api_keys_before_sanitizing_settings() {
+        let directory = temp_dir("settings-migration");
+        let path = directory.join(SETTINGS_FILE);
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "provider": "openai-compatible",
+                "model": "qwen3:8b",
+                "localBaseUrl": "http://127.0.0.1:11434/v1",
+                "anthropicApiKey": "anthropic-secret",
+                "localApiKey": "local-secret",
+                "openRouterApiKey": "openrouter-secret"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let store = MemorySecretStore::default();
+
+        let (_, secrets) = load_desktop_settings(&path, &store).unwrap();
+
+        assert_eq!(
+            secrets.anthropic_api_key.as_deref(),
+            Some("anthropic-secret")
+        );
+        assert_eq!(secrets.local_api_key.as_deref(), Some("local-secret"));
+        assert_eq!(
+            secrets.open_router_api_key.as_deref(),
+            Some("openrouter-secret")
+        );
+        let json = fs::read_to_string(&path).unwrap();
+        assert!(!json.contains("secret"));
+        assert!(!json.contains("ApiKey"));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn failed_keychain_migration_keeps_plaintext_for_retry() {
+        let directory = temp_dir("settings-migration-failure");
+        let path = directory.join(SETTINGS_FILE);
+        let legacy = serde_json::json!({
+            "provider": "anthropic",
+            "model": "claude-haiku-4-5",
+            "localBaseUrl": "http://127.0.0.1:11434/v1",
+            "anthropicApiKey": "still-recoverable"
+        });
+        fs::write(&path, serde_json::to_vec_pretty(&legacy).unwrap()).unwrap();
+        let store = MemorySecretStore::default();
+        store.fail_writes.set(true);
+
+        assert!(load_desktop_settings(&path, &store).is_err());
+        assert!(fs::read_to_string(&path)
+            .unwrap()
+            .contains("still-recoverable"));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn changing_endpoint_requires_reentering_or_clearing_local_key() {
+        let directory = temp_dir("endpoint-binding");
+        let path = directory.join(SETTINGS_FILE);
+        let store = MemorySecretStore::default();
+        let mut first = save_settings_request("http://127.0.0.1:11434/v1");
+        first.local_api_key = "local-secret".to_owned();
+        save_desktop_settings_with_store(&path, first, &store).unwrap();
+
+        let changed = save_settings_request("https://models.example.com/v1");
+        assert_eq!(
+            save_desktop_settings_with_store(&path, changed, &store).unwrap_err(),
+            "The model endpoint changed. Re-enter the local API key or clear it before saving."
+        );
+        assert_eq!(
+            read_desktop_settings(&path).unwrap().local_base_url,
+            "http://127.0.0.1:11434/v1"
+        );
+
+        let mut reentered = save_settings_request("https://models.example.com/v1");
+        reentered.local_api_key = "new-local-secret".to_owned();
+        let public = save_desktop_settings_with_store(&path, reentered, &store).unwrap();
+        assert!(public.local_key_configured);
+        let secrets = read_explain_secrets(&store, "https://models.example.com/v1").unwrap();
+        assert_eq!(secrets.local_api_key.as_deref(), Some("new-local-secret"));
+
+        let mut cleared = save_settings_request("https://other.example.com/v1");
+        cleared.clear_local_api_key = true;
+        let public = save_desktop_settings_with_store(&path, cleared, &store).unwrap();
+        assert!(!public.local_key_configured);
+        assert!(store.get(LOCAL_KEY_ACCOUNT).unwrap().is_none());
         fs::remove_dir_all(directory).unwrap();
     }
 
@@ -1253,24 +1661,32 @@ mod tests {
         let path = nested.join("app.ts");
         fs::write(&path, "const value = 1;\n").unwrap();
 
-        let resolved = resolve_workspace_file(root.to_str().unwrap(), "src/app.ts").unwrap();
+        let roots = trusted_roots(&root);
+        let resolved =
+            resolve_workspace_file(root.to_str().unwrap(), "src/app.ts", &roots).unwrap();
         assert_eq!(resolved, path.canonicalize().unwrap());
-        let saved = save_workspace_file(SaveWorkspaceFileRequest {
-            workspace_root: root.to_string_lossy().into_owned(),
-            filepath: "src/app.ts".to_owned(),
-            expected_content: "const value = 1;\n".to_owned(),
-            content: "const value = 2;\n".to_owned(),
-        })
+        let saved = save_workspace_file_with_roots(
+            SaveWorkspaceFileRequest {
+                workspace_root: root.to_string_lossy().into_owned(),
+                filepath: "src/app.ts".to_owned(),
+                expected_content: "const value = 1;\n".to_owned(),
+                content: "const value = 2;\n".to_owned(),
+            },
+            &roots,
+        )
         .unwrap();
         assert_eq!(saved.content, "const value = 2;\n");
         assert_eq!(fs::read_to_string(&path).unwrap(), "const value = 2;\n");
 
-        let error = save_workspace_file(SaveWorkspaceFileRequest {
-            workspace_root: root.to_string_lossy().into_owned(),
-            filepath: "src/app.ts".to_owned(),
-            expected_content: "const value = 1;\n".to_owned(),
-            content: "const value = 3;\n".to_owned(),
-        })
+        let error = save_workspace_file_with_roots(
+            SaveWorkspaceFileRequest {
+                workspace_root: root.to_string_lossy().into_owned(),
+                filepath: "src/app.ts".to_owned(),
+                expected_content: "const value = 1;\n".to_owned(),
+                content: "const value = 3;\n".to_owned(),
+            },
+            &roots,
+        )
         .unwrap_err();
         assert_eq!(
             error,
@@ -1288,8 +1704,9 @@ mod tests {
             .status()
             .unwrap();
         assert!(initialized.success());
+        let roots = trusted_roots(&root);
         assert_eq!(
-            git_branch_for_workspace(root.to_str().unwrap()).unwrap(),
+            git_branch_for_workspace(root.to_str().unwrap(), &roots).unwrap(),
             Some("desktop-test-branch".to_owned())
         );
         fs::remove_dir_all(root).unwrap();
@@ -1300,9 +1717,10 @@ mod tests {
         let root = temp_dir("workspace-boundary");
         let outside = temp_dir("workspace-outside");
         fs::write(outside.join("secret.txt"), "secret").unwrap();
+        let roots = trusted_roots(&root);
 
         assert_eq!(
-            resolve_workspace_file(root.to_str().unwrap(), "../secret.txt").unwrap_err(),
+            resolve_workspace_file(root.to_str().unwrap(), "../secret.txt", &roots).unwrap_err(),
             "File path escapes the session workspace."
         );
 
@@ -1311,12 +1729,63 @@ mod tests {
             use std::os::unix::fs::symlink;
             symlink(outside.join("secret.txt"), root.join("linked.txt")).unwrap();
             assert_eq!(
-                resolve_workspace_file(root.to_str().unwrap(), "linked.txt").unwrap_err(),
+                resolve_workspace_file(root.to_str().unwrap(), "linked.txt", &roots).unwrap_err(),
                 "File path escapes the session workspace."
             );
         }
         fs::remove_dir_all(root).unwrap();
         fs::remove_dir_all(outside).unwrap();
+    }
+
+    #[test]
+    fn workspace_root_requires_a_trusted_session_cwd() {
+        let root = temp_dir("workspace-authorized");
+        let untrusted = temp_dir("workspace-untrusted");
+        let roots = trusted_roots(&root);
+
+        assert_eq!(
+            validate_workspace_root(untrusted.to_str().unwrap(), &roots).unwrap_err(),
+            "Session workspace is not authorized."
+        );
+        assert_eq!(
+            validate_workspace_root(root.to_str().unwrap(), &roots).unwrap(),
+            root.canonicalize().unwrap()
+        );
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(untrusted).unwrap();
+    }
+
+    #[test]
+    fn trusted_workspace_roots_come_from_session_cwds() {
+        let root = temp_dir("workspace-session-cwd");
+        let sessions = vec![SessionMeta {
+            file: "session.jsonl".to_owned(),
+            files: vec!["session.jsonl".to_owned()],
+            id: "session".to_owned(),
+            cwd: root.to_string_lossy().into_owned(),
+            model: String::new(),
+            timestamp: String::new(),
+            modified: String::new(),
+            cli_version: String::new(),
+            source: "codex",
+            project: None,
+        }];
+
+        assert_eq!(
+            collect_trusted_workspace_roots(&sessions),
+            trusted_roots(&root)
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn filesystem_root_is_never_an_authorized_workspace() {
+        let roots = HashSet::from([PathBuf::from("/")]);
+        assert_eq!(
+            validate_workspace_root("/", &roots).unwrap_err(),
+            "The filesystem root cannot be used as a session workspace."
+        );
     }
 
     #[test]
