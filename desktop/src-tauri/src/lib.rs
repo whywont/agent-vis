@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
 use std::time::SystemTime;
 use tauri::Manager;
@@ -523,6 +524,25 @@ fn validate_workspace_root(value: &str) -> Result<PathBuf, String> {
     Ok(canonical)
 }
 
+fn git_branch_for_workspace(workspace_root: &str) -> Result<Option<String>, String> {
+    let root = validate_workspace_root(workspace_root)?;
+    let output = Command::new("git")
+        .args(["branch", "--show-current"])
+        .current_dir(root)
+        .output()
+        .map_err(|error| format!("Unable to run Git: {error}"))?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let branch = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    Ok((!branch.is_empty()).then_some(branch))
+}
+
+#[tauri::command]
+fn get_git_branch(workspace_root: String) -> Result<Option<String>, String> {
+    git_branch_for_workspace(&workspace_root)
+}
+
 fn validate_workspace_filepath(value: &str) -> Result<&Path, String> {
     let path = Path::new(value.trim());
     if value.trim().is_empty() {
@@ -994,6 +1014,7 @@ pub fn run() {
             get_desktop_settings,
             save_desktop_settings,
             explain_diff,
+            get_git_branch,
             read_workspace_file,
             save_workspace_file
         ])
@@ -1170,6 +1191,22 @@ mod tests {
         assert_eq!(
             error,
             "File changed on disk. Reopen it before saving your edits."
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reads_the_current_workspace_git_branch() {
+        let root = temp_dir("git-branch");
+        let initialized = Command::new("git")
+            .args(["init", "-b", "desktop-test-branch"])
+            .current_dir(&root)
+            .status()
+            .unwrap();
+        assert!(initialized.success());
+        assert_eq!(
+            git_branch_for_workspace(root.to_str().unwrap()).unwrap(),
+            Some("desktop-test-branch".to_owned())
         );
         fs::remove_dir_all(root).unwrap();
     }

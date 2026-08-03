@@ -65,9 +65,6 @@ export default function App() {
             &#9881;
           </button>
         </div>
-        <div className="sidebar-subheader">
-          <span className="subtitle">session explorer</span>
-        </div>
         <DesktopSessionList
           sessions={sessions}
           currentFile={selectedFiles}

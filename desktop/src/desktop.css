@@ -375,6 +375,10 @@
   min-height: 0;
 }
 
+.session-controls {
+  height: 39px;
+}
+
 @media (max-width: 760px) {
   .desktop-header-tabs {
     align-self: stretch;

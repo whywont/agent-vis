@@ -1,4 +1,5 @@
 import type { FileChangeEvent } from "@/lib/types";
+import { workspaceRelativePath } from "./workspace-path";
 
 export const FILE_CARD_WIDTH = 290;
 export const FILE_CARD_HEIGHT = 390;
@@ -41,13 +42,14 @@ export interface ImportEdge {
   label: string;
 }
 
-export function groupFileChanges(fileChanges: FileChangeEvent[]): FileGroup[] {
+export function groupFileChanges(fileChanges: FileChangeEvent[], sessionCwd = ""): FileGroup[] {
   const files = new Map<string, FileChangeEvent[]>();
   for (const change of fileChanges) {
     for (const file of change.files) {
-      const existing = files.get(file.path);
+      const displayPath = workspaceRelativePath(file.path, sessionCwd);
+      const existing = files.get(displayPath);
       if (existing) existing.push(change);
-      else files.set(file.path, [change]);
+      else files.set(displayPath, [change]);
     }
   }
 

@@ -4,6 +4,7 @@ import type { AppEvent, FileChangeEvent } from "@/lib/types";
 import { formatTime } from "@/utils/format";
 import DesktopDiffView from "./DesktopDiffView";
 import { precedingUserRequest } from "./explain-context";
+import { workspaceRelativePath } from "./workspace-path";
 import {
   FILE_CARD_HEIGHT,
   FILE_CARD_PEEK_OFFSET_Y,
@@ -46,7 +47,10 @@ export default function DesktopFileCardStack({
 
   const filename = filepath.split("/").pop() || filepath;
   const activeChange = changes[activeIndex];
-  const activeAction = activeChange.files.find((file) => file.path === filepath)?.action ?? "update";
+  const actionForChange = (change: FileChangeEvent) => change.files.find(
+    (file) => workspaceRelativePath(file.path, sessionCwd) === filepath,
+  )?.action ?? "update";
+  const activeAction = actionForChange(activeChange);
   const contextText = precedingUserRequest(events, activeChange.ts);
   const newest = activeIndex === changes.length - 1;
   const peeks = changes
@@ -61,7 +65,7 @@ export default function DesktopFileCardStack({
     <>
       <div className="desktop-file-card-stack" style={{ width, height }}>
         {peeks.map(({ change, index }, peekIndex) => {
-          const action = change.files.find((file) => file.path === filepath)?.action ?? "update";
+          const action = actionForChange(change);
           const colors = actionStyle(action);
           return (
             <button

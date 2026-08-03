@@ -32,7 +32,7 @@ export default function DesktopFilesCanvas({ events, sessionCwd }: { events: App
     () => events.filter((event): event is FileChangeEvent => event.kind === "file_change"),
     [events],
   );
-  const groups = useMemo(() => groupFileChanges(fileChanges), [fileChanges]);
+  const groups = useMemo(() => groupFileChanges(fileChanges, sessionCwd), [fileChanges, sessionCwd]);
   const layout = useMemo(() => computeFilesCanvasLayout(groups), [groups]);
   const edges = useMemo(() => buildImportEdges(groups), [groups]);
   const cardPositions = useMemo(() => {
