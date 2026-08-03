@@ -388,22 +388,32 @@
 }
 
 .file-tree-panel {
-  scrollbar-color: var(--border-light) transparent;
+  scrollbar-color: var(--text-dim) var(--bg);
   scrollbar-width: thin;
 }
 
 .file-tree-panel::-webkit-scrollbar {
-  width: 6px;
+  width: 7px;
+  background: var(--bg);
+}
+
+.file-tree-panel::-webkit-scrollbar-track {
+  background: var(--bg);
 }
 
 .file-tree-panel::-webkit-scrollbar-thumb {
   border-radius: 999px;
-  background: var(--border-light);
+  border: 2px solid var(--bg);
+  background: var(--text-dim);
+}
+
+.file-tree-panel::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
 }
 
 .file-tree-resize-handle {
   position: relative;
-  width: 9px;
+  width: 7px;
   background: transparent;
 }
 
@@ -411,7 +421,7 @@
   position: absolute;
   top: 0;
   bottom: 0;
-  left: 4px;
+  left: 3px;
   width: 1px;
   content: "";
   background: var(--border);
@@ -422,7 +432,7 @@
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 7px;
+  width: 6px;
   height: 30px;
   border: 1px solid var(--border-light);
   border-radius: 999px;
