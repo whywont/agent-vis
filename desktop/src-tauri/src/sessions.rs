@@ -11,18 +11,18 @@ const DEFAULT_BATCH_BYTES: usize = 64 * 1024 * 1024;
 const MAX_SESSION_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_GROUPED_FILES: usize = 32;
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub(crate) struct SessionMeta {
-    file: String,
-    files: Vec<String>,
-    id: String,
-    cwd: String,
-    model: String,
-    timestamp: String,
-    modified: String,
-    cli_version: String,
-    source: &'static str,
-    project: Option<String>,
+    pub(crate) file: String,
+    pub(crate) files: Vec<String>,
+    pub(crate) id: String,
+    pub(crate) cwd: String,
+    pub(crate) model: String,
+    pub(crate) timestamp: String,
+    pub(crate) modified: String,
+    pub(crate) cli_version: String,
+    pub(crate) source: &'static str,
+    pub(crate) project: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -264,7 +264,7 @@ fn collect_trusted_workspace_roots(sessions: &[SessionMeta]) -> HashSet<PathBuf>
         .collect()
 }
 
-fn discover_sessions(home: &Path) -> Vec<SessionMeta> {
+pub(crate) fn discover_sessions(home: &Path) -> Vec<SessionMeta> {
     let mut sessions = Vec::new();
     collect_codex(
         &home.join(".codex/sessions"),
@@ -300,7 +300,10 @@ pub(crate) fn list_sessions() -> Result<Vec<SessionMeta>, String> {
     Ok(grouped)
 }
 
-fn resolve_session_ref(home: &Path, file_ref: &str) -> Result<(PathBuf, &'static str), String> {
+pub(crate) fn resolve_session_ref(
+    home: &Path,
+    file_ref: &str,
+) -> Result<(PathBuf, &'static str), String> {
     let (root, relative, source) = if let Some(relative) = file_ref.strip_prefix(CLAUDE_PREFIX) {
         (home.join(".claude/projects"), relative, "claude-code")
     } else {

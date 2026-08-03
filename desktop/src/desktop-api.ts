@@ -51,8 +51,29 @@ interface WorkspaceFile {
   content: string;
 }
 
+export interface SessionSearchResult {
+  sessionKey: string;
+  eventTs: string;
+  eventKind: string;
+  snippet: string;
+  highlights: string[];
+  score: number;
+}
+
+export interface SessionSearchResponse {
+  results: SessionSearchResult[];
+  indexing: boolean;
+  indexedFiles: number;
+  totalFiles: number;
+  error?: string | null;
+}
+
 export function listSessions(): Promise<SessionMeta[]> {
   return invoke<SessionMeta[]>("list_sessions");
+}
+
+export function searchSessions(query: string): Promise<SessionSearchResponse> {
+  return invoke<SessionSearchResponse>("search_sessions", { query });
 }
 
 export function getGitBranch(workspaceRoot: string): Promise<string | null> {
