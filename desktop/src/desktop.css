@@ -388,27 +388,11 @@
 }
 
 .file-tree-panel {
-  scrollbar-color: var(--text-dim) var(--bg);
-  scrollbar-width: thin;
+  scrollbar-width: none;
 }
 
 .file-tree-panel::-webkit-scrollbar {
-  width: 7px;
-  background: var(--bg);
-}
-
-.file-tree-panel::-webkit-scrollbar-track {
-  background: var(--bg);
-}
-
-.file-tree-panel::-webkit-scrollbar-thumb {
-  border-radius: 999px;
-  border: 2px solid var(--bg);
-  background: var(--text-dim);
-}
-
-.file-tree-panel::-webkit-scrollbar-thumb:hover {
-  background: var(--text-muted);
+  display: none;
 }
 
 .file-tree-resize-handle {
