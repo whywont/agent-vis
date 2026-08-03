@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { isSameOriginRequest } from "@/lib/request-origin";
 
 /**
  * Same-origin guard for all /api routes.
@@ -15,33 +16,12 @@ import { NextRequest, NextResponse } from "next/server";
  * header are non-browser clients (curl, native tooling) and are allowed — they
  * are not the CSRF threat this guards against.
  */
-function isSameOrigin(req: NextRequest): boolean {
-  const host = req.headers.get("host");
-  if (!host) return false;
-
-  const origin = req.headers.get("origin");
-  if (origin) {
-    try {
-      return new URL(origin).host === host;
-    } catch {
-      return false;
-    }
-  }
-
-  const referer = req.headers.get("referer");
-  if (referer) {
-    try {
-      return new URL(referer).host === host;
-    } catch {
-      return false;
-    }
-  }
-
-  return true;
-}
-
 export function middleware(req: NextRequest) {
-  if (!isSameOrigin(req)) {
+  if (!isSameOriginRequest(
+    req.headers.get("host"),
+    req.headers.get("origin"),
+    req.headers.get("referer"),
+  )) {
     return new NextResponse("Cross-origin request blocked", { status: 403 });
   }
   return NextResponse.next();
