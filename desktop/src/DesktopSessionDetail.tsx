@@ -99,7 +99,7 @@ export default function DesktopSessionDetail({
       ) : error ? (
         <div className="desktop-detail-state error">{error}</div>
       ) : activeTab === "files" ? (
-        <DesktopFilesCanvas events={events} />
+        <DesktopFilesCanvas events={events} sessionCwd={cwd} />
       ) : (
         <div className="detail-body">
           <div className="file-tree-panel" ref={fileTreeRef}>

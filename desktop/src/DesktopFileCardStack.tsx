@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import type { FileChangeEvent } from "@/lib/types";
+import type { AppEvent, FileChangeEvent } from "@/lib/types";
 import { formatTime } from "@/utils/format";
 import DesktopDiffView from "./DesktopDiffView";
+import { precedingUserRequest } from "./explain-context";
 import {
   FILE_CARD_HEIGHT,
   FILE_CARD_PEEK_OFFSET_Y,
@@ -23,9 +24,13 @@ function actionStyle(action: string) {
 export default function DesktopFileCardStack({
   filepath,
   changes,
+  events,
+  sessionCwd,
 }: {
   filepath: string;
   changes: FileChangeEvent[];
+  events: AppEvent[];
+  sessionCwd: string;
 }) {
   const [activeIndex, setActiveIndex] = useState(changes.length - 1);
   const [expanded, setExpanded] = useState(false);
@@ -42,6 +47,7 @@ export default function DesktopFileCardStack({
   const filename = filepath.split("/").pop() || filepath;
   const activeChange = changes[activeIndex];
   const activeAction = activeChange.files.find((file) => file.path === filepath)?.action ?? "update";
+  const contextText = precedingUserRequest(events, activeChange.ts);
   const newest = activeIndex === changes.length - 1;
   const peeks = changes
     .map((change, index) => ({ change, index }))
@@ -105,7 +111,7 @@ export default function DesktopFileCardStack({
             </button>
           </div>
           <div className="file-card-body">
-            <DesktopDiffView patch={activeChange.patch} />
+            <DesktopDiffView patch={activeChange.patch} contextText={contextText} workspaceRoot={sessionCwd} />
           </div>
         </div>
       </div>
@@ -138,7 +144,7 @@ export default function DesktopFileCardStack({
               <button type="button" className="card-expanded-close" onClick={() => setExpanded(false)}>close esc</button>
             </div>
             <div className="card-expanded-body">
-              <DesktopDiffView patch={activeChange.patch} />
+              <DesktopDiffView patch={activeChange.patch} contextText={contextText} workspaceRoot={sessionCwd} />
             </div>
           </div>
         </div>,

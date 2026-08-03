@@ -61,7 +61,7 @@ export default function DesktopSettingsPage({ onBack }: { onBack: () => void }) 
       setClearAnthropicApiKey(false);
       setClearLocalApiKey(false);
       setClearOpenRouterApiKey(false);
-      setStatus("Saved locally for desktop explain support.");
+      setStatus("Saved. The next diff explanation uses these settings.");
     } catch (reason: unknown) {
       setStatus(reason instanceof Error ? reason.message : String(reason));
     }
@@ -81,7 +81,7 @@ export default function DesktopSettingsPage({ onBack }: { onBack: () => void }) 
       <div className="settings-grid">
         <section className="settings-card">
           <h3>Explain model</h3>
-          <p>Choose the provider to use when native diff explanations are enabled. It does not change the model running Codex or Claude Code.</p>
+          <p>Choose the provider behind each desktop diff&apos;s <em>explain</em> button. It does not change the model running Codex or Claude Code.</p>
           <label>
             Provider
             <select value={settings.provider} onChange={(event) => set("provider", event.target.value as ExplainProvider)}>

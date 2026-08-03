@@ -4,6 +4,7 @@ import Toolbar from "@/components/Toolbar";
 import type { AppEvent } from "@/lib/types";
 import { formatTime, formatTokens, toDisplayString, truncate } from "@/utils/format";
 import DesktopDiffView from "./DesktopDiffView";
+import { precedingUserRequest } from "./explain-context";
 import {
   paginateTimelineEvents,
   type TimelineEvent,
@@ -68,6 +69,7 @@ export default function DesktopTimeline({ events, sessionCwd }: { events: AppEve
             key={`${collapseToken}:${event.kind}:${event.ts}:${index}`}
             event={event}
             sessionCwd={sessionCwd}
+            contextText={event.kind === "file_change" ? precedingUserRequest(events, event.ts) : undefined}
           />
         ))}
         {page.remaining > 0 && (
@@ -94,9 +96,11 @@ export default function DesktopTimeline({ events, sessionCwd }: { events: AppEve
 function DesktopTimelineEntry({
   event,
   sessionCwd,
+  contextText,
 }: {
   event: TimelineEvent;
   sessionCwd: string;
+  contextText?: string;
 }) {
   const [collapsed, setCollapsed] = useState(true);
   if (event.kind === "token_usage") {
@@ -123,7 +127,7 @@ function DesktopTimelineEntry({
       <div className={`entry-body${collapsed ? " collapsed" : ""}${event.kind === "file_change" ? " diff-body" : ""}`}>
         <div className="entry-body-section">
           {event.kind === "file_change" ? (
-            <DesktopDiffView patch={event.patch} />
+            <DesktopDiffView patch={event.patch} contextText={contextText} workspaceRoot={sessionCwd} />
           ) : event.kind === "shell_command" ? (
             <>
               {event.workdir && <><span className="desktop-workdir">[{event.workdir || sessionCwd}]</span>{"\n"}</>}

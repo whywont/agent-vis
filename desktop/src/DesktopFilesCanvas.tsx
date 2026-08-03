@@ -17,7 +17,7 @@ interface HoveredEdge extends ImportEdge {
   y: number;
 }
 
-export default function DesktopFilesCanvas({ events }: { events: AppEvent[] }) {
+export default function DesktopFilesCanvas({ events, sessionCwd }: { events: AppEvent[]; sessionCwd: string }) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const lastPointer = useRef({ x: 0, y: 0 });
   const isPanning = useRef(false);
@@ -206,7 +206,7 @@ export default function DesktopFilesCanvas({ events }: { events: AppEvent[] }) {
                 const file = group.files.find((entry) => entry.path === card.path)!;
                 return (
                   <div key={card.path} style={{ position: "absolute", left: card.x, top: card.y }}>
-                    <DesktopFileCardStack filepath={card.path} changes={file.changes} />
+                    <DesktopFileCardStack filepath={card.path} changes={file.changes} events={events} sessionCwd={sessionCwd} />
                   </div>
                 );
               })}

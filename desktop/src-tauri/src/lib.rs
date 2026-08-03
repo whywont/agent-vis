@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
 use std::time::SystemTime;
 use tauri::Manager;
 
@@ -14,6 +15,12 @@ const MAX_GROUPED_FILES: usize = 32;
 const MAX_SETTINGS_FILE_BYTES: usize = 64 * 1024;
 const MAX_SECRET_LENGTH: usize = 16 * 1024;
 const SETTINGS_FILE: &str = "settings.json";
+const MAX_EXPLAIN_PATH_BYTES: usize = 4 * 1024;
+const MAX_EXPLAIN_PATCH_BYTES: usize = 2 * 1024 * 1024;
+const MAX_EXPLAIN_CONTEXT_BYTES: usize = 32 * 1024;
+const MAX_EXPLAIN_RESPONSE_BYTES: usize = 1024 * 1024;
+const MAX_EDIT_FILE_BYTES: u64 = 8 * 1024 * 1024;
+const EXPLAIN_SYSTEM_PROMPT: &str = "You are a code reviewer helping developers understand changes. Explain git patches concisely - what changed, what it does, and why it likely matters. The patch is authoritative about the change itself. Be brief (2-4 sentences for small changes, a short paragraph for complex ones). Skip obvious details like 'a line was added'. Focus on intent and impact.";
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -83,6 +90,62 @@ struct SaveDesktopSettingsRequest {
     clear_anthropic_api_key: bool,
     clear_local_api_key: bool,
     clear_open_router_api_key: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExplainDiffRequest {
+    filepath: String,
+    patch: String,
+    context_text: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct OpenAiCompatibleResponse {
+    choices: Vec<OpenAiChoice>,
+}
+
+#[derive(Deserialize)]
+struct OpenAiChoice {
+    message: OpenAiMessage,
+}
+
+#[derive(Deserialize)]
+struct OpenAiMessage {
+    content: String,
+}
+
+#[derive(Deserialize)]
+struct AnthropicResponse {
+    content: Vec<AnthropicContent>,
+}
+
+#[derive(Deserialize)]
+struct AnthropicContent {
+    #[serde(rename = "type")]
+    content_type: String,
+    text: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReadWorkspaceFileRequest {
+    workspace_root: String,
+    filepath: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveWorkspaceFileRequest {
+    workspace_root: String,
+    filepath: String,
+    expected_content: String,
+    content: String,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkspaceFile {
+    content: String,
 }
 
 #[derive(Serialize)]
@@ -251,6 +314,289 @@ fn save_desktop_settings(
     validate_desktop_settings(&mut settings)?;
     write_desktop_settings(&path, &settings)?;
     Ok(DesktopSettings::from(&settings))
+}
+
+fn validate_explain_request(request: &mut ExplainDiffRequest) -> Result<(), String> {
+    request.filepath = request.filepath.trim().to_owned();
+    request.patch = request.patch.trim().to_owned();
+    request.context_text = request
+        .context_text
+        .take()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    if request.filepath.is_empty() || request.filepath.len() > MAX_EXPLAIN_PATH_BYTES {
+        return Err("Use a valid file path for the explanation.".to_owned());
+    }
+    if request.patch.is_empty() {
+        return Err("No patch content".to_owned());
+    }
+    if request.patch.len() > MAX_EXPLAIN_PATCH_BYTES {
+        return Err("Patch is too large to explain.".to_owned());
+    }
+    if request
+        .context_text
+        .as_ref()
+        .is_some_and(|value| value.len() > MAX_EXPLAIN_CONTEXT_BYTES)
+    {
+        return Err("Explanation context is too large.".to_owned());
+    }
+    Ok(())
+}
+
+fn explain_user_prompt(request: &ExplainDiffRequest) -> String {
+    let context = request
+        .context_text
+        .as_ref()
+        .map(|value| format!("User request that triggered this change:\n\"{value}\"\n\n"))
+        .unwrap_or_default();
+    format!(
+        "{context}Explain this patch for {}:\n\n{}",
+        request.filepath, request.patch
+    )
+}
+
+fn explain_http_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(90))
+        .user_agent("agent-vis-desktop/0.1")
+        .build()
+        .map_err(|error| error.to_string())
+}
+
+async fn response_bytes_limited(response: reqwest::Response) -> Result<Vec<u8>, String> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_EXPLAIN_RESPONSE_BYTES as u64)
+    {
+        return Err("Model response is too large.".to_owned());
+    }
+    let bytes = response.bytes().await.map_err(|error| error.to_string())?;
+    if bytes.len() > MAX_EXPLAIN_RESPONSE_BYTES {
+        return Err("Model response is too large.".to_owned());
+    }
+    Ok(bytes.to_vec())
+}
+
+async fn explain_openai_compatible(
+    client: &reqwest::Client,
+    settings: &DesktopSettingsFile,
+    user_prompt: &str,
+) -> Result<String, String> {
+    let open_router = settings.provider == ExplainProvider::Openrouter;
+    let base_url = if open_router {
+        "https://openrouter.ai/api/v1"
+    } else {
+        settings.local_base_url.as_str()
+    };
+    let api_key = if open_router {
+        settings.open_router_api_key.as_str()
+    } else {
+        settings.local_api_key.as_str()
+    };
+    if open_router && api_key.is_empty() {
+        return Err("Add an OpenRouter API key in Settings to use OpenRouter.".to_owned());
+    }
+
+    let mut request =
+        client
+            .post(format!("{base_url}/chat/completions"))
+            .json(&serde_json::json!({
+                "model": settings.model,
+                "stream": false,
+                "max_tokens": 512,
+                "messages": [
+                    { "role": "system", "content": EXPLAIN_SYSTEM_PROMPT },
+                    { "role": "user", "content": user_prompt }
+                ]
+            }));
+    if !api_key.is_empty() {
+        request = request.bearer_auth(api_key);
+    }
+    if open_router {
+        request = request
+            .header("HTTP-Referer", "https://agent-vis.local")
+            .header("X-Title", "agent-vis");
+    }
+    let response = request.send().await.map_err(|error| {
+        if open_router {
+            format!("Could not reach OpenRouter: {error}")
+        } else {
+            format!("Could not reach local model: {error}")
+        }
+    })?;
+    let status = response.status();
+    let bytes = response_bytes_limited(response).await?;
+    if !status.is_success() {
+        return Err(format!(
+            "Model request failed ({status}): {}",
+            String::from_utf8_lossy(&bytes)
+        ));
+    }
+    let payload: OpenAiCompatibleResponse = serde_json::from_slice(&bytes)
+        .map_err(|_| "Model returned an invalid response.".to_owned())?;
+    payload
+        .choices
+        .into_iter()
+        .next()
+        .map(|choice| choice.message.content.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "Model returned no explanation.".to_owned())
+}
+
+async fn explain_anthropic(
+    client: &reqwest::Client,
+    settings: &DesktopSettingsFile,
+    user_prompt: &str,
+) -> Result<String, String> {
+    if settings.anthropic_api_key.is_empty() {
+        return Err("Add an Anthropic API key in Settings to use hosted explanations.".to_owned());
+    }
+    let response = client
+        .post("https://api.anthropic.com/v1/messages")
+        .header("x-api-key", &settings.anthropic_api_key)
+        .header("anthropic-version", "2023-06-01")
+        .json(&serde_json::json!({
+            "model": settings.model,
+            "max_tokens": 512,
+            "system": EXPLAIN_SYSTEM_PROMPT,
+            "messages": [{ "role": "user", "content": user_prompt }]
+        }))
+        .send()
+        .await
+        .map_err(|error| format!("Could not reach Anthropic: {error}"))?;
+    let status = response.status();
+    let bytes = response_bytes_limited(response).await?;
+    if !status.is_success() {
+        return Err(format!(
+            "Anthropic request failed ({status}): {}",
+            String::from_utf8_lossy(&bytes)
+        ));
+    }
+    let payload: AnthropicResponse = serde_json::from_slice(&bytes)
+        .map_err(|_| "Anthropic returned an invalid response.".to_owned())?;
+    let explanation = payload
+        .content
+        .into_iter()
+        .filter(|block| block.content_type == "text")
+        .filter_map(|block| block.text)
+        .collect::<Vec<_>>()
+        .join("")
+        .trim()
+        .to_owned();
+    if explanation.is_empty() {
+        Err("Anthropic returned no explanation.".to_owned())
+    } else {
+        Ok(explanation)
+    }
+}
+
+#[tauri::command]
+async fn explain_diff(
+    app: tauri::AppHandle,
+    mut request: ExplainDiffRequest,
+) -> Result<String, String> {
+    validate_explain_request(&mut request)?;
+    let settings = read_desktop_settings(&desktop_settings_path(&app)?)?;
+    let client = explain_http_client()?;
+    let prompt = explain_user_prompt(&request);
+    match settings.provider {
+        ExplainProvider::Anthropic => explain_anthropic(&client, &settings, &prompt).await,
+        ExplainProvider::OpenaiCompatible | ExplainProvider::Openrouter => {
+            explain_openai_compatible(&client, &settings, &prompt).await
+        }
+    }
+}
+
+fn validate_workspace_root(value: &str) -> Result<PathBuf, String> {
+    let path = Path::new(value.trim());
+    if !path.is_absolute() {
+        return Err("Session workspace path must be absolute.".to_owned());
+    }
+    let canonical = path
+        .canonicalize()
+        .map_err(|_| "Session workspace is unavailable.".to_owned())?;
+    if !canonical.is_dir() {
+        return Err("Session workspace is unavailable.".to_owned());
+    }
+    Ok(canonical)
+}
+
+fn validate_workspace_filepath(value: &str) -> Result<&Path, String> {
+    let path = Path::new(value.trim());
+    if value.trim().is_empty() {
+        return Err("Use a file path inside the session workspace.".to_owned());
+    }
+    if !path.is_absolute()
+        && path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err("File path escapes the session workspace.".to_owned());
+    }
+    Ok(path)
+}
+
+fn resolve_workspace_file(workspace_root: &str, filepath: &str) -> Result<PathBuf, String> {
+    let root = validate_workspace_root(workspace_root)?;
+    let requested = validate_workspace_filepath(filepath)?;
+    let candidate = if requested.is_absolute() {
+        requested.to_path_buf()
+    } else {
+        root.join(requested)
+    };
+    let canonical = candidate
+        .canonicalize()
+        .map_err(|_| "File was not found in the session workspace.".to_owned())?;
+    if !canonical.starts_with(&root) || !canonical.is_file() {
+        return Err("File path escapes the session workspace.".to_owned());
+    }
+    let metadata = canonical.metadata().map_err(|error| error.to_string())?;
+    if metadata.len() > MAX_EDIT_FILE_BYTES {
+        return Err("File is too large to open in the desktop editor.".to_owned());
+    }
+    Ok(canonical)
+}
+
+fn read_workspace_file_content(path: &Path) -> Result<String, String> {
+    let bytes = fs::read(path).map_err(|error| error.to_string())?;
+    String::from_utf8(bytes)
+        .map_err(|_| "Desktop editing only supports UTF-8 text files.".to_owned())
+}
+
+#[tauri::command]
+fn read_workspace_file(request: ReadWorkspaceFileRequest) -> Result<WorkspaceFile, String> {
+    let path = resolve_workspace_file(&request.workspace_root, &request.filepath)?;
+    Ok(WorkspaceFile {
+        content: read_workspace_file_content(&path)?,
+    })
+}
+
+#[tauri::command]
+fn save_workspace_file(request: SaveWorkspaceFileRequest) -> Result<WorkspaceFile, String> {
+    if request.content.len() as u64 > MAX_EDIT_FILE_BYTES {
+        return Err("Edited file is too large to save.".to_owned());
+    }
+    let path = resolve_workspace_file(&request.workspace_root, &request.filepath)?;
+    let mut options = OpenOptions::new();
+    options.read(true).write(true);
+    let mut file = options.open(&path).map_err(|error| error.to_string())?;
+    let mut current = String::new();
+    file.read_to_string(&mut current)
+        .map_err(|_| "Desktop editing only supports UTF-8 text files.".to_owned())?;
+    if current != request.expected_content {
+        return Err("File changed on disk. Reopen it before saving your edits.".to_owned());
+    }
+    file.seek(SeekFrom::Start(0))
+        .map_err(|error| error.to_string())?;
+    file.set_len(0).map_err(|error| error.to_string())?;
+    file.write_all(request.content.as_bytes())
+        .map_err(|error| error.to_string())?;
+    file.sync_all().map_err(|error| error.to_string())?;
+    Ok(WorkspaceFile {
+        content: request.content,
+    })
 }
 
 fn system_time_iso(value: SystemTime) -> String {
@@ -646,7 +992,10 @@ pub fn run() {
             list_sessions,
             read_session_records,
             get_desktop_settings,
-            save_desktop_settings
+            save_desktop_settings,
+            explain_diff,
+            read_workspace_file,
+            save_workspace_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running agent-vis desktop");
@@ -731,6 +1080,122 @@ mod tests {
             assert_eq!(path.metadata().unwrap().permissions().mode() & 0o777, 0o600);
         }
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn validates_and_builds_explain_prompts() {
+        let mut request = ExplainDiffRequest {
+            filepath: "  src/App.tsx  ".to_owned(),
+            patch: "  *** Update File: src/App.tsx\n+const value = 1;  ".to_owned(),
+            context_text: Some("  add the value  ".to_owned()),
+        };
+
+        validate_explain_request(&mut request).unwrap();
+        assert_eq!(request.filepath, "src/App.tsx");
+        assert_eq!(request.context_text.as_deref(), Some("add the value"));
+        assert_eq!(
+            explain_user_prompt(&request),
+            "User request that triggered this change:\n\"add the value\"\n\nExplain this patch for src/App.tsx:\n\n*** Update File: src/App.tsx\n+const value = 1;"
+        );
+    }
+
+    #[test]
+    fn rejects_empty_or_oversized_explain_requests() {
+        let mut empty = ExplainDiffRequest {
+            filepath: "src/App.tsx".to_owned(),
+            patch: "   ".to_owned(),
+            context_text: None,
+        };
+        assert_eq!(
+            validate_explain_request(&mut empty).unwrap_err(),
+            "No patch content"
+        );
+
+        let mut oversized = ExplainDiffRequest {
+            filepath: "src/App.tsx".to_owned(),
+            patch: "x".repeat(MAX_EXPLAIN_PATCH_BYTES + 1),
+            context_text: None,
+        };
+        assert_eq!(
+            validate_explain_request(&mut oversized).unwrap_err(),
+            "Patch is too large to explain."
+        );
+    }
+
+    #[test]
+    fn provider_response_shapes_extract_text() {
+        let openai: OpenAiCompatibleResponse = serde_json::from_value(serde_json::json!({
+            "choices": [{ "message": { "content": "OpenAI explanation" } }]
+        }))
+        .unwrap();
+        assert_eq!(openai.choices[0].message.content, "OpenAI explanation");
+
+        let anthropic: AnthropicResponse = serde_json::from_value(serde_json::json!({
+            "content": [{ "type": "text", "text": "Anthropic explanation" }]
+        }))
+        .unwrap();
+        assert_eq!(
+            anthropic.content[0].text.as_deref(),
+            Some("Anthropic explanation")
+        );
+    }
+
+    #[test]
+    fn workspace_file_reads_and_compare_before_write_saves() {
+        let root = temp_dir("workspace-edit");
+        let nested = root.join("src");
+        fs::create_dir_all(&nested).unwrap();
+        let path = nested.join("app.ts");
+        fs::write(&path, "const value = 1;\n").unwrap();
+
+        let resolved = resolve_workspace_file(root.to_str().unwrap(), "src/app.ts").unwrap();
+        assert_eq!(resolved, path.canonicalize().unwrap());
+        let saved = save_workspace_file(SaveWorkspaceFileRequest {
+            workspace_root: root.to_string_lossy().into_owned(),
+            filepath: "src/app.ts".to_owned(),
+            expected_content: "const value = 1;\n".to_owned(),
+            content: "const value = 2;\n".to_owned(),
+        })
+        .unwrap();
+        assert_eq!(saved.content, "const value = 2;\n");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "const value = 2;\n");
+
+        let error = save_workspace_file(SaveWorkspaceFileRequest {
+            workspace_root: root.to_string_lossy().into_owned(),
+            filepath: "src/app.ts".to_owned(),
+            expected_content: "const value = 1;\n".to_owned(),
+            content: "const value = 3;\n".to_owned(),
+        })
+        .unwrap_err();
+        assert_eq!(
+            error,
+            "File changed on disk. Reopen it before saving your edits."
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn workspace_file_rejects_parent_and_symlink_escapes() {
+        let root = temp_dir("workspace-boundary");
+        let outside = temp_dir("workspace-outside");
+        fs::write(outside.join("secret.txt"), "secret").unwrap();
+
+        assert_eq!(
+            resolve_workspace_file(root.to_str().unwrap(), "../secret.txt").unwrap_err(),
+            "File path escapes the session workspace."
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            symlink(outside.join("secret.txt"), root.join("linked.txt")).unwrap();
+            assert_eq!(
+                resolve_workspace_file(root.to_str().unwrap(), "linked.txt").unwrap_err(),
+                "File path escapes the session workspace."
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(outside).unwrap();
     }
 
     #[test]
