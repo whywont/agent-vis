@@ -10,7 +10,7 @@ use tauri::Manager;
 
 const MAX_SETTINGS_FILE_BYTES: usize = 64 * 1024;
 const MAX_SECRET_LENGTH: usize = 16 * 1024;
-pub(crate) const SETTINGS_FILE: &str = "settings.json";
+const SETTINGS_FILE: &str = "settings.json";
 const MAX_EXPLAIN_INSTRUCTIONS_BYTES: usize = 32 * 1024;
 pub(crate) const DEFAULT_EXPLAIN_INSTRUCTIONS: &str = "You are a code reviewer helping developers understand changes. Explain git patches concisely - what changed, what it does, and why it likely matters. The current complete file is supplied for surrounding context; the patch is authoritative about the change itself. Be brief (2-4 sentences for small changes, a short paragraph for complex ones). Skip obvious details like 'a line was added'. Focus on intent and impact.";
 
@@ -59,8 +59,8 @@ pub(crate) struct DesktopSettings {
     model: String,
     local_base_url: String,
     explain_instructions: String,
-    pub(crate) anthropic_key_configured: bool,
-    pub(crate) local_key_configured: bool,
+    anthropic_key_configured: bool,
+    local_key_configured: bool,
     open_router_key_configured: bool,
 }
 
@@ -95,19 +95,19 @@ pub(crate) struct ExplainSecrets {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SaveDesktopSettingsRequest {
-    pub(crate) provider: ExplainProvider,
-    pub(crate) model: String,
-    pub(crate) local_base_url: String,
-    pub(crate) explain_instructions: String,
-    pub(crate) anthropic_api_key: String,
-    pub(crate) local_api_key: String,
-    pub(crate) open_router_api_key: String,
-    pub(crate) clear_anthropic_api_key: bool,
-    pub(crate) clear_local_api_key: bool,
-    pub(crate) clear_open_router_api_key: bool,
+    provider: ExplainProvider,
+    model: String,
+    local_base_url: String,
+    explain_instructions: String,
+    anthropic_api_key: String,
+    local_api_key: String,
+    open_router_api_key: String,
+    clear_anthropic_api_key: bool,
+    clear_local_api_key: bool,
+    clear_open_router_api_key: bool,
 }
 
-pub(crate) fn default_explain_instructions() -> String {
+fn default_explain_instructions() -> String {
     DEFAULT_EXPLAIN_INSTRUCTIONS.to_owned()
 }
 
@@ -118,7 +118,7 @@ pub(crate) fn desktop_settings_path(app: &tauri::AppHandle) -> Result<PathBuf, S
         .map_err(|error| error.to_string())
 }
 
-pub(crate) fn read_desktop_settings(path: &Path) -> Result<DesktopSettingsFile, String> {
+fn read_desktop_settings(path: &Path) -> Result<DesktopSettingsFile, String> {
     match fs::read(path) {
         Ok(contents) => {
             if contents.len() > MAX_SETTINGS_FILE_BYTES {
@@ -195,7 +195,7 @@ fn read_bound_local_secret(store: &impl SecretStore) -> Result<Option<BoundLocal
         .transpose()
 }
 
-pub(crate) fn read_explain_secrets(
+fn read_explain_secrets(
     store: &impl SecretStore,
     local_base_url: &str,
 ) -> Result<ExplainSecrets, String> {
@@ -261,10 +261,7 @@ pub(crate) fn load_desktop_settings(
     Ok((settings, secrets))
 }
 
-pub(crate) fn write_desktop_settings(
-    path: &Path,
-    settings: &DesktopSettingsFile,
-) -> Result<(), String> {
+fn write_desktop_settings(path: &Path, settings: &DesktopSettingsFile) -> Result<(), String> {
     let parent = path.parent().ok_or("Desktop settings path is invalid")?;
     fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     let bytes = serde_json::to_vec_pretty(settings).map_err(|error| error.to_string())?;
@@ -306,7 +303,7 @@ pub(crate) fn save_desktop_settings(
     save_desktop_settings_with_store(&path, request, &SystemSecretStore)
 }
 
-pub(crate) fn save_desktop_settings_with_store(
+fn save_desktop_settings_with_store(
     path: &Path,
     request: SaveDesktopSettingsRequest,
     store: &impl SecretStore,
@@ -372,5 +369,247 @@ fn update_secret(
         store.delete(account)
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::secrets::LOCAL_KEY_ACCOUNT;
+    use serde_json::Value;
+    use std::cell::{Cell, RefCell};
+    use std::collections::HashMap;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[derive(Default)]
+    struct MemorySecretStore {
+        values: RefCell<HashMap<String, String>>,
+        fail_writes: Cell<bool>,
+    }
+
+    impl SecretStore for MemorySecretStore {
+        fn get(&self, account: &str) -> Result<Option<String>, String> {
+            Ok(self.values.borrow().get(account).cloned())
+        }
+
+        fn set(&self, account: &str, secret: &str) -> Result<(), String> {
+            if self.fail_writes.get() {
+                return Err("simulated Keychain failure".to_owned());
+            }
+            self.values
+                .borrow_mut()
+                .insert(account.to_owned(), secret.to_owned());
+            Ok(())
+        }
+
+        fn delete(&self, account: &str) -> Result<(), String> {
+            self.values.borrow_mut().remove(account);
+            Ok(())
+        }
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("agent-vis-{name}-{nonce}"));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn save_settings_request(local_base_url: &str) -> SaveDesktopSettingsRequest {
+        SaveDesktopSettingsRequest {
+            provider: ExplainProvider::OpenaiCompatible,
+            model: "qwen3:8b".to_owned(),
+            local_base_url: local_base_url.to_owned(),
+            explain_instructions: DEFAULT_EXPLAIN_INSTRUCTIONS.to_owned(),
+            anthropic_api_key: String::new(),
+            local_api_key: String::new(),
+            open_router_api_key: String::new(),
+            clear_anthropic_api_key: false,
+            clear_local_api_key: false,
+            clear_open_router_api_key: false,
+        }
+    }
+
+    #[test]
+    fn desktop_settings_hide_secrets_and_preserve_configured_flags() {
+        let settings = DesktopSettingsFile::default();
+        let secrets = ExplainSecrets {
+            anthropic_api_key: Some("secret".to_owned()),
+            ..ExplainSecrets::default()
+        };
+        let public = DesktopSettings::new(&settings, &secrets);
+
+        assert!(public.anthropic_key_configured);
+        assert!(!public.local_key_configured);
+        let value = serde_json::to_value(public).unwrap();
+        assert!(value.get("anthropicApiKey").is_none());
+        assert!(value.get("anthropicKeyConfigured").is_some());
+        assert_eq!(
+            value.get("explainInstructions").and_then(Value::as_str),
+            Some(DEFAULT_EXPLAIN_INSTRUCTIONS)
+        );
+    }
+
+    #[test]
+    fn older_desktop_settings_receive_default_explain_instructions() {
+        let settings: DesktopSettingsFile = serde_json::from_value(serde_json::json!({
+            "provider": "anthropic",
+            "model": "claude-haiku-4-5",
+            "localBaseUrl": "http://127.0.0.1:11434/v1",
+            "anthropicApiKey": "",
+            "localApiKey": "",
+            "openRouterApiKey": ""
+        }))
+        .unwrap();
+
+        assert_eq!(settings.explain_instructions, DEFAULT_EXPLAIN_INSTRUCTIONS);
+    }
+
+    #[test]
+    fn validates_desktop_settings_provider_inputs() {
+        let mut settings = DesktopSettingsFile {
+            provider: ExplainProvider::OpenaiCompatible,
+            model: "  qwen3:8b  ".to_owned(),
+            local_base_url: "http://127.0.0.1:11434/v1/".to_owned(),
+            ..DesktopSettingsFile::default()
+        };
+        validate_desktop_settings(&mut settings).unwrap();
+        assert_eq!(settings.model, "qwen3:8b");
+        assert_eq!(settings.local_base_url, "http://127.0.0.1:11434/v1");
+
+        settings.local_base_url = "file:///tmp/model".to_owned();
+        assert_eq!(
+            validate_desktop_settings(&mut settings).unwrap_err(),
+            "Use a valid HTTP(S) model endpoint."
+        );
+        settings.local_base_url = "http://models.example.com/v1".to_owned();
+        assert_eq!(
+            validate_desktop_settings(&mut settings).unwrap_err(),
+            "Use a valid HTTP(S) local model endpoint."
+        );
+        settings.local_base_url = "https://models.example.com/v1".to_owned();
+        validate_desktop_settings(&mut settings).unwrap();
+        settings.local_base_url = "http://[::1]:11434/v1".to_owned();
+        validate_desktop_settings(&mut settings).unwrap();
+    }
+
+    #[test]
+    fn desktop_settings_round_trip_with_private_permissions() {
+        let directory = temp_dir("settings");
+        let path = directory.join(SETTINGS_FILE);
+        let settings = DesktopSettingsFile {
+            provider: ExplainProvider::Openrouter,
+            model: "google/gemini-2.5-flash-lite".to_owned(),
+            open_router_api_key: "secret".to_owned(),
+            ..DesktopSettingsFile::default()
+        };
+
+        write_desktop_settings(&path, &settings).unwrap();
+        let loaded = read_desktop_settings(&path).unwrap();
+        assert_eq!(loaded.provider, ExplainProvider::Openrouter);
+        assert!(loaded.open_router_api_key.is_empty());
+        let json = fs::read_to_string(&path).unwrap();
+        assert!(!json.contains("secret"));
+        assert!(!json.contains("ApiKey"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(path.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn migrates_plaintext_api_keys_before_sanitizing_settings() {
+        let directory = temp_dir("settings-migration");
+        let path = directory.join(SETTINGS_FILE);
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "provider": "openai-compatible",
+                "model": "qwen3:8b",
+                "localBaseUrl": "http://127.0.0.1:11434/v1",
+                "anthropicApiKey": "anthropic-secret",
+                "localApiKey": "local-secret",
+                "openRouterApiKey": "openrouter-secret"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let store = MemorySecretStore::default();
+
+        let (_, secrets) = load_desktop_settings(&path, &store).unwrap();
+
+        assert_eq!(
+            secrets.anthropic_api_key.as_deref(),
+            Some("anthropic-secret")
+        );
+        assert_eq!(secrets.local_api_key.as_deref(), Some("local-secret"));
+        assert_eq!(
+            secrets.open_router_api_key.as_deref(),
+            Some("openrouter-secret")
+        );
+        let json = fs::read_to_string(&path).unwrap();
+        assert!(!json.contains("secret"));
+        assert!(!json.contains("ApiKey"));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn failed_keychain_migration_keeps_plaintext_for_retry() {
+        let directory = temp_dir("settings-migration-failure");
+        let path = directory.join(SETTINGS_FILE);
+        let legacy = serde_json::json!({
+            "provider": "anthropic",
+            "model": "claude-haiku-4-5",
+            "localBaseUrl": "http://127.0.0.1:11434/v1",
+            "anthropicApiKey": "still-recoverable"
+        });
+        fs::write(&path, serde_json::to_vec_pretty(&legacy).unwrap()).unwrap();
+        let store = MemorySecretStore::default();
+        store.fail_writes.set(true);
+
+        assert!(load_desktop_settings(&path, &store).is_err());
+        assert!(fs::read_to_string(&path)
+            .unwrap()
+            .contains("still-recoverable"));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn changing_endpoint_requires_reentering_or_clearing_local_key() {
+        let directory = temp_dir("endpoint-binding");
+        let path = directory.join(SETTINGS_FILE);
+        let store = MemorySecretStore::default();
+        let mut first = save_settings_request("http://127.0.0.1:11434/v1");
+        first.local_api_key = "local-secret".to_owned();
+        save_desktop_settings_with_store(&path, first, &store).unwrap();
+
+        let changed = save_settings_request("https://models.example.com/v1");
+        assert_eq!(
+            save_desktop_settings_with_store(&path, changed, &store).unwrap_err(),
+            "The model endpoint changed. Re-enter the local API key or clear it before saving."
+        );
+        assert_eq!(
+            read_desktop_settings(&path).unwrap().local_base_url,
+            "http://127.0.0.1:11434/v1"
+        );
+
+        let mut reentered = save_settings_request("https://models.example.com/v1");
+        reentered.local_api_key = "new-local-secret".to_owned();
+        let public = save_desktop_settings_with_store(&path, reentered, &store).unwrap();
+        assert!(public.local_key_configured);
+        let secrets = read_explain_secrets(&store, "https://models.example.com/v1").unwrap();
+        assert_eq!(secrets.local_api_key.as_deref(), Some("new-local-secret"));
+
+        let mut cleared = save_settings_request("https://other.example.com/v1");
+        cleared.clear_local_api_key = true;
+        let public = save_desktop_settings_with_store(&path, cleared, &store).unwrap();
+        assert!(!public.local_key_configured);
+        assert!(store.get(LOCAL_KEY_ACCOUNT).unwrap().is_none());
+        fs::remove_dir_all(directory).unwrap();
     }
 }

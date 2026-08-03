@@ -13,23 +13,23 @@ const MAX_GROUPED_FILES: usize = 32;
 
 #[derive(Serialize)]
 pub(crate) struct SessionMeta {
-    pub(crate) file: String,
-    pub(crate) files: Vec<String>,
-    pub(crate) id: String,
-    pub(crate) cwd: String,
-    pub(crate) model: String,
-    pub(crate) timestamp: String,
-    pub(crate) modified: String,
-    pub(crate) cli_version: String,
-    pub(crate) source: &'static str,
-    pub(crate) project: Option<String>,
+    file: String,
+    files: Vec<String>,
+    id: String,
+    cwd: String,
+    model: String,
+    timestamp: String,
+    modified: String,
+    cli_version: String,
+    source: &'static str,
+    project: Option<String>,
 }
 
 #[derive(Serialize)]
-pub(crate) struct SessionRecordFile {
-    pub(crate) file: String,
-    pub(crate) source: &'static str,
-    pub(crate) lines: Vec<String>,
+struct SessionRecordFile {
+    file: String,
+    source: &'static str,
+    lines: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -49,7 +49,7 @@ pub(crate) struct SessionRecordBatch {
     total_bytes: u64,
 }
 
-pub(crate) fn system_time_iso(value: SystemTime) -> String {
+fn system_time_iso(value: SystemTime) -> String {
     let duration = value
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_default();
@@ -124,7 +124,7 @@ fn read_claude_metadata(path: &Path) -> Option<Value> {
     None
 }
 
-pub(crate) fn read_last_claude_timestamp(path: &Path) -> Option<String> {
+fn read_last_claude_timestamp(path: &Path) -> Option<String> {
     let mut file = File::open(path).ok()?;
     let size = file.metadata().ok()?.len();
     let read_size = size.min(512 * 1024);
@@ -141,7 +141,7 @@ pub(crate) fn read_last_claude_timestamp(path: &Path) -> Option<String> {
     None
 }
 
-pub(crate) fn collect_codex(dir: &Path, root: &Path, output: &mut Vec<SessionMeta>) {
+fn collect_codex(dir: &Path, root: &Path, output: &mut Vec<SessionMeta>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
@@ -194,7 +194,7 @@ pub(crate) fn collect_codex(dir: &Path, root: &Path, output: &mut Vec<SessionMet
     }
 }
 
-pub(crate) fn collect_claude(root: &Path, output: &mut Vec<SessionMeta>) {
+fn collect_claude(root: &Path, output: &mut Vec<SessionMeta>) {
     let Ok(projects) = fs::read_dir(root) else {
         return;
     };
@@ -251,7 +251,7 @@ pub(crate) fn collect_claude(root: &Path, output: &mut Vec<SessionMeta>) {
     }
 }
 
-pub(crate) fn collect_trusted_workspace_roots(sessions: &[SessionMeta]) -> HashSet<PathBuf> {
+fn collect_trusted_workspace_roots(sessions: &[SessionMeta]) -> HashSet<PathBuf> {
     sessions
         .iter()
         .filter_map(|session| {
@@ -300,10 +300,7 @@ pub(crate) fn list_sessions() -> Result<Vec<SessionMeta>, String> {
     Ok(grouped)
 }
 
-pub(crate) fn resolve_session_ref(
-    home: &Path,
-    file_ref: &str,
-) -> Result<(PathBuf, &'static str), String> {
+fn resolve_session_ref(home: &Path, file_ref: &str) -> Result<(PathBuf, &'static str), String> {
     let (root, relative, source) = if let Some(relative) = file_ref.strip_prefix(CLAUDE_PREFIX) {
         (home.join(".claude/projects"), relative, "claude-code")
     } else {
@@ -333,7 +330,7 @@ pub(crate) fn resolve_session_ref(
     Ok((canonical_candidate, source))
 }
 
-pub(crate) fn read_session_batch(
+fn read_session_batch(
     path: &Path,
     source: &'static str,
     file_ref: &str,
@@ -468,4 +465,247 @@ pub(crate) fn read_session_records(
         done,
         total_bytes,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("agent-vis-{name}-{nonce}"));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn converts_unix_epoch_to_iso_timestamp() {
+        assert_eq!(
+            system_time_iso(SystemTime::UNIX_EPOCH),
+            "1970-01-01T00:00:00.000Z"
+        );
+    }
+
+    #[test]
+    fn trusted_workspace_roots_come_from_session_cwds() {
+        let root = temp_dir("workspace-session-cwd");
+        let sessions = vec![SessionMeta {
+            file: "session.jsonl".to_owned(),
+            files: vec!["session.jsonl".to_owned()],
+            id: "session".to_owned(),
+            cwd: root.to_string_lossy().into_owned(),
+            model: String::new(),
+            timestamp: String::new(),
+            modified: String::new(),
+            cli_version: String::new(),
+            source: "codex",
+            project: None,
+        }];
+
+        assert_eq!(
+            collect_trusted_workspace_roots(&sessions),
+            HashSet::from([root.canonicalize().unwrap()])
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn ignores_timestampless_claude_bookkeeping_records() {
+        let dir = temp_dir("timestamp");
+        let path = dir.join("session.jsonl");
+        let mut file = File::create(&path).unwrap();
+        writeln!(
+            file,
+            r#"{{"type":"user","timestamp":"2026-07-29T20:00:00.000Z"}}"#
+        )
+        .unwrap();
+        writeln!(
+            file,
+            r#"{{"type":"assistant","timestamp":"2026-07-29T20:05:00.000Z"}}"#
+        )
+        .unwrap();
+        writeln!(file, r#"{{"type":"last-prompt","lastPrompt":"hello"}}"#).unwrap();
+
+        assert_eq!(
+            read_last_claude_timestamp(&path).as_deref(),
+            Some("2026-07-29T20:05:00.000Z")
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn lists_parent_sessions_without_promoting_subagents() {
+        let root = temp_dir("claude-scan");
+        let project = root.join("-Users-alice-project");
+        let subagents = project.join("subagents");
+        fs::create_dir_all(&subagents).unwrap();
+
+        fs::write(
+            project.join("parent.jsonl"),
+            concat!(
+                "{\"type\":\"user\",\"sessionId\":\"parent\",",
+                "\"cwd\":\"/Users/alice/project\",",
+                "\"timestamp\":\"2026-07-29T20:00:00.000Z\"}\n"
+            ),
+        )
+        .unwrap();
+        fs::write(
+            subagents.join("agent-child.jsonl"),
+            concat!(
+                "{\"type\":\"user\",\"sessionId\":\"child\",",
+                "\"cwd\":\"/Users/alice/project\",",
+                "\"timestamp\":\"2026-07-29T20:01:00.000Z\"}\n"
+            ),
+        )
+        .unwrap();
+
+        let mut sessions = Vec::new();
+        collect_claude(&root, &mut sessions);
+
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, "parent");
+        assert_eq!(sessions[0].files, vec![sessions[0].file.clone()]);
+        assert_eq!(sessions[0].project.as_deref(), Some("project"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn codex_session_uses_top_level_metadata_timestamp() {
+        let root = temp_dir("codex-top-level-timestamp");
+        let path = root.join("session.jsonl");
+        fs::write(
+            &path,
+            concat!(
+                "{\"type\":\"session_meta\",",
+                "\"timestamp\":\"2026-08-02T00:00:00Z\",",
+                "\"payload\":{\"id\":\"session\",\"cwd\":\"/repo\"}}\n"
+            ),
+        )
+        .unwrap();
+
+        let mut sessions = Vec::new();
+        collect_codex(&root, &root, &mut sessions);
+
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].timestamp, "2026-08-02T00:00:00Z");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn session_discovery_ignores_symlinked_files_and_directories() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_dir("discovery-symlinks");
+        let codex_root = root.join("codex");
+        let outside = root.join("outside");
+        fs::create_dir_all(&codex_root).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(
+            outside.join("outside.jsonl"),
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{",
+                "\"id\":\"outside\",\"cwd\":\"/private\"}}\n"
+            ),
+        )
+        .unwrap();
+        symlink(outside.join("outside.jsonl"), codex_root.join("file.jsonl")).unwrap();
+        symlink(&outside, codex_root.join("directory")).unwrap();
+
+        let mut sessions = Vec::new();
+        collect_codex(&codex_root, &codex_root, &mut sessions);
+        assert!(sessions.is_empty());
+
+        let claude_root = root.join("claude");
+        let real_project = root.join("-Users-alice-private");
+        fs::create_dir_all(&claude_root).unwrap();
+        fs::create_dir_all(&real_project).unwrap();
+        fs::write(
+            real_project.join("outside.jsonl"),
+            concat!(
+                "{\"type\":\"user\",\"sessionId\":\"outside\",",
+                "\"cwd\":\"/private\",\"timestamp\":\"2026-08-02T00:00:00Z\"}\n"
+            ),
+        )
+        .unwrap();
+        symlink(&real_project, claude_root.join("-Users-alice-private")).unwrap();
+
+        collect_claude(&claude_root, &mut sessions);
+        assert!(sessions.is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_session_paths_outside_the_known_roots() {
+        let home = temp_dir("path-safety");
+        fs::create_dir_all(home.join(".codex/sessions")).unwrap();
+        assert!(resolve_session_ref(&home, "../../.ssh/id_rsa.jsonl").is_err());
+        assert!(resolve_session_ref(&home, "/tmp/session.jsonl").is_err());
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    fn read_all_batches(path: &Path, source: &'static str, target_bytes: usize) -> Vec<String> {
+        let mut offset = 0;
+        let mut all = Vec::new();
+        loop {
+            let mut remaining = target_bytes;
+            let (batch, next_offset, done) =
+                read_session_batch(path, source, "session.jsonl", offset, &mut remaining).unwrap();
+            all.extend(batch.lines);
+            if done {
+                break;
+            }
+            assert!(next_offset > offset);
+            offset = next_offset;
+        }
+        all
+    }
+
+    #[test]
+    fn batching_reassembles_every_jsonl_record_exactly() {
+        let dir = temp_dir("lossless-batches");
+        let path = dir.join("session.jsonl");
+        let expected = vec![
+            r#"{"type":"event_msg","payload":{"message":"first"}}"#.to_owned(),
+            r#"{"type":"response_item","payload":{"output":"second"}}"#.to_owned(),
+            r#"{"type":"event_msg","payload":{"message":"third"}}"#.to_owned(),
+        ];
+        fs::write(&path, expected.join("\n") + "\n").unwrap();
+        assert_eq!(read_all_batches(&path, "codex", 40), expected);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_record_larger_than_the_batch_target_is_returned_whole() {
+        let dir = temp_dir("large-lossless-record");
+        let path = dir.join("session.jsonl");
+        let large = serde_json::json!({
+            "type": "response_item",
+            "payload": {
+                "call_id": "large-call",
+                "output": "x".repeat(2 * 1024 * 1024)
+            }
+        })
+        .to_string();
+        fs::write(&path, &large).unwrap();
+        assert_eq!(read_all_batches(&path, "codex", 64 * 1024), vec![large]);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn batching_preserves_unicode_and_the_final_record_without_newline() {
+        let dir = temp_dir("unicode-batches");
+        let path = dir.join("session.jsonl");
+        let expected = vec![
+            r#"{"message":"hello 👋"}"#.to_owned(),
+            r#"{"message":"最後の記録"}"#.to_owned(),
+        ];
+        fs::write(&path, expected.join("\n")).unwrap();
+        assert_eq!(read_all_batches(&path, "claude-code", 10), expected);
+        fs::remove_dir_all(dir).unwrap();
+    }
 }

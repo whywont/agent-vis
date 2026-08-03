@@ -8,7 +8,7 @@ use serde::Deserialize;
 use std::time::Duration;
 
 const MAX_EXPLAIN_PATH_BYTES: usize = 4 * 1024;
-pub(crate) const MAX_EXPLAIN_PATCH_BYTES: usize = 2 * 1024 * 1024;
+const MAX_EXPLAIN_PATCH_BYTES: usize = 2 * 1024 * 1024;
 const MAX_EXPLAIN_CONTEXT_BYTES: usize = 32 * 1024;
 const MAX_EXPLAIN_FILE_BYTES: usize = MAX_EDIT_FILE_BYTES as usize;
 const MAX_EXPLAIN_RESPONSE_BYTES: usize = 1024 * 1024;
@@ -18,40 +18,40 @@ const MISSING_EXPLAIN_API_KEY: &str =
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ExplainDiffRequest {
-    pub(crate) filepath: String,
-    pub(crate) patch: String,
-    pub(crate) context_text: Option<String>,
-    pub(crate) file_content: Option<String>,
+    filepath: String,
+    patch: String,
+    context_text: Option<String>,
+    file_content: Option<String>,
 }
 
 #[derive(Deserialize)]
-pub(crate) struct OpenAiCompatibleResponse {
-    pub(crate) choices: Vec<OpenAiChoice>,
+struct OpenAiCompatibleResponse {
+    choices: Vec<OpenAiChoice>,
 }
 
 #[derive(Deserialize)]
-pub(crate) struct OpenAiChoice {
-    pub(crate) message: OpenAiMessage,
+struct OpenAiChoice {
+    message: OpenAiMessage,
 }
 
 #[derive(Deserialize)]
-pub(crate) struct OpenAiMessage {
-    pub(crate) content: String,
+struct OpenAiMessage {
+    content: String,
 }
 
 #[derive(Deserialize)]
-pub(crate) struct AnthropicResponse {
-    pub(crate) content: Vec<AnthropicContent>,
+struct AnthropicResponse {
+    content: Vec<AnthropicContent>,
 }
 
 #[derive(Deserialize)]
-pub(crate) struct AnthropicContent {
+struct AnthropicContent {
     #[serde(rename = "type")]
-    pub(crate) content_type: String,
-    pub(crate) text: Option<String>,
+    content_type: String,
+    text: Option<String>,
 }
 
-pub(crate) fn validate_explain_request(request: &mut ExplainDiffRequest) -> Result<(), String> {
+fn validate_explain_request(request: &mut ExplainDiffRequest) -> Result<(), String> {
     request.filepath = request.filepath.trim().to_owned();
     request.patch = request.patch.trim().to_owned();
     request.context_text = request
@@ -90,7 +90,7 @@ pub(crate) fn validate_explain_request(request: &mut ExplainDiffRequest) -> Resu
     Ok(())
 }
 
-pub(crate) fn explain_user_prompt(request: &ExplainDiffRequest) -> String {
+fn explain_user_prompt(request: &ExplainDiffRequest) -> String {
     let context = request
         .context_text
         .as_ref()
@@ -117,7 +117,7 @@ fn explain_http_client() -> Result<reqwest::Client, String> {
         .map_err(|error| error.to_string())
 }
 
-pub(crate) fn required_explain_api_key(value: &str) -> Result<&str, String> {
+fn required_explain_api_key(value: &str) -> Result<&str, String> {
     if value.is_empty() {
         Err(MISSING_EXPLAIN_API_KEY.to_owned())
     } else {
@@ -271,5 +271,80 @@ pub(crate) async fn explain_diff(
         ExplainProvider::OpenaiCompatible | ExplainProvider::Openrouter => {
             explain_openai_compatible(&client, &settings, &secrets, &prompt).await
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validates_and_builds_explain_prompts() {
+        let mut request = ExplainDiffRequest {
+            filepath: "  src/App.tsx  ".to_owned(),
+            patch: "  *** Update File: src/App.tsx\n+const value = 1;  ".to_owned(),
+            context_text: Some("  add the value  ".to_owned()),
+            file_content: Some("const value = 1;\n".to_owned()),
+        };
+
+        validate_explain_request(&mut request).unwrap();
+        assert_eq!(request.filepath, "src/App.tsx");
+        assert_eq!(request.context_text.as_deref(), Some("add the value"));
+        assert_eq!(
+            explain_user_prompt(&request),
+            "User request that triggered this change:\n\"add the value\"\n\nExplain this patch for src/App.tsx:\n\n*** Update File: src/App.tsx\n+const value = 1;\n\nCurrent complete file for context:\n\nconst value = 1;"
+        );
+    }
+
+    #[test]
+    fn rejects_empty_or_oversized_explain_requests() {
+        let mut empty = ExplainDiffRequest {
+            filepath: "src/App.tsx".to_owned(),
+            patch: "   ".to_owned(),
+            context_text: None,
+            file_content: None,
+        };
+        assert_eq!(
+            validate_explain_request(&mut empty).unwrap_err(),
+            "No patch content"
+        );
+
+        let mut oversized = ExplainDiffRequest {
+            filepath: "src/App.tsx".to_owned(),
+            patch: "x".repeat(MAX_EXPLAIN_PATCH_BYTES + 1),
+            context_text: None,
+            file_content: None,
+        };
+        assert_eq!(
+            validate_explain_request(&mut oversized).unwrap_err(),
+            "Patch is too large to explain."
+        );
+    }
+
+    #[test]
+    fn provider_response_shapes_extract_text() {
+        let openai: OpenAiCompatibleResponse = serde_json::from_value(serde_json::json!({
+            "choices": [{ "message": { "content": "OpenAI explanation" } }]
+        }))
+        .unwrap();
+        assert_eq!(openai.choices[0].message.content, "OpenAI explanation");
+
+        let anthropic: AnthropicResponse = serde_json::from_value(serde_json::json!({
+            "content": [{ "type": "text", "text": "Anthropic explanation" }]
+        }))
+        .unwrap();
+        assert_eq!(
+            anthropic.content[0].text.as_deref(),
+            Some("Anthropic explanation")
+        );
+    }
+
+    #[test]
+    fn missing_explain_keys_use_provider_agnostic_copy() {
+        assert_eq!(
+            required_explain_api_key("").unwrap_err(),
+            "Add an API key in Settings for the selected explanation provider."
+        );
+        assert_eq!(required_explain_api_key("secret").unwrap(), "secret");
     }
 }
