@@ -16,6 +16,7 @@ const MAX_GROUPED_FILES: usize = 32;
 const MAX_SETTINGS_FILE_BYTES: usize = 64 * 1024;
 const MAX_SECRET_LENGTH: usize = 16 * 1024;
 const SETTINGS_FILE: &str = "settings.json";
+#[cfg(target_os = "macos")]
 const KEYCHAIN_SERVICE: &str = "dev.agentvis.desktop";
 const ANTHROPIC_KEY_ACCOUNT: &str = "anthropic-api-key";
 const LOCAL_KEY_ACCOUNT: &str = "local-api-key";
