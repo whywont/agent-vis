@@ -29,7 +29,10 @@ export default function DesktopSessionDetail({
     let cancelled = false;
     readSession(files, session.modified, setLoadedBatches)
       .then((nextEvents) => {
-        if (!cancelled) setEvents(nextEvents);
+        if (!cancelled) {
+          setError("");
+          setEvents(nextEvents);
+        }
       })
       .catch((reason: unknown) => {
         if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason));

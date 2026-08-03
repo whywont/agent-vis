@@ -748,7 +748,14 @@ fn collect_codex(dir: &Path, root: &Path, output: &mut Vec<SessionMeta>) {
             id: json_string(payload, "id"),
             cwd: json_string(payload, "cwd"),
             model: json_string(payload, "model_provider"),
-            timestamp: json_string(payload, "timestamp"),
+            timestamp: {
+                let payload_timestamp = json_string(payload, "timestamp");
+                if payload_timestamp.is_empty() {
+                    json_string(&meta, "timestamp")
+                } else {
+                    payload_timestamp
+                }
+            },
             modified: system_time_iso(stat.modified().unwrap_or(SystemTime::UNIX_EPOCH)),
             cli_version: json_string(payload, "cli_version"),
             source: "codex",
@@ -1292,6 +1299,28 @@ mod tests {
         assert_eq!(sessions[0].id, "parent");
         assert_eq!(sessions[0].files, vec![sessions[0].file.clone()]);
         assert_eq!(sessions[0].project.as_deref(), Some("project"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn codex_session_uses_top_level_metadata_timestamp() {
+        let root = temp_dir("codex-top-level-timestamp");
+        let path = root.join("session.jsonl");
+        fs::write(
+            &path,
+            concat!(
+                "{\"type\":\"session_meta\",",
+                "\"timestamp\":\"2026-08-02T00:00:00Z\",",
+                "\"payload\":{\"id\":\"session\",\"cwd\":\"/repo\"}}\n"
+            ),
+        )
+        .unwrap();
+
+        let mut sessions = Vec::new();
+        collect_codex(&root, &root, &mut sessions);
+
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].timestamp, "2026-08-02T00:00:00Z");
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -4,6 +4,9 @@ import { listSessions } from "./desktop-api";
 import DesktopSessionDetail from "./DesktopSessionDetail";
 import DesktopSessionList from "./DesktopSessionList";
 import DesktopSettingsPage from "./DesktopSettingsPage";
+import { refreshSelectedSession, sessionListsEqual } from "./session-refresh";
+
+const SESSION_POLL_INTERVAL_MS = 5000;
 
 export default function App() {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
@@ -15,13 +18,37 @@ export default function App() {
   const sidebarRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
-    listSessions()
-      .then(setSessions)
-      .catch((reason: unknown) => {
-        setError(reason instanceof Error ? reason.message : String(reason));
-      })
-      .finally(() => setLoading(false));
-  }, [sessionSidebarOpen]);
+    let cancelled = false;
+    let refreshing = false;
+    let loadedOnce = false;
+
+    async function refreshSessions() {
+      if (refreshing) return;
+      refreshing = true;
+      try {
+        const nextSessions = await listSessions();
+        if (cancelled) return;
+        loadedOnce = true;
+        setError("");
+        setSessions((current) => sessionListsEqual(current, nextSessions) ? current : nextSessions);
+        setSelected((current) => refreshSelectedSession(current, nextSessions));
+      } catch (reason: unknown) {
+        if (!cancelled && !loadedOnce) {
+          setError(reason instanceof Error ? reason.message : String(reason));
+        }
+      } finally {
+        refreshing = false;
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    void refreshSessions();
+    const timer = window.setInterval(() => void refreshSessions(), SESSION_POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
 
   useEffect(() => {
     const sidebar = sidebarRef.current;
