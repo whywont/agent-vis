@@ -11,25 +11,25 @@ pub(crate) const MAX_EDIT_FILE_BYTES: u64 = 8 * 1024 * 1024;
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ReadWorkspaceFileRequest {
-    pub(crate) workspace_root: String,
-    pub(crate) filepath: String,
+    workspace_root: String,
+    filepath: String,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SaveWorkspaceFileRequest {
-    pub(crate) workspace_root: String,
-    pub(crate) filepath: String,
-    pub(crate) expected_content: String,
-    pub(crate) content: String,
+    workspace_root: String,
+    filepath: String,
+    expected_content: String,
+    content: String,
 }
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WorkspaceFile {
-    pub(crate) content: String,
+    content: String,
 }
 
-pub(crate) fn validate_workspace_root(
+fn validate_workspace_root(
     value: &str,
     trusted_roots: &HashSet<PathBuf>,
 ) -> Result<PathBuf, String> {
@@ -52,7 +52,7 @@ pub(crate) fn validate_workspace_root(
     Ok(canonical)
 }
 
-pub(crate) fn git_branch_for_workspace(
+fn git_branch_for_workspace(
     workspace_root: &str,
     trusted_roots: &HashSet<PathBuf>,
 ) -> Result<Option<String>, String> {
@@ -90,7 +90,7 @@ fn validate_workspace_filepath(value: &str) -> Result<&Path, String> {
     Ok(path)
 }
 
-pub(crate) fn resolve_workspace_file(
+fn resolve_workspace_file(
     workspace_root: &str,
     filepath: &str,
     trusted_roots: &HashSet<PathBuf>,
@@ -140,7 +140,7 @@ pub(crate) fn save_workspace_file(
     save_workspace_file_with_roots(request, &roots)
 }
 
-pub(crate) fn save_workspace_file_with_roots(
+fn save_workspace_file_with_roots(
     request: SaveWorkspaceFileRequest,
     roots: &HashSet<PathBuf>,
 ) -> Result<WorkspaceFile, String> {
@@ -166,4 +166,136 @@ pub(crate) fn save_workspace_file_with_roots(
     Ok(WorkspaceFile {
         content: request.content,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("agent-vis-{name}-{nonce}"));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn trusted_roots(root: &Path) -> HashSet<PathBuf> {
+        HashSet::from([root.canonicalize().unwrap()])
+    }
+
+    #[test]
+    fn workspace_file_reads_and_compare_before_write_saves() {
+        let root = temp_dir("workspace-edit");
+        let nested = root.join("src");
+        fs::create_dir_all(&nested).unwrap();
+        let path = nested.join("app.ts");
+        fs::write(&path, "const value = 1;\n").unwrap();
+
+        let roots = trusted_roots(&root);
+        let resolved =
+            resolve_workspace_file(root.to_str().unwrap(), "src/app.ts", &roots).unwrap();
+        assert_eq!(resolved, path.canonicalize().unwrap());
+        let saved = save_workspace_file_with_roots(
+            SaveWorkspaceFileRequest {
+                workspace_root: root.to_string_lossy().into_owned(),
+                filepath: "src/app.ts".to_owned(),
+                expected_content: "const value = 1;\n".to_owned(),
+                content: "const value = 2;\n".to_owned(),
+            },
+            &roots,
+        )
+        .unwrap();
+        assert_eq!(saved.content, "const value = 2;\n");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "const value = 2;\n");
+
+        let error = save_workspace_file_with_roots(
+            SaveWorkspaceFileRequest {
+                workspace_root: root.to_string_lossy().into_owned(),
+                filepath: "src/app.ts".to_owned(),
+                expected_content: "const value = 1;\n".to_owned(),
+                content: "const value = 3;\n".to_owned(),
+            },
+            &roots,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            "File changed on disk. Reopen it before saving your edits."
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reads_the_current_workspace_git_branch() {
+        let root = temp_dir("git-branch");
+        let initialized = Command::new("git")
+            .args(["init", "-b", "desktop-test-branch"])
+            .current_dir(&root)
+            .status()
+            .unwrap();
+        assert!(initialized.success());
+        let roots = trusted_roots(&root);
+        assert_eq!(
+            git_branch_for_workspace(root.to_str().unwrap(), &roots).unwrap(),
+            Some("desktop-test-branch".to_owned())
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn workspace_file_rejects_parent_and_symlink_escapes() {
+        let root = temp_dir("workspace-boundary");
+        let outside = temp_dir("workspace-outside");
+        fs::write(outside.join("secret.txt"), "secret").unwrap();
+        let roots = trusted_roots(&root);
+
+        assert_eq!(
+            resolve_workspace_file(root.to_str().unwrap(), "../secret.txt", &roots).unwrap_err(),
+            "File path escapes the session workspace."
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            symlink(outside.join("secret.txt"), root.join("linked.txt")).unwrap();
+            assert_eq!(
+                resolve_workspace_file(root.to_str().unwrap(), "linked.txt", &roots).unwrap_err(),
+                "File path escapes the session workspace."
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(outside).unwrap();
+    }
+
+    #[test]
+    fn workspace_root_requires_a_trusted_session_cwd() {
+        let root = temp_dir("workspace-authorized");
+        let untrusted = temp_dir("workspace-untrusted");
+        let roots = trusted_roots(&root);
+
+        assert_eq!(
+            validate_workspace_root(untrusted.to_str().unwrap(), &roots).unwrap_err(),
+            "Session workspace is not authorized."
+        );
+        assert_eq!(
+            validate_workspace_root(root.to_str().unwrap(), &roots).unwrap(),
+            root.canonicalize().unwrap()
+        );
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(untrusted).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn filesystem_root_is_never_an_authorized_workspace() {
+        let roots = HashSet::from([PathBuf::from("/")]);
+        assert_eq!(
+            validate_workspace_root("/", &roots).unwrap_err(),
+            "The filesystem root cannot be used as a session workspace."
+        );
+    }
 }

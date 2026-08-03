@@ -25,6 +25,3 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running agent-vis desktop");
 }
-
-#[cfg(test)]
-mod backend_tests;
