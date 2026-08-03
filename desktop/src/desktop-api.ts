@@ -21,6 +21,7 @@ export interface DesktopSettings {
   provider: ExplainProvider;
   model: string;
   localBaseUrl: string;
+  explainInstructions: string;
   anthropicKeyConfigured: boolean;
   localKeyConfigured: boolean;
   openRouterKeyConfigured: boolean;
@@ -30,6 +31,7 @@ export interface SaveDesktopSettingsRequest {
   provider: ExplainProvider;
   model: string;
   localBaseUrl: string;
+  explainInstructions: string;
   anthropicApiKey: string;
   localApiKey: string;
   openRouterApiKey: string;
@@ -42,6 +44,7 @@ export interface ExplainDiffRequest {
   filepath: string;
   patch: string;
   contextText?: string;
+  fileContent?: string;
 }
 
 interface WorkspaceFile {
