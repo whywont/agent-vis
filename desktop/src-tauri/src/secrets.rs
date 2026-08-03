@@ -1,3 +1,4 @@
+#[cfg(target_os = "macos")]
 const KEYCHAIN_SERVICE: &str = "dev.agentvis.desktop";
 
 pub(crate) const ANTHROPIC_KEY_ACCOUNT: &str = "anthropic-api-key";
