@@ -7,6 +7,83 @@
   border-bottom: 0;
 }
 
+.desktop-sidebar-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.desktop-sidebar-actions .settings-nav-btn {
+  margin-left: 0;
+}
+
+.desktop-panel-toggle {
+  display: grid;
+  width: 25px;
+  height: 25px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font: 18px/1 var(--font-mono);
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.desktop-panel-toggle:hover {
+  border-color: var(--border-light);
+  background: var(--bg-card);
+  color: var(--accent);
+}
+
+#sidebar.desktop-sidebar-collapsed {
+  width: 29px !important;
+  min-width: 29px;
+  max-width: 29px;
+}
+
+.desktop-panel-reopen {
+  flex-shrink: 0;
+  border: 0;
+  border-right: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-dim);
+  cursor: pointer;
+  font: 10px var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  transition: color 0.15s, background 0.15s;
+}
+
+.desktop-panel-reopen:hover {
+  background: var(--bg-card);
+  color: var(--accent);
+}
+
+.desktop-panel-reopen span {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+}
+
+.desktop-panel-reopen b {
+  color: var(--accent);
+  font: 18px/1 var(--font-mono);
+}
+
+.desktop-session-reopen {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border-right: 0;
+}
+
 .desktop-status,
 .desktop-detail-state,
 .desktop-empty-files {
@@ -387,6 +464,34 @@
   margin-left: 0;
 }
 
+.desktop-file-panel-toggle {
+  margin-left: auto;
+}
+
+.desktop-file-branch-row {
+  position: sticky;
+  top: 39px;
+  z-index: 2;
+  height: 30px;
+  padding: 0 14px;
+  overflow: hidden;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-muted);
+  font: 10px/30px var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.desktop-files-reopen {
+  display: flex;
+  width: 29px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
 .file-tree-panel {
   scrollbar-width: none;
 }
@@ -446,6 +551,17 @@
 }
 
 @media (max-width: 760px) {
+  #sidebar.desktop-sidebar-collapsed {
+    width: 100% !important;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .desktop-sidebar-actions .desktop-panel-toggle,
+  .desktop-files-reopen {
+    display: none;
+  }
+
   .desktop-header-tabs {
     align-self: stretch;
     margin-right: -2px;

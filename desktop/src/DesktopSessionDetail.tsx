@@ -20,6 +20,7 @@ export default function DesktopSessionDetail({
   const [loadedBatches, setLoadedBatches] = useState(0);
   const [activeTab, setActiveTab] = useState<"session" | "files">("session");
   const [branch, setBranch] = useState<string | null>(null);
+  const [filePanelOpen, setFilePanelOpen] = useState(true);
   const fileTreeRef = useRef<HTMLDivElement>(null);
   const resizeHandleRef = useRef<HTMLDivElement>(null);
   const files = session.files?.join(",") || session.file;
@@ -75,7 +76,7 @@ export default function DesktopSessionDetail({
       document.body.classList.remove("resizing");
       handle.classList.remove("dragging");
     };
-  }, [activeTab, error, loading]);
+  }, [activeTab, error, filePanelOpen, loading]);
 
   const meta = events.find((event) => event.kind === "session_start");
   const cwd = meta?.kind === "session_start" ? meta.cwd : session.cwd;
@@ -127,13 +128,36 @@ export default function DesktopSessionDetail({
         <DesktopFilesCanvas events={events} sessionCwd={cwd} />
       ) : (
         <div className="detail-body">
-          <div className="file-tree-panel" ref={fileTreeRef}>
-            <div className="file-tree-header">
-              {branch && <span className="file-tree-branch">{branch}</span>}
-            </div>
-            <DesktopFileTree events={events} sessionCwd={cwd} />
-          </div>
-          <div className="file-tree-resize-handle" ref={resizeHandleRef} />
+          {filePanelOpen ? (
+            <>
+              <div className="file-tree-panel" ref={fileTreeRef}>
+                <div className="file-tree-header">
+                  <span>changed files</span>
+                  <button
+                    className="desktop-panel-toggle desktop-file-panel-toggle"
+                    onClick={() => setFilePanelOpen(false)}
+                    title="Hide changed files"
+                    aria-label="Hide changed files"
+                  >
+                    &#8249;
+                  </button>
+                </div>
+                {branch && <div className="desktop-file-branch-row">{branch}</div>}
+                <DesktopFileTree events={events} sessionCwd={cwd} />
+              </div>
+              <div className="file-tree-resize-handle" ref={resizeHandleRef} />
+            </>
+          ) : (
+            <button
+              className="desktop-panel-reopen desktop-files-reopen"
+              onClick={() => setFilePanelOpen(true)}
+              title="Show changed files"
+              aria-label="Show changed files"
+            >
+              <span>files</span>
+              <b>&#8250;</b>
+            </button>
+          )}
           <DesktopTimeline events={events} sessionCwd={cwd} />
         </div>
       )}
