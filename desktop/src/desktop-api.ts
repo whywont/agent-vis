@@ -52,6 +52,10 @@ export function listSessions(): Promise<SessionMeta[]> {
   return invoke<SessionMeta[]>("list_sessions");
 }
 
+export function getGitBranch(workspaceRoot: string): Promise<string | null> {
+  return invoke<string | null>("get_git_branch", { workspaceRoot });
+}
+
 export function getDesktopSettings(): Promise<DesktopSettings> {
   return invoke<DesktopSettings>("get_desktop_settings");
 }

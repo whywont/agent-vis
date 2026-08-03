@@ -32,6 +32,12 @@ function localDate(value: string): string {
   return [date.getFullYear(), String(date.getMonth() + 1).padStart(2, "0"), String(date.getDate()).padStart(2, "0")].join("-");
 }
 
+function visibleProject(session: SessionMeta): string | null {
+  if (!session.project) return null;
+  const workspaceName = session.cwd.replace(/\/+$/, "").split("/").pop();
+  return workspaceName === session.project ? null : session.project;
+}
+
 export default function DesktopSessionList({
   sessions,
   currentFile,
@@ -128,6 +134,7 @@ export default function DesktopSessionList({
             {group.items.map((session) => {
               const files = fileKey(session);
               const active = currentFile === files;
+              const project = visibleProject(session);
               return (
                 <button
                   key={files}
@@ -138,7 +145,7 @@ export default function DesktopSessionList({
                     {session.source === "claude-code" ? "claude" : "codex"}
                   </span>
                   <span className="session-id">{session.id.slice(0, 12)}</span>
-                  {session.project && <span className="session-project">{session.project}</span>}
+                  {project && <span className="session-project">{project}</span>}
                   <span className="session-cwd">{session.cwd.replace(/^\/(?:Users|home)\/[^/]+/, "~")}</span>
                   <span className="session-time">{formatTime(session.modified)}</span>
                 </button>

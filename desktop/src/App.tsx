@@ -11,6 +11,7 @@ export default function App() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
+  const [sessionSidebarOpen, setSessionSidebarOpen] = useState(true);
   const sidebarRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -20,7 +21,7 @@ export default function App() {
         setError(reason instanceof Error ? reason.message : String(reason));
       })
       .finally(() => setLoading(false));
-  }, []);
+  }, [sessionSidebarOpen]);
 
   useEffect(() => {
     const sidebar = sidebarRef.current;
@@ -50,35 +51,56 @@ export default function App() {
 
   return (
     <div id="app" className={selected ? "has-session" : "no-session"}>
-      <nav id="sidebar" ref={sidebarRef}>
-        <div className="sidebar-header">
-          <h1>agent-vis</h1>
-          {/* The desktop renderer uses Vite, so Next's Image component is unavailable. */}
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/logo.png" alt="" className="sidebar-logo" />
+      <nav id="sidebar" ref={sidebarRef} className={sessionSidebarOpen ? "" : "desktop-sidebar-collapsed"}>
+        {sessionSidebarOpen ? (
+          <>
+            <div className="sidebar-header">
+              <h1>agent-vis</h1>
+              {/* The desktop renderer uses Vite, so Next's Image component is unavailable. */}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/logo.png" alt="" className="sidebar-logo" />
+              <div className="desktop-sidebar-actions">
+                <button
+                  className={`settings-nav-btn${showSettings ? " active" : ""}`}
+                  onClick={() => { setShowSettings(true); setSelected(null); }}
+                  title="Settings"
+                  aria-label="Open settings"
+                >
+                  &#9881;
+                </button>
+                <button
+                  className="desktop-panel-toggle"
+                  onClick={() => setSessionSidebarOpen(false)}
+                  title="Hide sessions"
+                  aria-label="Hide sessions sidebar"
+                >
+                  &#8249;
+                </button>
+              </div>
+            </div>
+            <DesktopSessionList
+              sessions={sessions}
+              currentFile={selectedFiles}
+              loading={loading}
+              error={error}
+              onSelectSession={(files) => {
+                setShowSettings(false);
+                setSelected(sessions.find((session) => (session.files?.join(",") || session.file) === files) || null);
+              }}
+            />
+            <div className="resize-handle right" />
+          </>
+        ) : (
           <button
-            className={`settings-nav-btn${showSettings ? " active" : ""}`}
-            onClick={() => { setShowSettings(true); setSelected(null); }}
-            title="Settings"
-            aria-label="Open settings"
+            className="desktop-panel-reopen desktop-session-reopen"
+            onClick={() => setSessionSidebarOpen(true)}
+            title="Show sessions"
+            aria-label="Show sessions sidebar"
           >
-            &#9881;
+            <span>sessions</span>
+            <b>&#8250;</b>
           </button>
-        </div>
-        <div className="sidebar-subheader">
-          <span className="subtitle">session explorer</span>
-        </div>
-        <DesktopSessionList
-          sessions={sessions}
-          currentFile={selectedFiles}
-          loading={loading}
-          error={error}
-          onSelectSession={(files) => {
-            setShowSettings(false);
-            setSelected(sessions.find((session) => (session.files?.join(",") || session.file) === files) || null);
-          }}
-        />
-        <div className="resize-handle right" />
+        )}
       </nav>
       <main id="main-content">
         {showSettings ? (

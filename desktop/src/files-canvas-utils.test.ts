@@ -20,6 +20,16 @@ describe("desktop files canvas data", () => {
     expect(groups[1].files[1].changes).toHaveLength(2);
   });
 
+  it("shows absolute changed files relative to the session workspace", () => {
+    const groups = groupFileChanges([
+      change("1", "/Users/andrew/agent-vis/desktop/src/App.tsx"),
+      change("2", "/Users/andrew/agent-vis/desktop/src-tauri/src/lib.rs"),
+    ], "/Users/andrew/agent-vis");
+
+    expect(groups.map((group) => group.name)).toEqual(["desktop/src", "desktop/src-tauri/src"]);
+    expect(groups[0].files[0].path).toBe("desktop/src/App.tsx");
+  });
+
   it("lays out additional versions as visible card peeks", () => {
     const groups = groupFileChanges([
       change("1", "src/a.ts"),
