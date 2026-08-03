@@ -34,18 +34,17 @@
   line-height: 1.6;
 }
 
-.desktop-readonly-badge {
-  align-self: center;
+.desktop-header-tabs {
+  align-self: stretch;
+  display: flex;
   margin-left: auto;
-  margin-right: 16px;
-  padding: 3px 7px;
-  border: 1px solid rgba(106, 191, 105, 0.25);
-  border-radius: 999px;
-  background: rgba(106, 191, 105, 0.08);
-  color: var(--green);
-  font: 9px var(--font-mono);
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
+  margin-right: -12px;
+}
+
+.desktop-header-tabs .session-tab-btn {
+  height: 100%;
+  min-width: 92px;
+  padding: 0 18px;
 }
 
 .desktop-settings-page {
@@ -377,8 +376,14 @@
 }
 
 @media (max-width: 760px) {
-  .desktop-readonly-badge {
-    display: none;
+  .desktop-header-tabs {
+    align-self: stretch;
+    margin-right: -2px;
+  }
+
+  .desktop-header-tabs .session-tab-btn {
+    min-width: 72px;
+    padding: 0 10px;
   }
 
   .desktop-welcome-logo {

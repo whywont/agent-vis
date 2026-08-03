@@ -78,21 +78,20 @@ export default function DesktopSessionDetail({
           <span className="meta-tag">{cwd.replace(/^\/(?:Users|home)\/[^/]+/, "~")}</span>
           <span className="meta-tag">{formatTime(timestamp)}</span>
         </div>
-      </div>
-      <div className="session-tabs">
-        <button
-          className={`session-tab-btn${activeTab === "session" ? " active" : ""}`}
-          onClick={() => setActiveTab("session")}
-        >
-          Session
-        </button>
-        <button
-          className={`session-tab-btn${activeTab === "files" ? " active" : ""}`}
-          onClick={() => setActiveTab("files")}
-        >
-          Files
-        </button>
-        <span className="desktop-readonly-badge">read-only desktop</span>
+        <div className="desktop-header-tabs" aria-label="Session views">
+          <button
+            className={`session-tab-btn${activeTab === "session" ? " active" : ""}`}
+            onClick={() => setActiveTab("session")}
+          >
+            Session
+          </button>
+          <button
+            className={`session-tab-btn${activeTab === "files" ? " active" : ""}`}
+            onClick={() => setActiveTab("files")}
+          >
+            Files
+          </button>
+        </div>
       </div>
       {loading ? (
         <SessionLoadingShell loadedBatches={loadedBatches} />
