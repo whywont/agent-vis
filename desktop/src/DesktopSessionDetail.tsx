@@ -129,15 +129,7 @@ export default function DesktopSessionDetail({
         <div className="detail-body">
           <div className="file-tree-panel" ref={fileTreeRef}>
             <div className="file-tree-header">
-              changed files
-              {branch && (
-                <span className="file-tree-branch">
-                  <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-                    <path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25Z" />
-                  </svg>
-                  {branch}
-                </span>
-              )}
+              {branch && <span className="file-tree-branch">{branch}</span>}
             </div>
             <DesktopFileTree events={events} sessionCwd={cwd} />
           </div>
@@ -153,7 +145,7 @@ function SessionLoadingShell({ loadedBatches }: { loadedBatches: number }) {
   return (
     <div className="detail-body desktop-loading-shell" aria-label="Loading session">
       <div className="file-tree-panel desktop-loading-tree">
-        <div className="file-tree-header">changed files</div>
+        <div className="file-tree-header" />
         {[72, 88, 61, 80, 54].map((width, index) => (
           <div className="desktop-skeleton-row" key={index} style={{ "--skeleton-width": `${width}%` } as CSSProperties} />
         ))}

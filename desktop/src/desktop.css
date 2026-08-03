@@ -3,6 +3,10 @@
   color: inherit;
 }
 
+.sidebar-header {
+  border-bottom: 0;
+}
+
 .desktop-status,
 .desktop-detail-state,
 .desktop-empty-files {
@@ -377,6 +381,74 @@
 
 .session-controls {
   height: 39px;
+}
+
+.file-tree-header .file-tree-branch {
+  margin-left: 0;
+}
+
+.file-tree-panel {
+  scrollbar-color: var(--border-light) transparent;
+  scrollbar-width: thin;
+}
+
+.file-tree-panel::-webkit-scrollbar {
+  width: 6px;
+}
+
+.file-tree-panel::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: var(--border-light);
+}
+
+.file-tree-resize-handle {
+  position: relative;
+  width: 9px;
+  background: transparent;
+}
+
+.file-tree-resize-handle::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 4px;
+  width: 1px;
+  content: "";
+  background: var(--border);
+  transition: background 0.15s;
+}
+
+.file-tree-resize-handle::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 7px;
+  height: 30px;
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  content: "";
+  background:
+    radial-gradient(circle, var(--text-dim) 1px, transparent 1.5px) center / 3px 6px repeat-y,
+    var(--bg-card);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  transform: translate(-50%, -50%);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.file-tree-resize-handle:hover,
+.file-tree-resize-handle.dragging {
+  background: transparent;
+}
+
+.file-tree-resize-handle:hover::before,
+.file-tree-resize-handle.dragging::before {
+  background: var(--accent);
+}
+
+.file-tree-resize-handle:hover::after,
+.file-tree-resize-handle.dragging::after {
+  border-color: var(--accent-dim);
+  box-shadow: 0 0 0 2px rgba(201, 165, 90, 0.08), 0 3px 10px rgba(0, 0, 0, 0.45);
 }
 
 @media (max-width: 760px) {
