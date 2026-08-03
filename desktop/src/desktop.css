@@ -472,13 +472,24 @@
   position: sticky;
   top: 39px;
   z-index: 2;
+  display: flex;
   height: 30px;
+  align-items: center;
+  gap: 5px;
   padding: 0 14px;
   overflow: hidden;
-  border-bottom: 1px solid var(--border);
   background: var(--bg);
   color: var(--text-muted);
-  font: 10px/30px var(--font-mono);
+  font: 10px var(--font-mono);
+}
+
+.desktop-file-branch-row svg {
+  flex-shrink: 0;
+  color: var(--text-dim);
+}
+
+.desktop-file-branch-row span {
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
