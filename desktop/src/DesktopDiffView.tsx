@@ -76,6 +76,7 @@ function DesktopDiffBlock({
 }) {
   const [copied, setCopied] = useState(false);
   const [explanation, setExplanation] = useState<string | null>(null);
+  const [explanationError, setExplanationError] = useState<string | null>(null);
   const [explaining, setExplaining] = useState(false);
   const [fullContent, setFullContent] = useState<string | null>(null);
   const [showFull, setShowFull] = useState(false);
@@ -152,11 +153,25 @@ function DesktopDiffBlock({
   async function explain() {
     if (explaining) return;
     setExplanation(null);
+    setExplanationError(null);
     setExplaining(true);
     try {
-      setExplanation(await explainDiff({ filepath: block.filepath, patch, contextText }));
+      let fileContent: string | undefined;
+      if (block.action !== "delete") {
+        try {
+          fileContent = await loadCurrentFile();
+        } catch {
+          // The patch remains sufficient if the current file is unavailable.
+        }
+      }
+      setExplanation(await explainDiff({
+        filepath: block.filepath,
+        patch,
+        contextText,
+        fileContent,
+      }));
     } catch (reason: unknown) {
-      setExplanation(desktopError(reason));
+      setExplanationError(desktopError(reason));
     } finally {
       setExplaining(false);
     }
@@ -211,15 +226,6 @@ function DesktopDiffBlock({
           )}
         </div>
       </div>
-      {explanation !== null && !editing && (
-        <div className="diff-explain-panel">
-          <div className="diff-explain-label">
-            native explanation
-            <button className="diff-explain-dismiss" onClick={() => setExplanation(null)} aria-label="Dismiss explanation">&times;</button>
-          </div>
-          <div className="diff-explain-text">{explanation}</div>
-        </div>
-      )}
       {editing ? (
         <textarea
           className="desktop-full-file-editor"
@@ -255,6 +261,23 @@ function DesktopDiffBlock({
           </div>
         </div>
       )}
+      {!editing && (explanation !== null || explanationError !== null) && (
+        <div className={`diff-explain-panel${explanationError ? " desktop-explain-panel-error" : ""}`}>
+          <div className="diff-explain-label">
+            {explanationError ? "explanation error" : "ai explanation"}
+            <button
+              className="diff-explain-dismiss"
+              onClick={() => { setExplanation(null); setExplanationError(null); }}
+              aria-label="Dismiss explanation"
+            >
+              &times;
+            </button>
+          </div>
+          <div className={explanationError ? "desktop-explain-error" : "diff-explain-text"} role={explanationError ? "alert" : undefined}>
+            {explanationError ?? explanation}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -287,5 +310,9 @@ function PencilIcon() {
 function desktopError(reason: unknown): string {
   if (reason instanceof Error) return reason.message;
   if (typeof reason === "string") return reason;
+  if (reason && typeof reason === "object") {
+    const message = "message" in reason ? reason.message : "error" in reason ? reason.error : null;
+    if (typeof message === "string") return message;
+  }
   return "Desktop file operation failed.";
 }

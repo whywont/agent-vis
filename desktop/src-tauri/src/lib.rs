@@ -19,9 +19,13 @@ const SETTINGS_FILE: &str = "settings.json";
 const MAX_EXPLAIN_PATH_BYTES: usize = 4 * 1024;
 const MAX_EXPLAIN_PATCH_BYTES: usize = 2 * 1024 * 1024;
 const MAX_EXPLAIN_CONTEXT_BYTES: usize = 32 * 1024;
+const MAX_EXPLAIN_FILE_BYTES: usize = MAX_EDIT_FILE_BYTES as usize;
+const MAX_EXPLAIN_INSTRUCTIONS_BYTES: usize = 32 * 1024;
 const MAX_EXPLAIN_RESPONSE_BYTES: usize = 1024 * 1024;
 const MAX_EDIT_FILE_BYTES: u64 = 8 * 1024 * 1024;
-const EXPLAIN_SYSTEM_PROMPT: &str = "You are a code reviewer helping developers understand changes. Explain git patches concisely - what changed, what it does, and why it likely matters. The patch is authoritative about the change itself. Be brief (2-4 sentences for small changes, a short paragraph for complex ones). Skip obvious details like 'a line was added'. Focus on intent and impact.";
+const DEFAULT_EXPLAIN_INSTRUCTIONS: &str = "You are a code reviewer helping developers understand changes. Explain git patches concisely - what changed, what it does, and why it likely matters. The current complete file is supplied for surrounding context; the patch is authoritative about the change itself. Be brief (2-4 sentences for small changes, a short paragraph for complex ones). Skip obvious details like 'a line was added'. Focus on intent and impact.";
+const MISSING_EXPLAIN_API_KEY: &str =
+    "Add an API key in Settings for the selected explanation provider.";
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -37,6 +41,8 @@ struct DesktopSettingsFile {
     provider: ExplainProvider,
     model: String,
     local_base_url: String,
+    #[serde(default = "default_explain_instructions")]
+    explain_instructions: String,
     anthropic_api_key: String,
     local_api_key: String,
     open_router_api_key: String,
@@ -48,6 +54,7 @@ impl Default for DesktopSettingsFile {
             provider: ExplainProvider::Anthropic,
             model: "claude-haiku-4-5".to_owned(),
             local_base_url: "http://127.0.0.1:11434/v1".to_owned(),
+            explain_instructions: default_explain_instructions(),
             anthropic_api_key: String::new(),
             local_api_key: String::new(),
             open_router_api_key: String::new(),
@@ -61,6 +68,7 @@ struct DesktopSettings {
     provider: ExplainProvider,
     model: String,
     local_base_url: String,
+    explain_instructions: String,
     anthropic_key_configured: bool,
     local_key_configured: bool,
     open_router_key_configured: bool,
@@ -72,6 +80,7 @@ impl From<&DesktopSettingsFile> for DesktopSettings {
             provider: settings.provider,
             model: settings.model.clone(),
             local_base_url: settings.local_base_url.clone(),
+            explain_instructions: settings.explain_instructions.clone(),
             anthropic_key_configured: !settings.anthropic_api_key.is_empty(),
             local_key_configured: !settings.local_api_key.is_empty(),
             open_router_key_configured: !settings.open_router_api_key.is_empty(),
@@ -85,6 +94,7 @@ struct SaveDesktopSettingsRequest {
     provider: ExplainProvider,
     model: String,
     local_base_url: String,
+    explain_instructions: String,
     anthropic_api_key: String,
     local_api_key: String,
     open_router_api_key: String,
@@ -99,6 +109,11 @@ struct ExplainDiffRequest {
     filepath: String,
     patch: String,
     context_text: Option<String>,
+    file_content: Option<String>,
+}
+
+fn default_explain_instructions() -> String {
+    DEFAULT_EXPLAIN_INSTRUCTIONS.to_owned()
 }
 
 #[derive(Deserialize)]
@@ -216,6 +231,7 @@ fn validate_desktop_settings(settings: &mut DesktopSettingsFile) -> Result<(), S
         .trim()
         .trim_end_matches('/')
         .to_owned();
+    settings.explain_instructions = settings.explain_instructions.trim().to_owned();
     settings.anthropic_api_key = settings.anthropic_api_key.trim().to_owned();
     settings.local_api_key = settings.local_api_key.trim().to_owned();
     settings.open_router_api_key = settings.open_router_api_key.trim().to_owned();
@@ -225,6 +241,12 @@ fn validate_desktop_settings(settings: &mut DesktopSettingsFile) -> Result<(), S
     }
     if settings.model.len() > 256 {
         return Err("Model name is too long.".to_owned());
+    }
+    if settings.explain_instructions.is_empty() {
+        return Err("Explain instructions are required.".to_owned());
+    }
+    if settings.explain_instructions.len() > MAX_EXPLAIN_INSTRUCTIONS_BYTES {
+        return Err("Explain instructions are too long.".to_owned());
     }
     if settings.local_base_url.len() > 2048 {
         return Err("Local model endpoint is too long.".to_owned());
@@ -295,6 +317,7 @@ fn save_desktop_settings(
     settings.provider = request.provider;
     settings.model = request.model;
     settings.local_base_url = request.local_base_url;
+    settings.explain_instructions = request.explain_instructions;
 
     if !request.anthropic_api_key.trim().is_empty() {
         settings.anthropic_api_key = request.anthropic_api_key;
@@ -325,6 +348,11 @@ fn validate_explain_request(request: &mut ExplainDiffRequest) -> Result<(), Stri
         .take()
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
+    request.file_content = request
+        .file_content
+        .take()
+        .map(|value| value.trim_end().to_owned())
+        .filter(|value| !value.is_empty());
     if request.filepath.is_empty() || request.filepath.len() > MAX_EXPLAIN_PATH_BYTES {
         return Err("Use a valid file path for the explanation.".to_owned());
     }
@@ -341,6 +369,13 @@ fn validate_explain_request(request: &mut ExplainDiffRequest) -> Result<(), Stri
     {
         return Err("Explanation context is too large.".to_owned());
     }
+    if request
+        .file_content
+        .as_ref()
+        .is_some_and(|value| value.len() > MAX_EXPLAIN_FILE_BYTES)
+    {
+        return Err("Explanation file context is too large.".to_owned());
+    }
     Ok(())
 }
 
@@ -350,9 +385,14 @@ fn explain_user_prompt(request: &ExplainDiffRequest) -> String {
         .as_ref()
         .map(|value| format!("User request that triggered this change:\n\"{value}\"\n\n"))
         .unwrap_or_default();
+    let file_context = request
+        .file_content
+        .as_ref()
+        .map(|value| format!("\n\nCurrent complete file for context:\n\n{value}"))
+        .unwrap_or_default();
     format!(
-        "{context}Explain this patch for {}:\n\n{}",
-        request.filepath, request.patch
+        "{context}Explain this patch for {}:\n\n{}{file_context}",
+        request.filepath, request.patch,
     )
 }
 
@@ -364,6 +404,14 @@ fn explain_http_client() -> Result<reqwest::Client, String> {
         .user_agent("agent-vis-desktop/0.1")
         .build()
         .map_err(|error| error.to_string())
+}
+
+fn required_explain_api_key(value: &str) -> Result<&str, String> {
+    if value.is_empty() {
+        Err(MISSING_EXPLAIN_API_KEY.to_owned())
+    } else {
+        Ok(value)
+    }
 }
 
 async fn response_bytes_limited(response: reqwest::Response) -> Result<Vec<u8>, String> {
@@ -396,8 +444,8 @@ async fn explain_openai_compatible(
     } else {
         settings.local_api_key.as_str()
     };
-    if open_router && api_key.is_empty() {
-        return Err("Add an OpenRouter API key in Settings to use OpenRouter.".to_owned());
+    if open_router {
+        required_explain_api_key(api_key)?;
     }
 
     let mut request =
@@ -408,7 +456,7 @@ async fn explain_openai_compatible(
                 "stream": false,
                 "max_tokens": 512,
                 "messages": [
-                    { "role": "system", "content": EXPLAIN_SYSTEM_PROMPT },
+                    { "role": "system", "content": settings.explain_instructions },
                     { "role": "user", "content": user_prompt }
                 ]
             }));
@@ -451,17 +499,15 @@ async fn explain_anthropic(
     settings: &DesktopSettingsFile,
     user_prompt: &str,
 ) -> Result<String, String> {
-    if settings.anthropic_api_key.is_empty() {
-        return Err("Add an Anthropic API key in Settings to use hosted explanations.".to_owned());
-    }
+    let api_key = required_explain_api_key(&settings.anthropic_api_key)?;
     let response = client
         .post("https://api.anthropic.com/v1/messages")
-        .header("x-api-key", &settings.anthropic_api_key)
+        .header("x-api-key", api_key)
         .header("anthropic-version", "2023-06-01")
         .json(&serde_json::json!({
             "model": settings.model,
             "max_tokens": 512,
-            "system": EXPLAIN_SYSTEM_PROMPT,
+            "system": settings.explain_instructions,
             "messages": [{ "role": "user", "content": user_prompt }]
         }))
         .send()
@@ -1066,6 +1112,25 @@ mod tests {
         let value = serde_json::to_value(public).unwrap();
         assert!(value.get("anthropicApiKey").is_none());
         assert!(value.get("anthropicKeyConfigured").is_some());
+        assert_eq!(
+            value.get("explainInstructions").and_then(Value::as_str),
+            Some(DEFAULT_EXPLAIN_INSTRUCTIONS)
+        );
+    }
+
+    #[test]
+    fn older_desktop_settings_receive_default_explain_instructions() {
+        let settings: DesktopSettingsFile = serde_json::from_value(serde_json::json!({
+            "provider": "anthropic",
+            "model": "claude-haiku-4-5",
+            "localBaseUrl": "http://127.0.0.1:11434/v1",
+            "anthropicApiKey": "",
+            "localApiKey": "",
+            "openRouterApiKey": ""
+        }))
+        .unwrap();
+
+        assert_eq!(settings.explain_instructions, DEFAULT_EXPLAIN_INSTRUCTIONS);
     }
 
     #[test]
@@ -1116,6 +1181,7 @@ mod tests {
             filepath: "  src/App.tsx  ".to_owned(),
             patch: "  *** Update File: src/App.tsx\n+const value = 1;  ".to_owned(),
             context_text: Some("  add the value  ".to_owned()),
+            file_content: Some("const value = 1;\n".to_owned()),
         };
 
         validate_explain_request(&mut request).unwrap();
@@ -1123,7 +1189,7 @@ mod tests {
         assert_eq!(request.context_text.as_deref(), Some("add the value"));
         assert_eq!(
             explain_user_prompt(&request),
-            "User request that triggered this change:\n\"add the value\"\n\nExplain this patch for src/App.tsx:\n\n*** Update File: src/App.tsx\n+const value = 1;"
+            "User request that triggered this change:\n\"add the value\"\n\nExplain this patch for src/App.tsx:\n\n*** Update File: src/App.tsx\n+const value = 1;\n\nCurrent complete file for context:\n\nconst value = 1;"
         );
     }
 
@@ -1133,6 +1199,7 @@ mod tests {
             filepath: "src/App.tsx".to_owned(),
             patch: "   ".to_owned(),
             context_text: None,
+            file_content: None,
         };
         assert_eq!(
             validate_explain_request(&mut empty).unwrap_err(),
@@ -1143,6 +1210,7 @@ mod tests {
             filepath: "src/App.tsx".to_owned(),
             patch: "x".repeat(MAX_EXPLAIN_PATCH_BYTES + 1),
             context_text: None,
+            file_content: None,
         };
         assert_eq!(
             validate_explain_request(&mut oversized).unwrap_err(),
@@ -1166,6 +1234,15 @@ mod tests {
             anthropic.content[0].text.as_deref(),
             Some("Anthropic explanation")
         );
+    }
+
+    #[test]
+    fn missing_explain_keys_use_provider_agnostic_copy() {
+        assert_eq!(
+            required_explain_api_key("").unwrap_err(),
+            "Add an API key in Settings for the selected explanation provider."
+        );
+        assert_eq!(required_explain_api_key("secret").unwrap(), "secret");
     }
 
     #[test]

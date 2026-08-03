@@ -10,6 +10,7 @@ const emptySettings: DesktopSettings = {
   provider: "anthropic",
   model: "claude-haiku-4-5",
   localBaseUrl: "http://127.0.0.1:11434/v1",
+  explainInstructions: "You are a code reviewer helping developers understand changes. Explain git patches concisely - what changed, what it does, and why it likely matters. The current complete file is supplied for surrounding context; the patch is authoritative about the change itself. Be brief (2-4 sentences for small changes, a short paragraph for complex ones). Skip obvious details like 'a line was added'. Focus on intent and impact.",
   anthropicKeyConfigured: false,
   localKeyConfigured: false,
   openRouterKeyConfigured: false,
@@ -47,6 +48,7 @@ export default function DesktopSettingsPage({ onBack }: { onBack: () => void }) 
         provider: settings.provider,
         model: settings.model,
         localBaseUrl: settings.localBaseUrl,
+        explainInstructions: settings.explainInstructions,
         anthropicApiKey,
         localApiKey,
         openRouterApiKey,
@@ -97,6 +99,16 @@ export default function DesktopSettingsPage({ onBack }: { onBack: () => void }) 
               onChange={(event) => set("model", event.target.value)}
               placeholder={local ? "qwen3:8b" : openRouter ? "google/gemini-2.5-flash-lite" : "claude-haiku-4-5"}
             />
+          </label>
+          <label>
+            Explain instructions
+            <textarea
+              className="desktop-settings-prompt"
+              value={settings.explainInstructions}
+              onChange={(event) => set("explainInstructions", event.target.value)}
+              spellCheck={false}
+            />
+            <small>The filename, triggering request, diff, and current complete file are attached automatically.</small>
           </label>
           {openRouter ? (
             <>
