@@ -645,32 +645,114 @@ body {
   position: sticky;
   top: 0;
   z-index: 5;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .toolbar-filters {
   display: flex;
   align-items: center;
   gap: 8px;
-  overflow-x: auto;
-  scrollbar-width: thin;
-  scrollbar-color: var(--border) transparent;
+  overflow: hidden;
   min-width: 0;
   flex: 1;
-  padding-bottom: 2px;
 }
 
-.toolbar-filters::-webkit-scrollbar {
-  height: 4px;
+.toolbar-filter-menu {
+  position: relative;
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
-.toolbar-filters::-webkit-scrollbar-track {
+.toolbar-filter-trigger {
+  display: flex;
+  min-width: 130px;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.toolbar-filter-count {
+  display: grid;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  place-items: center;
+  border-radius: 999px;
+  background: rgba(201, 165, 90, 0.12);
+  color: var(--accent);
+  font-size: 10px;
+}
+
+.toolbar-filter-chevron {
+  color: var(--text-dim);
+  font-size: 8px;
+}
+
+.toolbar-filter-dropdown {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 500;
+  width: 184px;
+  margin-top: 5px;
+  padding: 5px;
+  border: 1px solid var(--border-light);
+  border-radius: 5px;
+  background: var(--bg-card);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+}
+
+.toolbar-filter-option {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 3px;
   background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font: 11px var(--font-mono);
+  letter-spacing: 0.04em;
+  text-align: left;
+  text-transform: uppercase;
 }
 
-.toolbar-filters::-webkit-scrollbar-thumb {
+.toolbar-filter-option:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.toolbar-filter-option.active {
+  color: var(--text);
+}
+
+.toolbar-filter-check {
+  display: grid;
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  place-items: center;
+  border: 1px solid var(--border-light);
+  border-radius: 3px;
+  color: var(--accent);
+  font-size: 10px;
+}
+
+.toolbar-filter-option.active .toolbar-filter-check {
+  border-color: var(--accent-dim);
+  background: rgba(201, 165, 90, 0.1);
+}
+
+.toolbar-filter-dropdown-sep {
+  height: 1px;
+  margin: 5px 3px;
   background: var(--border);
-  border-radius: 2px;
+}
+
+.toolbar-collapse-option {
+  color: var(--text-muted);
 }
 
 .toolbar-stats {

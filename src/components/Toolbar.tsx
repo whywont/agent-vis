@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import type { AppEvent } from "@/lib/types";
 import { formatTokens } from "@/utils/format";
 
@@ -29,6 +30,10 @@ export default function Toolbar({
   onToggleTokenUsage,
   onCollapseAll,
 }: ToolbarProps) {
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [compact, setCompact] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const fileChanges = events.filter((e) => e.kind === "file_change").length;
   const shellCmds = events.filter((e) => e.kind === "shell_command").length;
   const userMsgs = events.filter((e) => e.kind === "user_message").length;
@@ -38,8 +43,36 @@ export default function Toolbar({
       ? (tokenEvents[tokenEvents.length - 1] as { kind: "token_usage"; total_tokens: number })
       : null;
 
+  useEffect(() => {
+    const toolbar = toolbarRef.current;
+    if (!toolbar) return;
+    const observer = new ResizeObserver(([entry]) => {
+      setCompact(entry.contentRect.width < 940);
+    });
+    observer.observe(toolbar);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    function onPointerDown(event: PointerEvent) {
+      if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false);
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setMenuOpen(false);
+    }
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [menuOpen]);
+
+  const selectedCount = FILTERS.filter((filter) => activeFilters.has(filter.key)).length + Number(showTokenUsage);
+
   return (
-    <div className="toolbar">
+    <div className="toolbar" ref={toolbarRef}>
       <div className="toolbar-stats">
         <span>
           <span className="stat-val">{fileChanges}</span>
@@ -63,27 +96,75 @@ export default function Toolbar({
         )}
       </div>
       <div className="toolbar-sep" style={{ flexShrink: 0 }} />
-      <div className="toolbar-filters">
-        {FILTERS.map((f) => (
+      {compact ? (
+        <div className="toolbar-filter-menu" ref={menuRef}>
           <button
-            key={f.key}
-            className={`filter-btn${activeFilters.has(f.key) ? " active" : ""}`}
-            onClick={() => onToggleFilter(f.key)}
+            className={`filter-btn toolbar-filter-trigger${menuOpen ? " active" : ""}`}
+            onClick={() => setMenuOpen((open) => !open)}
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
           >
-            {f.label}
+            <span>all types</span>
+            <span className="toolbar-filter-count">{selectedCount}</span>
+            <span className="toolbar-filter-chevron">{menuOpen ? "▲" : "▼"}</span>
           </button>
-        ))}
-        <button
-          className={`filter-btn${showTokenUsage ? " active" : ""}`}
-          onClick={onToggleTokenUsage}
-        >
-          tokens
-        </button>
-        <div className="toolbar-sep" style={{ flexShrink: 0 }} />
-        <button className="filter-btn" onClick={onCollapseAll} title="Collapse all entries">
-          – all
-        </button>
-      </div>
+          {menuOpen && (
+            <div className="toolbar-filter-dropdown" role="menu">
+              {FILTERS.map((filter) => {
+                const active = activeFilters.has(filter.key);
+                return (
+                  <button
+                    key={filter.key}
+                    className={`toolbar-filter-option${active ? " active" : ""}`}
+                    onClick={() => onToggleFilter(filter.key)}
+                    role="menuitemcheckbox"
+                    aria-checked={active}
+                  >
+                    <span className="toolbar-filter-check">{active ? "✓" : ""}</span>
+                    <span>{filter.label}</span>
+                  </button>
+                );
+              })}
+              <button
+                className={`toolbar-filter-option${showTokenUsage ? " active" : ""}`}
+                onClick={onToggleTokenUsage}
+                role="menuitemcheckbox"
+                aria-checked={showTokenUsage}
+              >
+                <span className="toolbar-filter-check">{showTokenUsage ? "✓" : ""}</span>
+                <span>tokens</span>
+              </button>
+              <div className="toolbar-filter-dropdown-sep" />
+              <button className="toolbar-filter-option toolbar-collapse-option" onClick={() => { onCollapseAll(); setMenuOpen(false); }}>
+                <span className="toolbar-filter-check">−</span>
+                <span>collapse all</span>
+              </button>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="toolbar-filters">
+          {FILTERS.map((f) => (
+            <button
+              key={f.key}
+              className={`filter-btn${activeFilters.has(f.key) ? " active" : ""}`}
+              onClick={() => onToggleFilter(f.key)}
+            >
+              {f.label}
+            </button>
+          ))}
+          <button
+            className={`filter-btn${showTokenUsage ? " active" : ""}`}
+            onClick={onToggleTokenUsage}
+          >
+            tokens
+          </button>
+          <div className="toolbar-sep" style={{ flexShrink: 0 }} />
+          <button className="filter-btn" onClick={onCollapseAll} title="Collapse all entries">
+            – all
+          </button>
+        </div>
+      )}
     </div>
   );
 }
