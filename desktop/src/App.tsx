@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import type { SessionMeta } from "@/lib/types";
+import { formatTime } from "@/utils/format";
 import { listSessions } from "./desktop-api";
 import DesktopSessionDetail from "./DesktopSessionDetail";
 import DesktopSessionList from "./DesktopSessionList";
 import DesktopSettingsPage from "./DesktopSettingsPage";
 import { refreshSelectedSession, sessionListsEqual } from "./session-refresh";
+import { startWindowDrag } from "./window-drag";
 
 const SESSION_POLL_INTERVAL_MS = 5000;
 
@@ -15,6 +17,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
   const [sessionSidebarOpen, setSessionSidebarOpen] = useState(true);
+  const [activeTab, setActiveTab] = useState<"session" | "files">("session");
   const sidebarRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -78,73 +81,123 @@ export default function App() {
 
   return (
     <div id="app" className={selected ? "has-session" : "no-session"}>
-      <nav id="sidebar" ref={sidebarRef} className={sessionSidebarOpen ? "" : "desktop-sidebar-collapsed"}>
-        {sessionSidebarOpen ? (
-          <>
-            <div className="sidebar-header">
-              <h1>agent-vis</h1>
-              {/* The desktop renderer uses Vite, so Next's Image component is unavailable. */}
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src="/logo.png" alt="" className="sidebar-logo" />
-              <div className="desktop-sidebar-actions">
-                <button
-                  className={`settings-nav-btn${showSettings ? " active" : ""}`}
-                  onClick={() => { setShowSettings(true); setSelected(null); }}
-                  title="Settings"
-                  aria-label="Open settings"
-                >
-                  &#9881;
-                </button>
-                <button
-                  className="desktop-panel-toggle"
-                  onClick={() => setSessionSidebarOpen(false)}
-                  title="Hide sessions"
-                  aria-label="Hide sessions sidebar"
-                >
-                  &#8249;
-                </button>
+      <DesktopMacTitlebar
+        session={showSettings ? null : selected}
+        activeTab={activeTab}
+        onActiveTabChange={setActiveTab}
+      />
+      <div className="desktop-app-body">
+        <nav id="sidebar" ref={sidebarRef} className={sessionSidebarOpen ? "" : "desktop-sidebar-collapsed"}>
+          {sessionSidebarOpen ? (
+            <>
+              <DesktopSessionList
+                sessions={sessions}
+                currentFile={selectedFiles}
+                loading={loading}
+                error={error}
+                settingsActive={showSettings}
+                onOpenSettings={() => { setShowSettings(true); setSelected(null); }}
+                onHideSessions={() => setSessionSidebarOpen(false)}
+                onSelectSession={(files) => {
+                  setShowSettings(false);
+                  setActiveTab("session");
+                  setSelected(sessions.find((session) => (session.files?.join(",") || session.file) === files) || null);
+                }}
+              />
+              <div className="resize-handle right" />
+            </>
+          ) : (
+            <button
+              className="desktop-panel-reopen desktop-session-reopen"
+              onClick={() => setSessionSidebarOpen(true)}
+              title="Show sessions"
+              aria-label="Show sessions sidebar"
+            >
+              <span>sessions</span>
+              <b>&#8250;</b>
+            </button>
+          )}
+        </nav>
+        <main id="main-content">
+          {showSettings ? (
+            <DesktopSettingsPage onBack={() => setShowSettings(false)} />
+          ) : !selected ? (
+            <div className="welcome">
+              <div className="welcome-inner">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src="/logo.png" alt="" className="desktop-welcome-logo" />
+                <h2>Select a session</h2>
+                <p>Explore local Claude Code and Codex work without starting a server.</p>
               </div>
             </div>
-            <DesktopSessionList
-              sessions={sessions}
-              currentFile={selectedFiles}
-              loading={loading}
-              error={error}
-              onSelectSession={(files) => {
-                setShowSettings(false);
-                setSelected(sessions.find((session) => (session.files?.join(",") || session.file) === files) || null);
-              }}
+          ) : (
+            <DesktopSessionDetail
+              key={selectedFiles}
+              session={selected}
+              activeTab={activeTab}
+              onActiveTabChange={setActiveTab}
             />
-            <div className="resize-handle right" />
-          </>
-        ) : (
-          <button
-            className="desktop-panel-reopen desktop-session-reopen"
-            onClick={() => setSessionSidebarOpen(true)}
-            title="Show sessions"
-            aria-label="Show sessions sidebar"
-          >
-            <span>sessions</span>
-            <b>&#8250;</b>
-          </button>
-        )}
-      </nav>
-      <main id="main-content">
-        {showSettings ? (
-          <DesktopSettingsPage onBack={() => setShowSettings(false)} />
-        ) : !selected ? (
-          <div className="welcome">
-            <div className="welcome-inner">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src="/logo.png" alt="" className="desktop-welcome-logo" />
-              <h2>Select a session</h2>
-              <p>Explore local Claude Code and Codex work without starting a server.</p>
-            </div>
-          </div>
-        ) : (
-          <DesktopSessionDetail key={selectedFiles} session={selected} onBack={() => setSelected(null)} />
-        )}
-      </main>
+          )}
+        </main>
+      </div>
     </div>
+  );
+}
+
+function DesktopMacTitlebar({
+  session,
+  activeTab,
+  onActiveTabChange,
+}: {
+  session: SessionMeta | null;
+  activeTab: "session" | "files";
+  onActiveTabChange: (tab: "session" | "files") => void;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  return (
+    <header
+      className="desktop-macos-titlebar"
+      data-tauri-drag-region
+      onMouseDown={startWindowDrag}
+    >
+      <div className="desktop-macos-titlebar-gutter" />
+      {session && (
+        <div className="desktop-titlebar-meta" data-window-no-drag>
+          <span className="mono">{session.id}</span>
+          <button
+            className="desktop-copy-session-id"
+            title={copied ? "Copied session ID" : "Copy session ID"}
+            aria-label={copied ? "Copied session ID" : "Copy session ID"}
+            onClick={() => {
+              navigator.clipboard.writeText(session.id).then(() => {
+                setCopied(true);
+                window.setTimeout(() => setCopied(false), 1200);
+              }).catch(() => {});
+            }}
+          >
+            {copied ? "✓" : "⧉"}
+          </button>
+          <span className="meta-tag">{session.cwd.replace(/^\/(?:Users|home)\/[^/]+/, "~")}</span>
+          <span className="meta-tag">{formatTime(session.timestamp)}</span>
+        </div>
+      )}
+      {session && (
+        <div className="desktop-titlebar-tabs" data-window-no-drag>
+          <button
+            className={activeTab === "session" ? "active" : ""}
+            onClick={() => onActiveTabChange("session")}
+          >
+            Session
+          </button>
+          <button
+            className={activeTab === "files" ? "active" : ""}
+            onClick={() => onActiveTabChange("files")}
+          >
+            Files
+          </button>
+        </div>
+      )}
+    </header>
   );
 }

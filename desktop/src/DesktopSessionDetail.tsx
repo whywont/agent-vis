@@ -6,21 +6,24 @@ import DesktopFileTree from "./DesktopFileTree";
 import DesktopFilesCanvas from "./DesktopFilesCanvas";
 import DesktopTimeline from "./DesktopTimeline";
 import { getGitBranch, readSession } from "./desktop-api";
+import { startWindowDrag } from "./window-drag";
 
 export default function DesktopSessionDetail({
   session,
-  onBack,
+  activeTab,
+  onActiveTabChange,
 }: {
   session: SessionMeta;
-  onBack: () => void;
+  activeTab: "session" | "files";
+  onActiveTabChange: (tab: "session" | "files") => void;
 }) {
   const [events, setEvents] = useState<AppEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [loadedBatches, setLoadedBatches] = useState(0);
-  const [activeTab, setActiveTab] = useState<"session" | "files">("session");
   const [branch, setBranch] = useState<string | null>(null);
   const [filePanelOpen, setFilePanelOpen] = useState(true);
+  const [copiedId, setCopiedId] = useState(false);
   const fileTreeRef = useRef<HTMLDivElement>(null);
   const resizeHandleRef = useRef<HTMLDivElement>(null);
   const files = session.files?.join(",") || session.file;
@@ -101,23 +104,40 @@ export default function DesktopSessionDetail({
 
   return (
     <div className="session-detail">
-      <div className="detail-header">
-        <button className="back-btn" onClick={onBack}>&larr; back</button>
-        <div className="detail-meta">
+      <div
+        className="detail-header"
+        data-tauri-drag-region
+        onMouseDown={startWindowDrag}
+      >
+        <div className="detail-meta" data-window-no-drag>
           <span className="mono">{id}</span>
+          <button
+            className="desktop-copy-session-id"
+            type="button"
+            title={copiedId ? "Copied session ID" : "Copy session ID"}
+            aria-label={copiedId ? "Copied session ID" : "Copy session ID"}
+            onClick={() => {
+              navigator.clipboard.writeText(id).then(() => {
+                setCopiedId(true);
+                window.setTimeout(() => setCopiedId(false), 1200);
+              }).catch(() => {});
+            }}
+          >
+            {copiedId ? "✓" : "⧉"}
+          </button>
           <span className="meta-tag">{cwd.replace(/^\/(?:Users|home)\/[^/]+/, "~")}</span>
           <span className="meta-tag">{formatTime(timestamp)}</span>
         </div>
         <div className="desktop-header-tabs" aria-label="Session views">
           <button
             className={`session-tab-btn${activeTab === "session" ? " active" : ""}`}
-            onClick={() => setActiveTab("session")}
+            onClick={() => onActiveTabChange("session")}
           >
             Session
           </button>
           <button
             className={`session-tab-btn${activeTab === "files" ? " active" : ""}`}
-            onClick={() => setActiveTab("files")}
+            onClick={() => onActiveTabChange("files")}
           >
             Files
           </button>
@@ -168,7 +188,11 @@ export default function DesktopSessionDetail({
               <b>&#8250;</b>
             </button>
           )}
-          <DesktopTimeline events={events} sessionCwd={cwd} />
+          <DesktopTimeline
+            events={events}
+            sessionCwd={cwd}
+            sessionKey={`${session.source}:${session.id}`}
+          />
         </div>
       )}
     </div>
