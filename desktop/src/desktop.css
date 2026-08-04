@@ -722,7 +722,7 @@
 .desktop-search-kind.kind-user_message { color: var(--blue); }
 .desktop-search-kind.kind-agent_message { color: var(--green); }
 .desktop-search-kind.kind-file_change { color: var(--accent); }
-.desktop-search-kind.kind-shell_command { color: var(--orange); }
+.desktop-search-kind.match-concept { color: #5ec4c4; }
 
 .desktop-search-snippet {
   display: block;

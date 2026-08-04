@@ -57,6 +57,7 @@ export interface SessionSearchResult {
   eventKind: string;
   snippet: string;
   highlights: string[];
+  matchKind: "keyword" | "concept";
   score: number;
 }
 
@@ -65,6 +66,9 @@ export interface SessionSearchResponse {
   indexing: boolean;
   indexedFiles: number;
   totalFiles: number;
+  semanticReady: boolean;
+  semanticIndexing: boolean;
+  semanticError?: string | null;
   error?: string | null;
 }
 

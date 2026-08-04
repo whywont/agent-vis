@@ -1,6 +1,7 @@
 mod explain;
 mod search;
 mod secrets;
+mod semantic;
 mod sessions;
 mod settings;
 mod workspace;

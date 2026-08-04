@@ -87,6 +87,9 @@ export default function DesktopSessionList({
               indexing: false,
               indexedFiles: 0,
               totalFiles: 0,
+              semanticReady: false,
+              semanticIndexing: false,
+              semanticError: null,
               error: "Search index is unavailable",
             },
           });
@@ -192,10 +195,13 @@ export default function DesktopSessionList({
           <div className="desktop-search-status">
             {searching
               ? "Searching local sessions..."
-              : `Indexing ${searchResponse?.indexedFiles || 0}/${searchResponse?.totalFiles || 0} files; results update live`}
+              : `${searchResponse?.semanticIndexing ? "Building concept index" : "Indexing"} ${searchResponse?.indexedFiles || 0}/${searchResponse?.totalFiles || 0} files; results update live`}
           </div>
         )}
         {searchResponse?.error && <div className="desktop-search-status error">{searchResponse.error}</div>}
+        {searchResponse?.semanticError && (
+          <div className="desktop-search-status error">Concept search unavailable: {searchResponse.semanticError}</div>
+        )}
         {loading && <div className="desktop-status">Reading local sessions...</div>}
         {error && <div className="desktop-status error">{error}</div>}
         {!loading && !error && groups.map((group) => (
@@ -223,7 +229,9 @@ export default function DesktopSessionList({
                   <span className="session-cwd">{session.cwd.replace(/^\/(?:Users|home)\/[^/]+/, "~")}</span>
                   {result && (
                     <>
-                      <span className={`desktop-search-kind kind-${result.eventKind}`}>{searchKindLabel(result.eventKind)}</span>
+                      <span className={`desktop-search-kind kind-${result.eventKind} match-${result.matchKind}`}>
+                        {result.matchKind === "concept" ? "concept" : searchKindLabel(result.eventKind)}
+                      </span>
                       <SearchSnippet text={result.snippet} highlights={result.highlights} />
                     </>
                   )}
@@ -246,7 +254,6 @@ function searchKindLabel(kind: string): string {
     user_message: "user",
     agent_message: "agent",
     reasoning: "thinking",
-    shell_command: "command",
     file_change: "patch",
     metadata: "session",
   } as Record<string, string>)[kind] || kind;
