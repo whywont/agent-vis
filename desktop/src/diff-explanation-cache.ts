@@ -25,6 +25,10 @@ export function diffExplanationKey(identity: DiffExplanationIdentity): string {
   return `${STORAGE_PREFIX}${stableHash(serialized)}`;
 }
 
+export function detailedDiffExplanationKey(explanationKey: string): string {
+  return `${explanationKey}:detailed`;
+}
+
 export function loadDiffExplanation(
   key: string,
   storage: ExplanationStorage = window.localStorage,

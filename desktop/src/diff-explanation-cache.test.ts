@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  detailedDiffExplanationKey,
   diffExplanationKey,
   loadDiffExplanation,
   removeDiffExplanation,
@@ -40,6 +41,12 @@ describe("desktop diff explanation cache", () => {
     expect(diffExplanationKey(identity("+first", "request one"))).not.toBe(
       diffExplanationKey(identity("+first", "request two")),
     );
+  });
+
+  it("stores detailed follow-up explanations separately", () => {
+    const key = diffExplanationKey(identity("+more context"));
+
+    expect(detailedDiffExplanationKey(key)).toBe(`${key}:detailed`);
   });
 
   it("removes a dismissed explanation", () => {

@@ -45,6 +45,7 @@ export interface ExplainDiffRequest {
   patch: string;
   contextText?: string;
   fileContent?: string;
+  detailLevel?: "detailed";
 }
 
 interface WorkspaceFile {

@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from "react";
 import ColoredText from "@/components/ColoredText";
 import { explainDiff, readWorkspaceFile, saveWorkspaceFile } from "./desktop-api";
 import {
+  detailedDiffExplanationKey,
   diffExplanationKey,
   loadDiffExplanation,
   removeDiffExplanation,
@@ -93,10 +94,16 @@ function DesktopDiffBlock({
   workspaceRoot: string;
   explanationKey: string;
 }) {
+  const detailedExplanationKey = detailedDiffExplanationKey(explanationKey);
   const [copied, setCopied] = useState(false);
   const [explanation, setExplanation] = useState<string | null>(() => loadDiffExplanation(explanationKey));
   const [explanationError, setExplanationError] = useState<string | null>(null);
   const [explaining, setExplaining] = useState(false);
+  const [detailedExplanation, setDetailedExplanation] = useState<string | null>(
+    () => loadDiffExplanation(detailedExplanationKey),
+  );
+  const [detailedExplanationError, setDetailedExplanationError] = useState<string | null>(null);
+  const [explainingDetails, setExplainingDetails] = useState(false);
   const [fullContent, setFullContent] = useState<string | null>(null);
   const [showFull, setShowFull] = useState(false);
   const [loadingFile, setLoadingFile] = useState(false);
@@ -198,6 +205,35 @@ function DesktopDiffBlock({
     }
   }
 
+  async function explainMore() {
+    if (explainingDetails) return;
+    setDetailedExplanationError(null);
+    setExplainingDetails(true);
+    try {
+      let fileContent: string | undefined;
+      if (block.action !== "delete") {
+        try {
+          fileContent = await loadCurrentFile();
+        } catch {
+          // The patch remains sufficient if the current file is unavailable.
+        }
+      }
+      const result = await explainDiff({
+        filepath: block.filepath,
+        patch,
+        contextText,
+        fileContent,
+        detailLevel: "detailed",
+      });
+      saveDiffExplanation(detailedExplanationKey, result);
+      setDetailedExplanation(result);
+    } catch (reason: unknown) {
+      setDetailedExplanationError(desktopError(reason));
+    } finally {
+      setExplainingDetails(false);
+    }
+  }
+
   const addedLines = useMemo(() => computeAddedLineNumbers(block.lines), [block.lines]);
 
   return (
@@ -290,8 +326,11 @@ function DesktopDiffBlock({
               className="diff-explain-dismiss"
               onClick={() => {
                 removeDiffExplanation(explanationKey);
+                removeDiffExplanation(detailedExplanationKey);
                 setExplanation(null);
                 setExplanationError(null);
+                setDetailedExplanation(null);
+                setDetailedExplanationError(null);
               }}
               aria-label="Dismiss explanation"
             >
@@ -301,6 +340,23 @@ function DesktopDiffBlock({
           <div className={explanationError ? "desktop-explain-error" : "diff-explain-text"} role={explanationError ? "alert" : undefined}>
             {explanationError ?? explanation}
           </div>
+          {!explanationError && explanation !== null && (
+            <>
+              <div className="desktop-explain-actions">
+                <button type="button" disabled={explainingDetails} onClick={() => void explainMore()}>
+                  {explainingDetails ? "getting more information..." : detailedExplanation ? "Refresh more information" : "More information"}
+                </button>
+              </div>
+              {(detailedExplanation !== null || detailedExplanationError !== null) && (
+                <div className={`desktop-explain-detail${detailedExplanationError ? " error" : ""}`}>
+                  <div className="desktop-explain-detail-label">more information</div>
+                  <div className={detailedExplanationError ? "desktop-explain-error" : "diff-explain-text"} role={detailedExplanationError ? "alert" : undefined}>
+                    {detailedExplanationError ?? detailedExplanation}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
         </div>
       )}
     </div>

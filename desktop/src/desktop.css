@@ -843,6 +843,47 @@
   line-height: 1.5;
 }
 
+.desktop-explain-actions {
+  display: flex;
+  margin-top: 10px;
+}
+
+.desktop-explain-actions button {
+  min-height: 28px;
+  padding: 0 9px;
+  border: 1px solid rgba(155, 142, 207, 0.28);
+  border-radius: 5px;
+  background: rgba(155, 142, 207, 0.08);
+  color: rgba(190, 180, 230, 0.9);
+  cursor: pointer;
+  font: 10px var(--font-mono);
+}
+
+.desktop-explain-actions button:hover:not(:disabled) {
+  border-color: rgba(155, 142, 207, 0.5);
+  background: rgba(155, 142, 207, 0.14);
+  color: var(--text);
+}
+
+.desktop-explain-actions button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.desktop-explain-detail {
+  margin-top: 11px;
+  padding-top: 11px;
+  border-top: 1px solid rgba(155, 142, 207, 0.18);
+}
+
+.desktop-explain-detail-label {
+  margin-bottom: 7px;
+  color: rgba(155, 142, 207, 0.7);
+  font: 9px var(--font-mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
 .desktop-settings-prompt {
   width: 100%;
   min-height: 150px;

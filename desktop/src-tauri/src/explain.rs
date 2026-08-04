@@ -12,6 +12,9 @@ const MAX_EXPLAIN_PATCH_BYTES: usize = 2 * 1024 * 1024;
 const MAX_EXPLAIN_CONTEXT_BYTES: usize = 32 * 1024;
 const MAX_EXPLAIN_FILE_BYTES: usize = MAX_EDIT_FILE_BYTES as usize;
 const MAX_EXPLAIN_RESPONSE_BYTES: usize = 1024 * 1024;
+const STANDARD_EXPLAIN_TOKENS: usize = 512;
+const DETAILED_EXPLAIN_TOKENS: usize = 1536;
+const DETAILED_EXPLAIN_INSTRUCTION: &str = "Provide a much more detailed explanation. Highlight important syntax, language idioms, architectural and design choices, control and data flow, subtle behavior, tradeoffs, and likely implications. Use clear sections where useful and connect the patch to the surrounding file context.";
 const MISSING_EXPLAIN_API_KEY: &str =
     "Add an API key in Settings for the selected explanation provider.";
 
@@ -22,6 +25,13 @@ pub(crate) struct ExplainDiffRequest {
     patch: String,
     context_text: Option<String>,
     file_content: Option<String>,
+    detail_level: Option<ExplainDetailLevel>,
+}
+
+#[derive(Clone, Copy, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+enum ExplainDetailLevel {
+    Detailed,
 }
 
 #[derive(Deserialize)]
@@ -101,10 +111,23 @@ fn explain_user_prompt(request: &ExplainDiffRequest) -> String {
         .as_ref()
         .map(|value| format!("\n\nCurrent complete file for context:\n\n{value}"))
         .unwrap_or_default();
+    let detail_instruction = if request.detail_level == Some(ExplainDetailLevel::Detailed) {
+        format!("\n\n{DETAILED_EXPLAIN_INSTRUCTION}")
+    } else {
+        String::new()
+    };
     format!(
-        "{context}Explain this patch for {}:\n\n{}{file_context}",
+        "{context}Explain this patch for {}:\n\n{}{file_context}{detail_instruction}",
         request.filepath, request.patch,
     )
+}
+
+fn explain_token_limit(request: &ExplainDiffRequest) -> usize {
+    if request.detail_level == Some(ExplainDetailLevel::Detailed) {
+        DETAILED_EXPLAIN_TOKENS
+    } else {
+        STANDARD_EXPLAIN_TOKENS
+    }
 }
 
 fn explain_http_client() -> Result<reqwest::Client, String> {
@@ -144,6 +167,7 @@ async fn explain_openai_compatible(
     settings: &DesktopSettingsFile,
     secrets: &ExplainSecrets,
     user_prompt: &str,
+    max_tokens: usize,
 ) -> Result<String, String> {
     let open_router = settings.provider == ExplainProvider::Openrouter;
     let base_url = if open_router {
@@ -166,7 +190,7 @@ async fn explain_openai_compatible(
             .json(&serde_json::json!({
                 "model": settings.model,
                 "stream": false,
-                "max_tokens": 512,
+                "max_tokens": max_tokens,
                 "messages": [
                     { "role": "system", "content": settings.explain_instructions },
                     { "role": "user", "content": user_prompt }
@@ -211,6 +235,7 @@ async fn explain_anthropic(
     settings: &DesktopSettingsFile,
     secrets: &ExplainSecrets,
     user_prompt: &str,
+    max_tokens: usize,
 ) -> Result<String, String> {
     let api_key =
         required_explain_api_key(secrets.anthropic_api_key.as_deref().unwrap_or_default())?;
@@ -220,7 +245,7 @@ async fn explain_anthropic(
         .header("anthropic-version", "2023-06-01")
         .json(&serde_json::json!({
             "model": settings.model,
-            "max_tokens": 512,
+            "max_tokens": max_tokens,
             "system": settings.explain_instructions,
             "messages": [{ "role": "user", "content": user_prompt }]
         }))
@@ -264,12 +289,13 @@ pub(crate) async fn explain_diff(
     validate_desktop_settings(&mut settings)?;
     let client = explain_http_client()?;
     let prompt = explain_user_prompt(&request);
+    let max_tokens = explain_token_limit(&request);
     match settings.provider {
         ExplainProvider::Anthropic => {
-            explain_anthropic(&client, &settings, &secrets, &prompt).await
+            explain_anthropic(&client, &settings, &secrets, &prompt, max_tokens).await
         }
         ExplainProvider::OpenaiCompatible | ExplainProvider::Openrouter => {
-            explain_openai_compatible(&client, &settings, &secrets, &prompt).await
+            explain_openai_compatible(&client, &settings, &secrets, &prompt, max_tokens).await
         }
     }
 }
@@ -285,6 +311,7 @@ mod tests {
             patch: "  *** Update File: src/App.tsx\n+const value = 1;  ".to_owned(),
             context_text: Some("  add the value  ".to_owned()),
             file_content: Some("const value = 1;\n".to_owned()),
+            detail_level: None,
         };
 
         validate_explain_request(&mut request).unwrap();
@@ -294,6 +321,11 @@ mod tests {
             explain_user_prompt(&request),
             "User request that triggered this change:\n\"add the value\"\n\nExplain this patch for src/App.tsx:\n\n*** Update File: src/App.tsx\n+const value = 1;\n\nCurrent complete file for context:\n\nconst value = 1;"
         );
+        assert_eq!(explain_token_limit(&request), STANDARD_EXPLAIN_TOKENS);
+
+        request.detail_level = Some(ExplainDetailLevel::Detailed);
+        assert!(explain_user_prompt(&request).ends_with(DETAILED_EXPLAIN_INSTRUCTION));
+        assert_eq!(explain_token_limit(&request), DETAILED_EXPLAIN_TOKENS);
     }
 
     #[test]
@@ -303,6 +335,7 @@ mod tests {
             patch: "   ".to_owned(),
             context_text: None,
             file_content: None,
+            detail_level: None,
         };
         assert_eq!(
             validate_explain_request(&mut empty).unwrap_err(),
@@ -314,6 +347,7 @@ mod tests {
             patch: "x".repeat(MAX_EXPLAIN_PATCH_BYTES + 1),
             context_text: None,
             file_content: None,
+            detail_level: None,
         };
         assert_eq!(
             validate_explain_request(&mut oversized).unwrap_err(),
