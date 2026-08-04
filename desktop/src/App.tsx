@@ -15,6 +15,7 @@ export interface SessionMatchTarget {
   eventTs: string;
   eventKind: string;
   eventIdentity?: string;
+  requestId?: number;
 }
 
 export default function App() {

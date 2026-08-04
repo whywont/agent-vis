@@ -104,13 +104,14 @@ export default function DesktopTimeline({
             sessionCwd={sessionCwd}
             contextText={event.kind === "file_change" ? precedingUserRequest(events, event.ts) : undefined}
             matched={targetMatchesEvent(matchTarget, event)}
+            matchRequestKey={targetMatchesEvent(matchTarget, event) ? targetRequestKey(matchTarget) : null}
             expanded={expandedEvents.has(timelineEventIdentity(event))}
-            onToggleExpanded={() => {
+            onExpandedChange={(nextExpanded) => {
               const identity = timelineEventIdentity(event);
               setExpandedEvents((current) => {
                 const next = new Set(current);
-                if (next.has(identity)) next.delete(identity);
-                else next.add(identity);
+                if (nextExpanded) next.add(identity);
+                else next.delete(identity);
                 return next;
               });
             }}
@@ -142,19 +143,23 @@ function DesktopTimelineEntry({
   sessionCwd,
   contextText,
   matched,
+  matchRequestKey,
   expanded,
-  onToggleExpanded,
+  onExpandedChange,
 }: {
   event: TimelineEvent;
   sessionCwd: string;
   contextText?: string;
   matched: boolean;
+  matchRequestKey: string | null;
   expanded: boolean;
-  onToggleExpanded: () => void;
+  onExpandedChange: (expanded: boolean) => void;
 }) {
+  const [dismissedMatchRequest, setDismissedMatchRequest] = useState<string | null>(null);
   const highlightKey = `hl:${sessionCwd}:${event.ts}`;
   const [highlighted, setHighlighted] = useState(() => localStorage.getItem(highlightKey) === "1");
-  const collapsed = matched ? false : !expanded;
+  const forcedOpen = matched && matchRequestKey !== dismissedMatchRequest;
+  const collapsed = forcedOpen ? false : !expanded;
 
   function toggleHighlight(clickEvent: ReactMouseEvent<HTMLButtonElement>) {
     clickEvent.stopPropagation();
@@ -190,7 +195,17 @@ function DesktopTimelineEntry({
       data-event-key={eventKey(event)}
       data-event-search-key={eventSearchKey(event)}
     >
-      <div className="entry-header" onClick={onToggleExpanded}>
+      <div
+        className="entry-header"
+        onClick={() => {
+          if (forcedOpen) {
+            setDismissedMatchRequest(matchRequestKey);
+            onExpandedChange(false);
+          } else {
+            onExpandedChange(!expanded);
+          }
+        }}
+      >
         <span className={`entry-badge ${style.badge}`}>{style.label}</span>
         {collapsed && <span className="entry-summary">{summary(event)}</span>}
         <span className="entry-time">{formatTime(event.ts)}</span>
@@ -241,6 +256,11 @@ function targetEventSelector(target: SessionMatchTarget): string {
 function targetMatchesEvent(target: SessionMatchTarget | null, event: TimelineEvent): boolean {
   if (!target || target.eventKind !== event.kind || target.eventTs !== event.ts) return false;
   return !target.eventIdentity || target.eventIdentity === timelineEventIdentity(event);
+}
+
+function targetRequestKey(target: SessionMatchTarget | null): string | null {
+  if (!target) return null;
+  return [target.eventIdentity || `${target.eventKind}:${target.eventTs}`, target.requestId || 0].join(":");
 }
 
 function entryStyle(event: Exclude<TimelineEvent, { kind: "token_usage" }>) {

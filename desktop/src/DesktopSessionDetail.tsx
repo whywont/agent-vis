@@ -36,6 +36,7 @@ export default function DesktopSessionDetail({
   const [copiedId, setCopiedId] = useState(false);
   const fileTreeRef = useRef<HTMLDivElement>(null);
   const resizeHandleRef = useRef<HTMLDivElement>(null);
+  const jumpRequestId = useRef(0);
   const files = session.files?.join(",") || session.file;
 
   useEffect(() => {
@@ -100,12 +101,14 @@ export default function DesktopSessionDetail({
   const timestamp = meta?.kind === "session_start" ? meta.ts : session.timestamp;
 
   function jumpToPatch(event: FileChangeEvent) {
+    jumpRequestId.current += 1;
     setFileTimelineSelection({
       baseTarget: matchTarget,
       target: {
         eventTs: event.ts,
         eventKind: event.kind,
         eventIdentity: timelineEventIdentity(event),
+        requestId: jumpRequestId.current,
       },
     });
   }
