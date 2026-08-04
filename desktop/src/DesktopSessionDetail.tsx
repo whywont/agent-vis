@@ -367,8 +367,11 @@ export default function DesktopSessionDetail({
           />
         </div>
       )}
-      {terminalOpen && visibleTerminal && terminalPlacement === "bottom" && terminalPanel("bottom")}
-      {terminalOpen && visibleTerminal && terminalPlacement === "sessions" && terminalSidePanel()}
+      {/* Keep terminal renderers mounted while browsing a session without one.
+          Unmounting them here used to look like navigation but also sent the
+          native stop command, killing the shell and its resumed agent. */}
+      {terminalOpen && terminals.length > 0 && terminalPlacement === "bottom" && terminalPanel("bottom")}
+      {terminalOpen && terminals.length > 0 && terminalPlacement === "sessions" && terminalSidePanel()}
     </div>
   );
 
@@ -379,9 +382,10 @@ export default function DesktopSessionDetail({
 
   function terminalPanel(placement: "bottom" | "sessions") {
     const snapped = placement === "sessions";
+    const parked = !visibleTerminal;
     return (
       <section
-        className={`desktop-terminal-panel${snapped ? " desktop-terminal-sessions" : ""}`}
+        className={`desktop-terminal-panel${snapped ? " desktop-terminal-sessions" : ""}${parked ? " desktop-terminal-parked" : ""}`}
         style={snapped ? sessionsDockBounds || { visibility: "hidden" } : { height: terminalHeight }}
         aria-label="Terminal panel"
       >

@@ -1353,6 +1353,10 @@ body.terminal-over-sessions #sidebar {
   border-radius: 8px;
 }
 
+/* Keep inactive session terminals alive without leaving an empty dock onscreen.
+   Returning to their session reuses the same PTY and xterm instance. */
+.desktop-terminal-parked { display: none; }
+
 .desktop-terminal-panel-header {
   position: relative;
   z-index: 1;
