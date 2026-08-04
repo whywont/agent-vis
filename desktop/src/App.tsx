@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import type { SessionMeta } from "@/lib/types";
 import { formatTime } from "@/utils/format";
-import { deleteSession, listSessions } from "./desktop-api";
+import { deleteSession, getDesktopSettings, listSessions } from "./desktop-api";
 import DesktopSessionDetail from "./DesktopSessionDetail";
 import DesktopSessionList from "./DesktopSessionList";
 import DesktopSettingsPage from "./DesktopSettingsPage";
 import { loadSessionAliases, saveSessionAlias, sessionAlias } from "./session-aliases";
 import { refreshSelectedSession, sessionListsEqual } from "./session-refresh";
 import { startWindowDrag } from "./window-drag";
+import { applyDesktopAppearance } from "./desktop-theme";
 
 const SESSION_POLL_INTERVAL_MS = 5000;
 
@@ -30,6 +31,14 @@ export default function App() {
   const [matchTarget, setMatchTarget] = useState<SessionMatchTarget | null>(null);
   const [sessionAliases, setSessionAliases] = useState(() => loadSessionAliases());
   const sidebarRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    void getDesktopSettings().then((settings) => {
+      applyDesktopAppearance(settings.appearance);
+    }).catch(() => {
+      // Appearance is cosmetic; leave the default theme in place on a settings error.
+    });
+  }, []);
 
   useEffect(() => {
     let cancelled = false;

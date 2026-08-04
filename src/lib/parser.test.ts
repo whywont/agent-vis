@@ -181,7 +181,7 @@ describe("parseEvent — event_msg token_count", () => {
   });
 });
 
-describe("parseEvent — event_msg unknown subtype", () => {
+describe("parseEvent - event_msg unknown subtype", () => {
   it("returns null for unrecognised subtype", () => {
     const obj = {
       timestamp: "2024-01-01T00:04:00Z",
@@ -189,6 +189,29 @@ describe("parseEvent — event_msg unknown subtype", () => {
       payload: { type: "something_else" },
     };
     expect(parseEvent(obj)).toBeNull();
+  });
+});
+
+describe("parseEvent - context compaction", () => {
+  it("surfaces Codex's durable handoff summary", () => {
+    const result = parseEvent({
+      timestamp: "2026-08-04T06:11:10.288Z",
+      type: "compacted",
+      payload: { message: "Continue the mobile chat work from the existing implementation." },
+    });
+    expect(result).toEqual({
+      kind: "context_compaction",
+      ts: "2026-08-04T06:11:10.288Z",
+      text: "Continue the mobile chat work from the existing implementation.",
+    });
+  });
+
+  it("does not duplicate Codex's lightweight compaction marker", () => {
+    expect(parseEvent({
+      timestamp: "2026-08-04T06:11:10.289Z",
+      type: "event_msg",
+      payload: { type: "context_compacted" },
+    })).toBeNull();
   });
 });
 

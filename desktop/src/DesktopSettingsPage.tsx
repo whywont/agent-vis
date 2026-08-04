@@ -5,8 +5,10 @@ import {
   type DesktopSettings,
   type ExplainProvider,
 } from "./desktop-api";
+import { applyDesktopAppearance, type DesktopAppearance } from "./desktop-theme";
 
 const emptySettings: DesktopSettings = {
+  appearance: "warm-dark",
   provider: "anthropic",
   model: "claude-haiku-4-5",
   localBaseUrl: "http://127.0.0.1:11434/v1",
@@ -45,6 +47,7 @@ export default function DesktopSettingsPage({ onBack }: { onBack: () => void }) 
     setStatus("saving...");
     try {
       const saved = await saveDesktopSettings({
+        appearance: settings.appearance,
         provider: settings.provider,
         model: settings.model,
         localBaseUrl: settings.localBaseUrl,
@@ -63,7 +66,7 @@ export default function DesktopSettingsPage({ onBack }: { onBack: () => void }) 
       setClearAnthropicApiKey(false);
       setClearLocalApiKey(false);
       setClearOpenRouterApiKey(false);
-      setStatus("Saved. The next diff explanation uses these settings.");
+      setStatus("Saved.");
     } catch (reason: unknown) {
       setStatus(reason instanceof Error ? reason.message : String(reason));
     }
@@ -81,6 +84,47 @@ export default function DesktopSettingsPage({ onBack }: { onBack: () => void }) 
         <span className="desktop-settings-badge">native</span>
       </div>
       <div className="settings-grid">
+        <section className="settings-card">
+          <div className="desktop-appearance-heading">
+            <div>
+              <h3>Appearance</h3>
+              <p>Preview a desktop workspace colorway. The terminal always stays dark.</p>
+            </div>
+          </div>
+          <div className="desktop-appearance-picker" role="radiogroup" aria-label="Desktop appearance">
+            <AppearanceOption
+              appearance="warm-dark"
+              title="Amber night"
+              detail="Black with warm yellow"
+              selected={settings.appearance === "warm-dark"}
+              onSelect={(appearance) => {
+                set("appearance", appearance);
+                applyDesktopAppearance(appearance);
+              }}
+            />
+            <AppearanceOption
+              appearance="blue-dark"
+              title="Blue hour"
+              detail="Charcoal with pale blue"
+              selected={settings.appearance === "blue-dark"}
+              onSelect={(appearance) => {
+                set("appearance", appearance);
+                applyDesktopAppearance(appearance);
+              }}
+            />
+            <AppearanceOption
+              appearance="light"
+              title="Paper light"
+              detail="White with charcoal text"
+              selected={settings.appearance === "light"}
+              onSelect={(appearance) => {
+                set("appearance", appearance);
+                applyDesktopAppearance(appearance);
+              }}
+            />
+          </div>
+        </section>
+
         <section className="settings-card">
           <h3>Explain model</h3>
           <p>Choose the provider behind each desktop diff&apos;s <em>explain</em> button. It does not change the model running Codex or Claude Code.</p>
@@ -168,6 +212,35 @@ export default function DesktopSettingsPage({ onBack }: { onBack: () => void }) 
         <span>{status}</span>
       </div>
     </section>
+  );
+}
+
+function AppearanceOption({
+  appearance,
+  title,
+  detail,
+  selected,
+  onSelect,
+}: {
+  appearance: DesktopAppearance;
+  title: string;
+  detail: string;
+  selected: boolean;
+  onSelect: (appearance: DesktopAppearance) => void;
+}) {
+  return (
+    <button
+      className={`desktop-appearance-option appearance-${appearance}${selected ? " selected" : ""}`}
+      role="radio"
+      aria-checked={selected}
+      onClick={() => onSelect(appearance)}
+    >
+      <span className="desktop-appearance-preview" aria-hidden="true">
+        <i /><i /><i /><b />
+      </span>
+      <span className="desktop-appearance-copy"><strong>{title}</strong><small>{detail}</small></span>
+      <span className="desktop-appearance-check">{selected ? "selected" : "select"}</span>
+    </button>
   );
 }
 

@@ -60,6 +60,7 @@ export function prepareSettingsChange(
     AGENT_VIS_LOCAL_BASE_URL: localBaseUrl || "http://127.0.0.1:11434/v1",
     HOSTS: tailscaleHost ? `127.0.0.1,${tailscaleHost}` : "127.0.0.1",
     AGENT_VIS_ALLOW_REMOTE_TERMINAL: body.remoteTerminal === true ? "1" : "0",
+    AGENT_VIS_ALLOW_REMOTE_AGENT_CHAT: body.remoteAgentChat === true ? "1" : "0",
   };
   const secrets = [
     ["anthropicApiKey", "clearAnthropicApiKey", "ANTHROPIC_API_KEY"],

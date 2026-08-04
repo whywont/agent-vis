@@ -14,12 +14,12 @@ import {
 
 function actionStyle(action: string) {
   if (action === "add") {
-    return { background: "rgba(106,191,105,0.10)", border: "rgba(106,191,105,0.35)", text: "var(--green)" };
+    return { background: "var(--green-dim)", border: "color-mix(in srgb, var(--green) 35%, transparent)", text: "var(--green)" };
   }
   if (action === "delete") {
-    return { background: "rgba(212,106,106,0.10)", border: "rgba(212,106,106,0.35)", text: "var(--red)" };
+    return { background: "var(--red-dim)", border: "color-mix(in srgb, var(--red) 35%, transparent)", text: "var(--red)" };
   }
-  return { background: "rgba(201,165,90,0.10)", border: "rgba(201,165,90,0.35)", text: "var(--accent)" };
+  return { background: "rgba(var(--accent-rgb), 0.10)", border: "color-mix(in srgb, var(--accent) 35%, transparent)", text: "var(--accent)" };
 }
 
 export default function DesktopFileCardStack({

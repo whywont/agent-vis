@@ -115,7 +115,7 @@ tailscale ip -4
 ```env
 HOSTS=127.0.0.1,100.x.y.z
 AGENT_VIS_AUTH_TOKEN=use-a-long-random-token
-AGENT_VIS_ALLOW_REMOTE_TERMINAL=1
+AGENT_VIS_ALLOW_REMOTE_AGENT_CHAT=1
 ```
 
 3. Restart agent-vis:
@@ -130,7 +130,7 @@ npm run dev
 http://100.x.y.z:3333/auth
 ```
 
-Enter the token once. The app stores it in an HTTP-only cookie. Remote terminal access is blocked unless both `AGENT_VIS_AUTH_TOKEN` and `AGENT_VIS_ALLOW_REMOTE_TERMINAL=1` are set.
+Enter the token once. The app stores it in an HTTP-only cookie. Mobile agent chat is blocked unless both `AGENT_VIS_AUTH_TOKEN` and `AGENT_VIS_ALLOW_REMOTE_AGENT_CHAT=1` are set. The separate raw browser terminal remains off unless you explicitly enable `AGENT_VIS_ALLOW_REMOTE_TERMINAL=1`.
 
 Using `HOSTS=127.0.0.1,100.x.y.z` keeps normal Mac access at `http://localhost:3333` while exposing only the Tailscale interface to your phone. Avoid `HOST=0.0.0.0` unless you intentionally want LAN devices to reach the app too.
 

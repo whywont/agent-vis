@@ -22,9 +22,25 @@ pub(crate) enum ExplainProvider {
     Openrouter,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum DesktopAppearance {
+    WarmDark,
+    BlueDark,
+    Light,
+}
+
+impl Default for DesktopAppearance {
+    fn default() -> Self {
+        Self::WarmDark
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DesktopSettingsFile {
+    #[serde(default)]
+    pub(crate) appearance: DesktopAppearance,
     pub(crate) provider: ExplainProvider,
     pub(crate) model: String,
     pub(crate) local_base_url: String,
@@ -41,6 +57,7 @@ pub(crate) struct DesktopSettingsFile {
 impl Default for DesktopSettingsFile {
     fn default() -> Self {
         Self {
+            appearance: DesktopAppearance::default(),
             provider: ExplainProvider::Anthropic,
             model: "claude-haiku-4-5".to_owned(),
             local_base_url: "http://127.0.0.1:11434/v1".to_owned(),
@@ -55,6 +72,7 @@ impl Default for DesktopSettingsFile {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DesktopSettings {
+    appearance: DesktopAppearance,
     provider: ExplainProvider,
     model: String,
     local_base_url: String,
@@ -67,6 +85,7 @@ pub(crate) struct DesktopSettings {
 impl DesktopSettings {
     pub(crate) fn new(settings: &DesktopSettingsFile, secrets: &ExplainSecrets) -> Self {
         Self {
+            appearance: settings.appearance,
             provider: settings.provider,
             model: settings.model.clone(),
             local_base_url: settings.local_base_url.clone(),
@@ -95,6 +114,7 @@ pub(crate) struct ExplainSecrets {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SaveDesktopSettingsRequest {
+    appearance: DesktopAppearance,
     provider: ExplainProvider,
     model: String,
     local_base_url: String,
@@ -310,6 +330,7 @@ fn save_desktop_settings_with_store(
 ) -> Result<DesktopSettings, String> {
     let (mut settings, _) = load_desktop_settings(path, store)?;
     let previous_local_base_url = settings.local_base_url.clone();
+    settings.appearance = request.appearance;
     settings.provider = request.provider;
     settings.model = request.model;
     settings.local_base_url = request.local_base_url;
@@ -420,6 +441,7 @@ mod tests {
 
     fn save_settings_request(local_base_url: &str) -> SaveDesktopSettingsRequest {
         SaveDesktopSettingsRequest {
+            appearance: DesktopAppearance::WarmDark,
             provider: ExplainProvider::OpenaiCompatible,
             model: "qwen3:8b".to_owned(),
             local_base_url: local_base_url.to_owned(),
@@ -451,6 +473,10 @@ mod tests {
             value.get("explainInstructions").and_then(Value::as_str),
             Some(DEFAULT_EXPLAIN_INSTRUCTIONS)
         );
+        assert_eq!(
+            value.get("appearance").and_then(Value::as_str),
+            Some("warm-dark")
+        );
     }
 
     #[test]
@@ -466,6 +492,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(settings.explain_instructions, DEFAULT_EXPLAIN_INSTRUCTIONS);
+        assert_eq!(settings.appearance, DesktopAppearance::WarmDark);
     }
 
     #[test]

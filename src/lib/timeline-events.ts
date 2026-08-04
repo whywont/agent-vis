@@ -34,5 +34,8 @@ export function timelineEventIdentity(event: TimelineEvent): string {
   if (event.kind === "token_usage") {
     return `${event.kind}:${event.ts}:${event.total_tokens}`;
   }
+  if (event.kind === "context_compaction") {
+    return `${event.kind}:${event.ts}`;
+  }
   return `${event.kind}:${event.text}`;
 }

@@ -8,6 +8,7 @@ type Settings = {
   localBaseUrl: string;
   tailscaleHost: string;
   remoteTerminal: boolean;
+  remoteAgentChat: boolean;
   authConfigured: boolean;
   anthropicKeyConfigured: boolean;
   localKeyConfigured: boolean;
@@ -20,6 +21,7 @@ const empty: Settings = {
   localBaseUrl: "http://127.0.0.1:11434/v1",
   tailscaleHost: "",
   remoteTerminal: false,
+  remoteAgentChat: false,
   authConfigured: false,
   anthropicKeyConfigured: false,
   localKeyConfigured: false,
@@ -63,7 +65,7 @@ export default function SettingsPage({ onBack }: { onBack: () => void }) {
         clearAnthropicApiKey, clearLocalApiKey, clearOpenRouterApiKey, clearAuthToken,
       }),
     });
-    setStatus(res.ok ? "Saved. Explain-model changes apply on the next request; restart agent-vis only for Tailscale/network changes." : await res.text());
+    setStatus(res.ok ? "Saved. Explain-model changes apply on the next request; restart agent-vis for Tailscale, mobile chat, or raw-terminal access changes." : await res.text());
     if (res.ok) {
       setAnthropicApiKey("");
       setLocalApiKey("");
@@ -132,10 +134,15 @@ export default function SettingsPage({ onBack }: { onBack: () => void }) {
           </label>
           {settings.authConfigured && <button className="settings-remove" onClick={() => setClearAuthToken((clear) => !clear)}>{clearAuthToken ? "keep saved token" : "remove saved token"}</button>}
           <label className="settings-checkbox">
-            <input type="checkbox" checked={settings.remoteTerminal} onChange={(e) => set("remoteTerminal", e.target.checked)} />
-            Allow terminal control from Tailscale devices
+            <input type="checkbox" checked={settings.remoteAgentChat} onChange={(e) => set("remoteAgentChat", e.target.checked)} />
+            Allow mobile agent chat from Tailscale devices
           </label>
-          <p className="settings-tip">Leave remote terminal off if you only want to inspect sessions from your phone.</p>
+          <p className="settings-tip">Shows a phone-friendly composer and session timeline. It does not expose the raw terminal.</p>
+          <label className="settings-checkbox">
+            <input type="checkbox" checked={settings.remoteTerminal} onChange={(e) => set("remoteTerminal", e.target.checked)} />
+            Allow raw terminal control from Tailscale devices
+          </label>
+          <p className="settings-tip">Leave raw terminal off unless you specifically need shell access in the browser.</p>
         </section>
       </div>
       <div className="settings-actions">

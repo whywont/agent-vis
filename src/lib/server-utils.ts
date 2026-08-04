@@ -92,8 +92,11 @@ export function resolveSessionFile(fileRef: string): {
 
 // Cache parsed session files keyed by filepath. Entries are invalidated when
 // the file's mtime changes, so live sessions get fresh data while unchanged
-// files are served instantly without re-reading.
+// files are served instantly without re-reading. Bump the parser version when
+// new transcript event shapes are supported so open, unchanged sessions reload.
+const PARSED_SESSION_CACHE_VERSION = 2;
 interface ParsedFileCache {
+  parserVersion: number;
   mtime: number;
   events: AppEvent[];
   lineCount: number;
@@ -113,7 +116,7 @@ export async function parseSessionFile(
 ): Promise<{ events: AppEvent[]; lineCount: number }> {
   const mtime = fs.statSync(filepath).mtimeMs;
   const cached = parsedFileCache.get(filepath);
-  if (cached && cached.mtime === mtime) {
+  if (cached && cached.parserVersion === PARSED_SESSION_CACHE_VERSION && cached.mtime === mtime) {
     return { events: cached.events, lineCount: cached.lineCount };
   }
 
@@ -149,6 +152,6 @@ export async function parseSessionFile(
   }
 
   const result = { events, lineCount: lines.length };
-  parsedFileCache.set(filepath, { mtime, ...result });
+  parsedFileCache.set(filepath, { parserVersion: PARSED_SESSION_CACHE_VERSION, mtime, ...result });
   return result;
 }

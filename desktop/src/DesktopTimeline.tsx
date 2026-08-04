@@ -272,6 +272,9 @@ function entryStyle(event: Exclude<TimelineEvent, { kind: "token_usage" }>) {
         ? { className: "file-delete", badge: "badge-delete", label: "delete" }
         : { className: "file-change", badge: "badge-file", label: "patch" };
   }
+  if (event.kind === "context_compaction") {
+    return { className: "context-compaction", badge: "badge-context-compaction", label: "context" };
+  }
   return ({
     user_message: { className: "user-msg", badge: "badge-user", label: "user" },
     agent_message: { className: "agent-msg", badge: "badge-agent", label: "agent" },
@@ -285,5 +288,6 @@ function summary(event: Exclude<TimelineEvent, { kind: "token_usage" }>): string
   if (event.kind === "file_change") return event.files.map((file) => `${file.action}: ${file.path}`).join(", ");
   if (event.kind === "shell_command") return truncate(event.cmd, 120);
   if (event.kind === "tool_output") return truncate(event.output, 120);
+  if (event.kind === "context_compaction") return "Context compacted - agent is resuming with a handoff summary";
   return truncate(event.text, 120);
 }

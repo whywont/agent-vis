@@ -63,6 +63,13 @@ describe("prepareSettingsChange", () => {
     expect(enabled.ok && enabled.value.updates.AGENT_VIS_ALLOW_REMOTE_TERMINAL).toBe("1");
   });
 
+  it("keeps mobile agent chat disabled unless explicitly enabled", () => {
+    const disabled = prepareSettingsChange(base, false);
+    const enabled = prepareSettingsChange({ ...base, remoteAgentChat: true }, false);
+    expect(disabled.ok && disabled.value.updates.AGENT_VIS_ALLOW_REMOTE_AGENT_CHAT).toBe("0");
+    expect(enabled.ok && enabled.value.updates.AGENT_VIS_ALLOW_REMOTE_AGENT_CHAT).toBe("1");
+  });
+
   it("does not clear a secret when the same save supplies its replacement", () => {
     const result = prepareSettingsChange({
       ...base,

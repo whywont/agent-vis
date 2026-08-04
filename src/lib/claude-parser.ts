@@ -18,6 +18,17 @@ export function parseClaudeEvent(
   const ts = obj.timestamp as string;
   const type = obj.type as string;
 
+  // Claude records its condensed handoff as a system away_summary rather than
+  // a normal assistant message. It is the equivalent of Codex's compaction.
+  if (type === "system" && obj.subtype === "away_summary") {
+    const text = typeof obj.content === "string" ? obj.content.trim() : "";
+    return [{
+      kind: "context_compaction",
+      ts,
+      text: text || "Claude compacted the conversation context.",
+    }];
+  }
+
   if (type === "user") {
     const message = obj.message as Record<string, unknown> | undefined;
     if (typeof message?.content === "string") {
