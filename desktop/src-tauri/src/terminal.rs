@@ -73,6 +73,19 @@ fn validate_terminal_id(value: &str) -> Result<&str, String> {
     Ok(value)
 }
 
+fn stop_terminal_process(mut child: Child) {
+    // Each embedded shell becomes its own session/process group in spawn_shell.
+    // Killing only the shell allows its foreground child (for example Codex) to
+    // survive as an orphaned, CPU-hungry process after the dock is closed.
+    let group_id = -(child.id() as i32);
+    // SAFETY: a negative PID targets only the process group whose leader is
+    // this owned terminal child. ESRCH simply means it already exited.
+    if unsafe { libc::kill(group_id, libc::SIGHUP) } != 0 {
+        let _ = child.kill();
+    }
+    let _ = child.wait();
+}
+
 // Spawn the login shell on a real PTY. The prior `script` shim injected its
 // own control output and could not track pane resizing.
 fn spawn_shell(workspace_root: &std::path::Path) -> Result<(Child, File, File), String> {
@@ -149,13 +162,13 @@ pub(crate) fn start_terminal(
     let workspace_root = validate_workspace_root(&request.workspace_root, &roots)?;
     let (child, input, stdout) = spawn_shell(&workspace_root)?;
 
-    if let Some(mut existing) = state
+    if let Some(existing) = state
         .terminals
         .lock()
         .map_err(|_| "Terminal state is unavailable.".to_owned())?
         .remove(&terminal_id)
     {
-        let _ = existing.kill();
+        stop_terminal_process(existing);
     }
     state
         .terminals
@@ -258,13 +271,13 @@ pub(crate) fn stop_terminal(
         .lock()
         .map_err(|_| "Terminal state is unavailable.".to_owned())?
         .remove(terminal_id);
-    if let Some(mut child) = state
+    if let Some(child) = state
         .terminals
         .lock()
         .map_err(|_| "Terminal state is unavailable.".to_owned())?
         .remove(terminal_id)
     {
-        let _ = child.kill();
+        stop_terminal_process(child);
     }
     Ok(())
 }

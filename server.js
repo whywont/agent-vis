@@ -245,6 +245,18 @@ app.prepare().then(() => {
     delete env.CLAUDECODE;
 
     let ptyProc;
+    function stopPty() {
+      if (!ptyProc) return;
+      // A PTY owns a process group. Killing only its shell lets foreground
+      // children such as `codex resume` escape and run orphaned at full CPU.
+      try {
+        if (process.platform !== "win32") process.kill(-ptyProc.pid, "SIGHUP");
+        else ptyProc.kill();
+      } catch {
+        try { ptyProc.kill(); } catch {}
+      }
+      ptyProc = undefined;
+    }
     function attachPty(command, args) {
       let recentOutput = "";
       try {
@@ -350,7 +362,7 @@ app.prepare().then(() => {
       // must continue on the Mac and write its reply to the session JSONL.
       if (chatMode) return;
       try {
-        ptyProc?.kill();
+        stopPty();
       } catch {}
     });
   });
