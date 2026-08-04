@@ -36,7 +36,7 @@ export default function DesktopTimeline({
     loadTimelineFilterPreferences(sessionKey)
   );
   const { activeFilters, showTokenUsage } = filterPreferences;
-  const [collapseToken, setCollapseToken] = useState(0);
+  const [expandedEvents, setExpandedEvents] = useState<Set<string>>(() => new Set());
   const [eventLimit, setEventLimit] = useState(INITIAL_EVENT_LIMIT);
   const timelineRef = useRef<HTMLDivElement>(null);
   const displayEvents = useMemo<TimelineEvent[]>(
@@ -94,16 +94,26 @@ export default function DesktopTimeline({
         showTokenUsage={showTokenUsage}
         onToggleFilter={toggleFilter}
         onToggleTokenUsage={toggleTokenUsage}
-        onCollapseAll={() => setCollapseToken((token) => token + 1)}
+        onCollapseAll={() => setExpandedEvents(new Set())}
       />
       <div className="timeline" ref={timelineRef}>
-        {page.rendered.map((event, index) => (
+        {page.rendered.map((event) => (
           <DesktopTimelineEntry
-            key={`${collapseToken}:${event.kind}:${event.ts}:${index}`}
+            key={timelineEventIdentity(event)}
             event={event}
             sessionCwd={sessionCwd}
             contextText={event.kind === "file_change" ? precedingUserRequest(events, event.ts) : undefined}
             matched={targetMatchesEvent(matchTarget, event)}
+            expanded={expandedEvents.has(timelineEventIdentity(event))}
+            onToggleExpanded={() => {
+              const identity = timelineEventIdentity(event);
+              setExpandedEvents((current) => {
+                const next = new Set(current);
+                if (next.has(identity)) next.delete(identity);
+                else next.add(identity);
+                return next;
+              });
+            }}
           />
         ))}
         {page.remaining > 0 && (
@@ -132,16 +142,19 @@ function DesktopTimelineEntry({
   sessionCwd,
   contextText,
   matched,
+  expanded,
+  onToggleExpanded,
 }: {
   event: TimelineEvent;
   sessionCwd: string;
   contextText?: string;
   matched: boolean;
+  expanded: boolean;
+  onToggleExpanded: () => void;
 }) {
-  const [collapsedState, setCollapsed] = useState(true);
   const highlightKey = `hl:${sessionCwd}:${event.ts}`;
   const [highlighted, setHighlighted] = useState(() => localStorage.getItem(highlightKey) === "1");
-  const collapsed = matched ? false : collapsedState;
+  const collapsed = matched ? false : !expanded;
 
   function toggleHighlight(clickEvent: ReactMouseEvent<HTMLButtonElement>) {
     clickEvent.stopPropagation();
@@ -177,7 +190,7 @@ function DesktopTimelineEntry({
       data-event-key={eventKey(event)}
       data-event-search-key={eventSearchKey(event)}
     >
-      <div className="entry-header" onClick={() => setCollapsed((value) => !value)}>
+      <div className="entry-header" onClick={onToggleExpanded}>
         <span className={`entry-badge ${style.badge}`}>{style.label}</span>
         {collapsed && <span className="entry-summary">{summary(event)}</span>}
         <span className="entry-time">{formatTime(event.ts)}</span>

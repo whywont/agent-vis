@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AppEvent } from "./types";
-import { deduplicateTimelineEvents } from "./timeline-events";
+import { deduplicateTimelineEvents, timelineEventIdentity } from "./timeline-events";
 
 function patch(ts: string, callId: string, oldValue: string, newValue: string): AppEvent {
   return {
@@ -47,5 +47,19 @@ describe("deduplicateTimelineEvents", () => {
     const event = patch("2026-08-03T12:00:00Z", "edit-1", "one", "two");
     const selected = { ...event };
     expect(deduplicateTimelineEvents([event, selected], (candidate) => candidate === selected)).toHaveLength(2);
+  });
+
+  it("keeps existing row identities stable when a live event is appended", () => {
+    const existing: AppEvent[] = [
+      { kind: "user_message", ts: "2026-08-03T12:00:00Z", text: "first request" },
+      { kind: "agent_message", ts: "2026-08-03T12:00:01Z", text: "first response" },
+    ];
+    const before = deduplicateTimelineEvents(existing).reverse().map(timelineEventIdentity);
+    const after = deduplicateTimelineEvents([
+      ...existing,
+      { kind: "agent_message", ts: "2026-08-03T12:00:02Z", text: "new live response" },
+    ]).reverse().map(timelineEventIdentity);
+
+    expect(after.slice(1)).toEqual(before);
   });
 });
