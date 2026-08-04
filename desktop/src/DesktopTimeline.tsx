@@ -191,7 +191,7 @@ function DesktopTimelineEntry({
   const style = entryStyle(event);
   return (
     <div
-      className={`timeline-entry ${style.className}${matched ? " desktop-search-match" : ""}${highlighted ? " highlighted" : ""}`}
+      className={`timeline-entry ${style.className}${forcedOpen ? " desktop-search-match" : ""}${highlighted ? " highlighted" : ""}`}
       data-event-key={eventKey(event)}
       data-event-search-key={eventSearchKey(event)}
     >
