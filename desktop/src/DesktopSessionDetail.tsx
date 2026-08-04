@@ -7,6 +7,7 @@ import { formatTime } from "@/utils/format";
 import DesktopFileTree from "./DesktopFileTree";
 import DesktopFilesCanvas from "./DesktopFilesCanvas";
 import DesktopTimeline from "./DesktopTimeline";
+import DesktopTerminal from "./DesktopTerminal";
 import { getGitBranch, readSession } from "./desktop-api";
 import { startWindowDrag } from "./window-drag";
 
@@ -14,13 +15,17 @@ export default function DesktopSessionDetail({
   session,
   sessionName,
   activeTab,
+  terminalOpen,
   onActiveTabChange,
+  onTerminalToggle,
   matchTarget,
 }: {
   session: SessionMeta;
   sessionName: string | null;
   activeTab: "session" | "files";
+  terminalOpen: boolean;
   onActiveTabChange: (tab: "session" | "files") => void;
+  onTerminalToggle: () => void;
   matchTarget: SessionMatchTarget | null;
 }) {
   const [events, setEvents] = useState<AppEvent[]>([]);
@@ -29,6 +34,7 @@ export default function DesktopSessionDetail({
   const [loadedBatches, setLoadedBatches] = useState(0);
   const [branch, setBranch] = useState<string | null>(null);
   const [filePanelOpen, setFilePanelOpen] = useState(true);
+  const [terminalHeight, setTerminalHeight] = useState(224);
   const [fileTimelineSelection, setFileTimelineSelection] = useState<{
     baseTarget: SessionMatchTarget | null;
     target: SessionMatchTarget;
@@ -94,6 +100,23 @@ export default function DesktopSessionDetail({
       handle.classList.remove("dragging");
     };
   }, [activeTab, error, filePanelOpen, loading]);
+
+  function resizeTerminal(event: React.MouseEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const startY = event.clientY;
+    const startHeight = terminalHeight;
+    document.body.classList.add("resizing");
+    function onMove(moveEvent: MouseEvent) {
+      setTerminalHeight(Math.max(140, Math.min(600, startHeight + startY - moveEvent.clientY)));
+    }
+    function onUp() {
+      document.body.classList.remove("resizing");
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    }
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }
 
   const meta = events.find((event) => event.kind === "session_start");
   const cwd = meta?.kind === "session_start" ? meta.cwd : session.cwd;
@@ -170,6 +193,14 @@ export default function DesktopSessionDetail({
           >
             Files
           </button>
+          <button
+            className={`desktop-terminal-toggle${terminalOpen ? " active" : ""}`}
+            onClick={onTerminalToggle}
+            title={terminalOpen ? "Hide terminal" : "Open terminal"}
+            aria-pressed={terminalOpen}
+          >
+            <TerminalGlyph />
+          </button>
         </div>
       </div>
       {loading ? (
@@ -227,7 +258,38 @@ export default function DesktopSessionDetail({
           />
         </div>
       )}
+      {terminalOpen && !loading && !error && (
+        <section className="desktop-terminal-panel" style={{ height: terminalHeight }} aria-label="Terminal panel">
+          <div
+            className="desktop-terminal-resize-handle"
+            onMouseDown={resizeTerminal}
+            title="Drag to resize terminal"
+          />
+          <div className="desktop-terminal-panel-header">
+            <div className="desktop-terminal-panel-tab active">
+              <TerminalGlyph />
+            </div>
+            <button
+              className="desktop-terminal-close"
+              onClick={onTerminalToggle}
+              title="Close terminal"
+              aria-label="Close terminal"
+            >
+              ×
+            </button>
+          </div>
+          <DesktopTerminal sessionCwd={cwd} sessionId={id} panelHeight={terminalHeight} />
+        </section>
+      )}
     </div>
+  );
+}
+
+function TerminalGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="m5 5 6 7-6 7M13 19h6" />
+    </svg>
   );
 }
 

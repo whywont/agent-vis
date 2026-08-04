@@ -13,6 +13,7 @@ name = "agent-vis-desktop"
 version = "0.1.0"
 dependencies = [
  "dirs",
+ "libc",
  "reqwest",
  "rusqlite",
  "safetensors",

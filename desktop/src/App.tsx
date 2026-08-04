@@ -26,6 +26,7 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [sessionSidebarOpen, setSessionSidebarOpen] = useState(true);
   const [activeTab, setActiveTab] = useState<"session" | "files">("session");
+  const [terminalOpen, setTerminalOpen] = useState(false);
   const [matchTarget, setMatchTarget] = useState<SessionMatchTarget | null>(null);
   const [sessionAliases, setSessionAliases] = useState(() => loadSessionAliases());
   const sidebarRef = useRef<HTMLElement>(null);
@@ -95,10 +96,12 @@ export default function App() {
         session={showSettings ? null : selected}
         sessionName={selected ? sessionAlias(sessionAliases, selected) : null}
         activeTab={activeTab}
+        terminalOpen={terminalOpen}
         onActiveTabChange={(tab) => {
           if (tab === "files") setMatchTarget(null);
           setActiveTab(tab);
         }}
+        onTerminalToggle={() => setTerminalOpen((open) => !open)}
       />
       <div className="desktop-app-body">
         <nav id="sidebar" ref={sidebarRef} className={sessionSidebarOpen ? "" : "desktop-sidebar-collapsed"}>
@@ -116,6 +119,7 @@ export default function App() {
                 onSelectSession={(files, target) => {
                   setShowSettings(false);
                   setActiveTab("session");
+                  setTerminalOpen(false);
                   setMatchTarget(target);
                   setSelected(sessions.find((session) => (session.files?.join(",") || session.file) === files) || null);
                 }}
@@ -127,6 +131,7 @@ export default function App() {
                   if (selectedFiles === files) {
                     setSelected(null);
                     setMatchTarget(null);
+                    setTerminalOpen(false);
                   }
                 }}
                 onRenameSession={(session, name) => {
@@ -165,10 +170,12 @@ export default function App() {
               session={selected}
               sessionName={sessionAlias(sessionAliases, selected)}
               activeTab={activeTab}
+              terminalOpen={terminalOpen}
               onActiveTabChange={(tab) => {
                 if (tab === "files") setMatchTarget(null);
                 setActiveTab(tab);
               }}
+              onTerminalToggle={() => setTerminalOpen((open) => !open)}
               matchTarget={matchTarget}
             />
           )}
@@ -182,12 +189,16 @@ function DesktopMacTitlebar({
   session,
   sessionName,
   activeTab,
+  terminalOpen,
   onActiveTabChange,
+  onTerminalToggle,
 }: {
   session: SessionMeta | null;
   sessionName: string | null;
   activeTab: "session" | "files";
+  terminalOpen: boolean;
   onActiveTabChange: (tab: "session" | "files") => void;
+  onTerminalToggle: () => void;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -237,8 +248,24 @@ function DesktopMacTitlebar({
           >
             Files
           </button>
+          <button
+            className={`desktop-terminal-toggle${terminalOpen ? " active" : ""}`}
+            onClick={onTerminalToggle}
+            title={terminalOpen ? "Hide terminal" : "Open terminal"}
+            aria-pressed={terminalOpen}
+          >
+            <TerminalGlyph />
+          </button>
         </div>
       )}
     </header>
+  );
+}
+
+function TerminalGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="m5 5 6 7-6 7M13 19h6" />
+    </svg>
   );
 }

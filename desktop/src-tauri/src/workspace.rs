@@ -29,7 +29,7 @@ pub(crate) struct WorkspaceFile {
     content: String,
 }
 
-fn validate_workspace_root(
+pub(crate) fn validate_workspace_root(
     value: &str,
     trusted_roots: &HashSet<PathBuf>,
 ) -> Result<PathBuf, String> {

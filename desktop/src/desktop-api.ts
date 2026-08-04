@@ -89,6 +89,22 @@ export function getGitBranch(workspaceRoot: string): Promise<string | null> {
   return invoke<string | null>("get_git_branch", { workspaceRoot });
 }
 
+export function startTerminal(terminalId: string, workspaceRoot: string): Promise<void> {
+  return invoke<void>("start_terminal", { request: { terminalId, workspaceRoot } });
+}
+
+export function writeTerminal(terminalId: string, data: string): Promise<void> {
+  return invoke<void>("write_terminal", { request: { terminalId, data } });
+}
+
+export function resizeTerminal(terminalId: string, cols: number, rows: number): Promise<void> {
+  return invoke<void>("resize_terminal", { request: { terminalId, cols, rows } });
+}
+
+export function stopTerminal(terminalId: string): Promise<void> {
+  return invoke<void>("stop_terminal", { request: { terminalId } });
+}
+
 export function getDesktopSettings(): Promise<DesktopSettings> {
   return invoke<DesktopSettings>("get_desktop_settings");
 }
