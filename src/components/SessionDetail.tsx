@@ -9,6 +9,7 @@ import Toolbar from "./Toolbar";
 import Timeline from "./Timeline";
 import FileTree from "./FileTree";
 import TreeCanvas from "./TreeCanvas";
+import MobileAgentChat from "./MobileAgentChat";
 
 // Terminal uses xterm.js — client-only, no SSR
 const TerminalTab = dynamic(() => import("./TerminalTab"), { ssr: false });
@@ -38,7 +39,10 @@ export default function SessionDetail({
   const [activeTab, setActiveTab] = useState<"session" | "tree" | "terminal">("session");
   const [collapseAllToken, setCollapseAllToken] = useState(0);
   const [terminalSupported, setTerminalSupported] = useState(true);
+  const [mobileAgentChatEnabled, setMobileAgentChatEnabled] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
+  const [pullDistance, setPullDistance] = useState(0);
+  const [refreshingSession, setRefreshingSession] = useState(false);
 
   useEffect(() => {
     fetch("/api/env")
@@ -46,6 +50,10 @@ export default function SessionDetail({
       .then((data: { platform: string; isDocker: boolean }) => {
         setTerminalSupported(data.platform !== "win32" && !data.isDocker);
       })
+      .catch(() => {});
+    fetch("/api/settings")
+      .then((response) => response.json())
+      .then((data: { remoteAgentChat?: boolean }) => setMobileAgentChatEnabled(data.remoteAgentChat === true))
       .catch(() => {});
   }, []);
 
@@ -111,29 +119,48 @@ export default function SessionDetail({
   useEffect(() => {
     let cancelled = false;
     fetch(`/api/session/${encodeURIComponent(allFiles)}`)
-      .then((r) => r.json())
+      .then((response) => response.json())
       .then((data: { events: AppEvent[] }) => {
         if (cancelled) return;
-        setEvents(data.events);
-        const meta = data.events.find((e) => e.kind === "session_start");
-        if (meta && meta.kind === "session_start") {
-          setSessionCwd(meta.cwd);
-        }
+        setEvents((current) => mergeEvents(current, data.events));
+        const meta = data.events.find((event) => event.kind === "session_start");
+        if (meta && meta.kind === "session_start") setSessionCwd(meta.cwd);
       })
       .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [allFiles]);
 
+  const pullStartY = useRef<number | null>(null);
+  function onTimelineTouchStart(event: React.TouchEvent<HTMLDivElement>) {
+    if (!isMobile || refreshingSession || event.currentTarget.scrollTop > 0) return;
+    pullStartY.current = event.touches[0]?.clientY ?? null;
+  }
+
+  function onTimelineTouchMove(event: React.TouchEvent<HTMLDivElement>) {
+    if (pullStartY.current === null) return;
+    const distance = Math.max(0, (event.touches[0]?.clientY ?? pullStartY.current) - pullStartY.current);
+    setPullDistance(Math.min(distance, 88));
+  }
+
+  function onTimelineTouchEnd() {
+    const shouldReload = pullDistance >= 64;
+    pullStartY.current = null;
+    setPullDistance(0);
+    if (!shouldReload || refreshingSession) return;
+    setRefreshingSession(true);
+    fetch(`/api/session/${encodeURIComponent(allFiles)}`)
+      .then((response) => response.json())
+      .then((data: { events: AppEvent[] }) => {
+        setEvents((current) => mergeEvents(current, data.events));
+        const meta = data.events.find((event) => event.kind === "session_start");
+        if (meta && meta.kind === "session_start") setSessionCwd(meta.cwd);
+      })
+      .catch(() => {})
+      .finally(() => setRefreshingSession(false));
+  }
+
   useSessionPoll(primaryFile, (newEvents) => {
-    setEvents((prev) => {
-      const updated = [...prev];
-      for (const evt of newEvents) {
-        if (evt.kind !== "session_start") updated.push(evt);
-      }
-      return updated;
-    });
+    setEvents((current) => mergeEvents(current, newEvents));
   });
 
   const meta = events.find((e) => e.kind === "session_start");
@@ -208,7 +235,22 @@ export default function SessionDetail({
           </div>
           {/* Handle is a sibling, NOT inside the scroll container */}
           <div className="file-tree-resize-handle" ref={resizeHandleRef} />
-          <div className="timeline-panel" ref={timelineRef}>
+          <div
+            className="timeline-panel"
+            ref={timelineRef}
+            onTouchStart={onTimelineTouchStart}
+            onTouchMove={onTimelineTouchMove}
+            onTouchEnd={onTimelineTouchEnd}
+            onTouchCancel={onTimelineTouchEnd}
+          >
+            {isMobile && (
+              <div
+                className={`mobile-session-refresh${refreshingSession ? " refreshing" : ""}`}
+                style={{ height: pullDistance ? `${Math.min(pullDistance, 42)}px` : undefined }}
+              >
+                {refreshingSession ? "reopening session..." : pullDistance >= 64 ? "release to reopen" : "pull to reopen"}
+              </div>
+            )}
             <Toolbar
               events={events}
               activeFilters={activeFilters}
@@ -226,9 +268,9 @@ export default function SessionDetail({
               collapseAllToken={collapseAllToken}
             />
           </div>
-          {isMobile && terminalReady && (
-            <div className="mobile-terminal-dock">
-              <TerminalTab
+          {isMobile && terminalReady && mobileAgentChatEnabled && (
+            <div className="mobile-agent-chat-dock">
+              <MobileAgentChat
                 sessionCwd={sessionCwd}
                 sessionId={detailId}
                 sessionType={allFiles.startsWith("claude:") ? "claude" : "codex"}
@@ -247,4 +289,25 @@ export default function SessionDetail({
       )}
     </div>
   );
+}
+
+function eventIdentity(event: AppEvent) {
+  if (event.kind === "session_start") return `session:${event.id}`;
+  if (event.kind === "file_change") return `${event.kind}:${event.callId || event.ts}:${event.patch}`;
+  if (event.kind === "shell_command") return `${event.kind}:${event.callId || event.ts}:${event.cmd}`;
+  if (event.kind === "tool_output") return `${event.kind}:${event.callId || event.ts}:${event.output}`;
+  if (event.kind === "token_usage") return `${event.kind}:${event.ts}:${event.total_tokens}`;
+  return `${event.kind}:${event.ts}:${event.text}`;
+}
+
+function mergeEvents(current: AppEvent[], incoming: AppEvent[]) {
+  const known = new Set(current.map(eventIdentity));
+  const merged = [...current];
+  for (const event of incoming) {
+    if (!known.has(eventIdentity(event))) {
+      merged.push(event);
+      known.add(eventIdentity(event));
+    }
+  }
+  return merged;
 }

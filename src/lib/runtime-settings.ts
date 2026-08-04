@@ -12,6 +12,7 @@ export type RuntimeSettings = {
   anthropicApiKey: string;
   tailscaleHost: string;
   remoteTerminal: boolean;
+  remoteAgentChat: boolean;
   authConfigured: boolean;
   anthropicKeyConfigured: boolean;
   localKeyConfigured: boolean;
@@ -59,6 +60,7 @@ export async function getRuntimeSettings(): Promise<RuntimeSettings> {
     anthropicApiKey: env.ANTHROPIC_API_KEY || "",
     tailscaleHost: tailscaleHost(env),
     remoteTerminal: env.AGENT_VIS_ALLOW_REMOTE_TERMINAL === "1",
+    remoteAgentChat: env.AGENT_VIS_ALLOW_REMOTE_AGENT_CHAT === "1",
     authConfigured: Boolean(env.AGENT_VIS_AUTH_TOKEN),
     anthropicKeyConfigured: Boolean(env.ANTHROPIC_API_KEY),
     localKeyConfigured: Boolean(env.AGENT_VIS_LOCAL_API_KEY),

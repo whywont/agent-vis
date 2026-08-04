@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { AppEvent, SessionMeta } from "@/lib/types";
 import type { SessionRecordFile } from "./session-parser";
 import { WeightedLruCache } from "./weighted-lru-cache";
+import type { DesktopAppearance } from "./desktop-theme";
 
 const SESSION_CACHE_BYTES = 512 * 1024 * 1024;
 const sessionCache = new WeightedLruCache<AppEvent[]>(SESSION_CACHE_BYTES);
@@ -18,6 +19,7 @@ interface SessionRecordBatch {
 export type ExplainProvider = "anthropic" | "openai-compatible" | "openrouter";
 
 export interface DesktopSettings {
+  appearance: DesktopAppearance;
   provider: ExplainProvider;
   model: string;
   localBaseUrl: string;
@@ -28,6 +30,7 @@ export interface DesktopSettings {
 }
 
 export interface SaveDesktopSettingsRequest {
+  appearance: DesktopAppearance;
   provider: ExplainProvider;
   model: string;
   localBaseUrl: string;

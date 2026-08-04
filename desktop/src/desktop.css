@@ -10,7 +10,7 @@
   min-width: 0;
   min-height: 0;
   padding: 2px 6px 6px;
-  background: #0b0b0b;
+  background: var(--bg);
 }
 
 /* A terminal dropped on Sessions shares the left two columns with Sessions
@@ -145,7 +145,7 @@ body.terminal-over-sessions #sidebar {
   background: var(--bg);
   color: var(--text);
   font: 13px var(--font-mono);
-  box-shadow: 0 0 0 2px rgba(201, 165, 90, 0.06);
+  box-shadow: 0 0 0 2px rgba(var(--accent-rgb), 0.06);
 }
 
 .desktop-rename-current-id {
@@ -199,7 +199,7 @@ body.terminal-over-sessions #sidebar {
 
 .desktop-rename-actions .primary {
   border-color: var(--accent-dim);
-  background: rgba(201, 165, 90, 0.14);
+  background: rgba(var(--accent-rgb), 0.14);
   color: var(--accent);
 }
 
@@ -215,7 +215,7 @@ body.terminal-over-sessions #sidebar {
   flex-shrink: 0;
   gap: 8px;
   padding: 0 8px;
-  background: #0b0b0b;
+  background: var(--bg);
   -webkit-app-region: drag;
 }
 
@@ -602,7 +602,7 @@ body.terminal-over-sessions #sidebar {
 
 .desktop-settings-info-card {
   background:
-    linear-gradient(145deg, rgba(201, 165, 90, 0.07), transparent 54%),
+    linear-gradient(145deg, rgba(var(--accent-rgb), 0.07), transparent 54%),
     var(--bg-card);
 }
 
@@ -716,7 +716,7 @@ body.terminal-over-sessions #sidebar {
   height: 7px;
   border-radius: 50%;
   background: var(--accent);
-  box-shadow: 0 0 0 0 rgba(201, 165, 90, 0.45);
+  box-shadow: 0 0 0 0 rgba(var(--accent-rgb), 0.45);
   animation: desktop-loading-pulse 1.25s ease-out infinite;
 }
 
@@ -800,8 +800,8 @@ body.terminal-over-sessions #sidebar {
 }
 
 .desktop-load-all {
-  border-color: rgba(201, 165, 90, 0.3);
-  background: rgba(201, 165, 90, 0.08);
+  border-color: rgba(var(--accent-rgb), 0.3);
+  background: rgba(var(--accent-rgb), 0.08);
   color: var(--accent);
 }
 
@@ -815,8 +815,8 @@ body.terminal-over-sessions #sidebar {
 }
 
 @keyframes desktop-loading-pulse {
-  70% { box-shadow: 0 0 0 7px rgba(201, 165, 90, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(201, 165, 90, 0); }
+  70% { box-shadow: 0 0 0 7px rgba(var(--accent-rgb), 0); }
+  100% { box-shadow: 0 0 0 0 rgba(var(--accent-rgb), 0); }
 }
 
 .file-tree-panel {
@@ -963,6 +963,60 @@ body.terminal-over-sessions #sidebar {
   box-shadow: inset 0 0 0 1px var(--accent-dim);
 }
 
+.desktop-appearance-heading h3 { margin-bottom: 8px; }
+.desktop-appearance-heading p { margin-bottom: 14px; }
+
+.desktop-appearance-picker {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.desktop-appearance-option {
+  display: grid;
+  min-width: 0;
+  gap: 9px;
+  padding: 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  text-align: left;
+}
+
+.desktop-appearance-option:hover { border-color: var(--accent-dim); }
+.desktop-appearance-option.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+
+.desktop-appearance-preview {
+  position: relative;
+  display: grid;
+  height: 58px;
+  grid-template-columns: 34% 1fr;
+  grid-template-rows: 16px 1fr;
+  overflow: hidden;
+  border: 1px solid var(--preview-border);
+  border-radius: 4px;
+  background: var(--preview-bg);
+}
+
+.desktop-appearance-preview i { display: block; background: var(--preview-surface); }
+.desktop-appearance-preview i:nth-child(1) { grid-row: 1 / -1; border-right: 1px solid var(--preview-border); }
+.desktop-appearance-preview i:nth-child(2) { border-bottom: 1px solid var(--preview-border); }
+.desktop-appearance-preview i:nth-child(3) { margin: 7px; border-radius: 2px; background: var(--preview-card); }
+.desktop-appearance-preview b { position: absolute; top: 5px; left: 5px; width: 16px; height: 3px; border-radius: 2px; background: var(--preview-accent); }
+
+.appearance-warm-dark { --preview-bg: #101010; --preview-surface: #171717; --preview-card: #1d1d1d; --preview-border: #3a3a3a; --preview-accent: #c9a55a; }
+.appearance-blue-dark { --preview-bg: #101010; --preview-surface: #171717; --preview-card: #1d1d1d; --preview-border: #3a3a3a; --preview-accent: #c7e9f5; }
+.appearance-light { --preview-bg: #f4f6f3; --preview-surface: #ffffff; --preview-card: #e9eeea; --preview-border: #c9d2cb; --preview-accent: #25647d; }
+
+.desktop-appearance-copy { display: grid; gap: 2px; min-width: 0; }
+.desktop-appearance-copy strong { color: var(--text); font-size: 11px; font-weight: 600; }
+.desktop-appearance-copy small { color: var(--text-dim); font-size: 9px; line-height: 1.25; }
+.desktop-appearance-check { color: var(--text-dim); font-size: 9px; letter-spacing: 0.04em; text-transform: uppercase; }
+.desktop-appearance-option.selected .desktop-appearance-check { color: var(--accent); }
+
 .card-expanded-body .desktop-diff-path {
   display: inline;
 }
@@ -1017,12 +1071,12 @@ body.terminal-over-sessions #sidebar {
 
 .desktop-search-snippet mark {
   border-radius: 2px;
-  background: rgba(201, 165, 90, 0.2);
+  background: rgba(var(--accent-rgb), 0.2);
   color: var(--text);
 }
 
 .desktop-search-match {
-  box-shadow: inset 0 0 0 1px var(--accent-dim), 0 0 16px rgba(201, 165, 90, 0.12);
+  box-shadow: inset 0 0 0 1px var(--accent-dim), 0 0 16px rgba(var(--accent-rgb), 0.12);
 }
 
 .session-controls {
@@ -1275,7 +1329,7 @@ body.terminal-over-sessions #sidebar {
 .file-tree-resize-handle:hover::after,
 .file-tree-resize-handle.dragging::after {
   border-color: var(--accent-dim);
-  box-shadow: 0 0 0 2px rgba(201, 165, 90, 0.08), 0 3px 10px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 0 0 2px rgba(var(--accent-rgb), 0.08), 0 3px 10px rgba(0, 0, 0, 0.45);
 }
 
 /* A compact terminal strip keeps the shell a session utility rather than a

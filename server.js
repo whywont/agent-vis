@@ -44,6 +44,7 @@ const hosts = rawHosts
   .filter(Boolean);
 const authToken = process.env.AGENT_VIS_AUTH_TOKEN || "";
 const allowRemoteTerminal = process.env.AGENT_VIS_ALLOW_REMOTE_TERMINAL === "1";
+const allowRemoteAgentChat = process.env.AGENT_VIS_ALLOW_REMOTE_AGENT_CHAT === "1";
 const COOKIE_NAME = "agent_vis_auth";
 
 // A cross-origin page in the victim's browser can open a WebSocket to
@@ -201,7 +202,9 @@ app.prepare().then(() => {
       }
       const ip = req.socket.remoteAddress;
       const localClient = isLoopbackAddress(ip);
-      if (!localClient && (!allowRemoteTerminal || !authToken || !isAuthenticated(req, url))) {
+      const chatMode = url.searchParams.get("mode") === "chat";
+      const remoteAllowed = chatMode ? allowRemoteAgentChat : allowRemoteTerminal;
+      if (!localClient && (!remoteAllowed || !authToken || !isAuthenticated(req, url))) {
         socket.destroy();
         return;
       }
@@ -222,7 +225,13 @@ app.prepare().then(() => {
     // dropped, falling back to --continue / resume --last.
     const rawSessionId = url.searchParams.get("sessionId") || "";
     const sessionId = /^[A-Za-z0-9._-]+$/.test(rawSessionId) ? rawSessionId : "";
-    const sessionType = url.searchParams.get("type") || "claude";
+    const sessionType = url.searchParams.get("type") === "codex" ? "codex" : "claude";
+    const chatMode = url.searchParams.get("mode") === "chat";
+    const sendChatStatus = (status) => {
+      if (chatMode && ws.readyState === ws.OPEN) {
+        ws.send(JSON.stringify({ type: "agent-chat-status", status }));
+      }
+    };
     // Expand ~ and ensure the directory exists; fall back to home
     const cwd = rawCwd.startsWith("~")
       ? rawCwd.replace(/^~/, os.homedir())
@@ -236,58 +245,90 @@ app.prepare().then(() => {
     delete env.CLAUDECODE;
 
     let ptyProc;
-    try {
-      ptyProc = pty.spawn(shell, [], {
-        name: "xterm-256color",
-        cols: 80,
-        rows: 24,
-        cwd,
-        env,
-      });
-    } catch (err) {
-      ws.send(`\r\n\x1b[31mFailed to spawn shell: ${err.message}\x1b[0m\r\n`);
-      ws.close();
-      return;
-    }
-
-    // Resume the session being viewed. For Claude Code: `claude --resume <id>`.
-    // For Codex: `codex resume <id>`. Fall back to most-recent if no ID.
-    // Small delay lets the shell finish rc-file init first.
-    let resumeCmd;
-    if (sessionType === "codex") {
-      resumeCmd = sessionId
-        ? `codex resume ${sessionId}\n`
-        : `codex resume --last\n`;
-    } else {
-      resumeCmd = sessionId
-        ? `claude --resume ${sessionId}\n`
-        : `claude --continue\n`;
-    }
-    const autoLaunchTimer = setTimeout(() => {
-      try { ptyProc.write(resumeCmd); } catch {}
-    }, 350);
-
-    // PTY → browser
-    ptyProc.onData((data) => {
+    function attachPty(command, args) {
+      let recentOutput = "";
       try {
-        ws.send(data);
-      } catch {}
-    });
-
-    // PTY exit → close WS
-    ptyProc.onExit(() => {
-      try {
-        ws.send("\r\n\x1b[33m[process exited]\x1b[0m\r\n");
+        ptyProc = pty.spawn(command, args, {
+          name: "xterm-256color",
+          cols: 80,
+          rows: 24,
+          cwd,
+          env,
+        });
+      } catch (err) {
+        ws.send(`\r\n\x1b[31mFailed to start agent: ${err.message}\x1b[0m\r\n`);
         ws.close();
-      } catch {}
-    });
+        return false;
+      }
+      ptyProc.onData((data) => {
+        recentOutput = `${recentOutput}${data}`.slice(-4_000);
+        try { ws.send(data); } catch {}
+      });
+      ptyProc.onExit(({ exitCode }) => {
+        if (chatMode) {
+          // `codex exec resume` ends after one durable turn. Keep the phone
+          // socket open so the next message can start the next turn directly.
+          console.log(`[agent chat] turn finished (exit ${exitCode})`);
+          ptyProc = undefined;
+          if (exitCode === 0) {
+            sendChatStatus("ready");
+          } else if (ws.readyState === ws.OPEN) {
+            const detail = recentOutput
+              .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+              .replace(/\s+/g, " ")
+              .trim()
+              .slice(-700);
+            ws.send(JSON.stringify({ type: "agent-chat-error", detail: detail || `Codex exited with code ${exitCode}.` }));
+          }
+          return;
+        }
+        try {
+          ws.send("\r\n\x1b[33m[process exited]\x1b[0m\r\n");
+          ws.close();
+        } catch {}
+      });
+      return true;
+    }
+
+    if (chatMode) {
+      // Codex accepts an initial prompt as an argument to `resume`. Starting
+      // only after Send makes the first message atomic with the resume command.
+      console.log(`[agent chat] ready for ${sessionType} session`);
+      sendChatStatus("ready");
+    } else if (attachPty(shell, [])) {
+      setTimeout(() => {
+        try {
+          ptyProc.write(` ${sessionType === "codex"
+            ? (sessionId ? `codex resume ${sessionId}` : "codex resume --last")
+            : (sessionId ? `claude --resume ${sessionId}` : "claude --continue")}\n`);
+        } catch {}
+      }, 350);
+    }
 
     // Browser → PTY
     ws.on("message", (raw) => {
       try {
         const msg = JSON.parse(raw.toString());
         if (msg.type === "input") {
-          ptyProc.write(msg.data);
+          if (chatMode) {
+            const input = typeof msg.data === "string" ? msg.data.trim() : "";
+            if (!input || input.length > 16_384) return;
+            if (!ptyProc) {
+              const args = sessionType === "codex"
+                // `exec resume` records the prompt directly in the durable
+                // Codex conversation; unlike the TUI, it has no input race.
+                ? ["exec", "resume", ...(sessionId ? [sessionId] : ["--last"]), input]
+                : sessionId ? ["--resume", sessionId, input] : ["--continue", input];
+              if (!attachPty(sessionType === "codex" ? "codex" : "claude", args)) return;
+              console.log("[agent chat] started resumed session with phone message");
+            } else {
+              ptyProc.write(`${input}\r`);
+              console.log("[agent chat] message accepted by PTY");
+            }
+            sendChatStatus("working");
+          } else {
+            ptyProc?.write(msg.data);
+          }
         } else if (msg.type === "resize") {
           ptyProc.resize(
             Math.max(1, msg.cols || 80),
@@ -301,9 +342,8 @@ app.prepare().then(() => {
     });
 
     ws.on("close", () => {
-      clearTimeout(autoLaunchTimer);
       try {
-        ptyProc.kill();
+        ptyProc?.kill();
       } catch {}
     });
   });
@@ -326,6 +366,9 @@ app.prepare().then(() => {
         if (authToken) console.log("   - Auth:    enabled");
         console.log(
           `   - Terminal: ${allowRemoteTerminal ? "remote enabled" : "local only"}`
+        );
+        console.log(
+          `   - Agent chat: ${allowRemoteAgentChat ? "remote enabled" : "local only"}`
         );
       }
       console.log(`   - Bind:    http://${host}:${port}`);
