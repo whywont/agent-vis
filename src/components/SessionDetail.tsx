@@ -131,22 +131,12 @@ export default function SessionDetail({
   }, [allFiles]);
 
   const pullStartY = useRef<number | null>(null);
-  function onTimelineTouchStart(event: React.TouchEvent<HTMLDivElement>) {
-    if (!isMobile || refreshingSession || event.currentTarget.scrollTop > 0) return;
-    pullStartY.current = event.touches[0]?.clientY ?? null;
-  }
+  const pullDistanceRef = useRef(0);
+  const refreshStartedRef = useRef(false);
 
-  function onTimelineTouchMove(event: React.TouchEvent<HTMLDivElement>) {
-    if (pullStartY.current === null) return;
-    const distance = Math.max(0, (event.touches[0]?.clientY ?? pullStartY.current) - pullStartY.current);
-    setPullDistance(Math.min(distance, 88));
-  }
-
-  function onTimelineTouchEnd() {
-    const shouldReload = pullDistance >= 64;
-    pullStartY.current = null;
-    setPullDistance(0);
-    if (!shouldReload || refreshingSession) return;
+  function refreshOpenSession() {
+    if (refreshStartedRef.current || refreshingSession) return;
+    refreshStartedRef.current = true;
     setRefreshingSession(true);
     fetch(`/api/session/${encodeURIComponent(allFiles)}`)
       .then((response) => response.json())
@@ -156,7 +146,36 @@ export default function SessionDetail({
         if (meta && meta.kind === "session_start") setSessionCwd(meta.cwd);
       })
       .catch(() => {})
-      .finally(() => setRefreshingSession(false));
+      .finally(() => {
+        refreshStartedRef.current = false;
+        setRefreshingSession(false);
+      });
+  }
+
+  function onTimelineTouchStart(event: React.TouchEvent<HTMLDivElement>) {
+    if (!isMobile || refreshingSession || event.currentTarget.scrollTop > 0) return;
+    refreshStartedRef.current = false;
+    pullStartY.current = event.touches[0]?.clientY ?? null;
+  }
+
+  function onTimelineTouchMove(event: React.TouchEvent<HTMLDivElement>) {
+    if (pullStartY.current === null) return;
+    const distance = Math.max(0, (event.touches[0]?.clientY ?? pullStartY.current) - pullStartY.current);
+    const cappedDistance = Math.min(distance, 88);
+    // React state can lag behind a quick finger release on iOS. Keep the
+    // release threshold in a ref so a valid pull reliably triggers refresh.
+    pullDistanceRef.current = cappedDistance;
+    setPullDistance(cappedDistance);
+    // Safari may hand this gesture to its overscroll behavior and never emit
+    // touchend. Start once the threshold is crossed instead of waiting to
+    // observe the release.
+    if (cappedDistance >= 64) refreshOpenSession();
+  }
+
+  function onTimelineTouchEnd() {
+    pullStartY.current = null;
+    pullDistanceRef.current = 0;
+    setPullDistance(0);
   }
 
   useSessionPoll(primaryFile, (newEvents) => {

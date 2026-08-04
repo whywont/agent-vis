@@ -325,6 +325,9 @@ app.prepare().then(() => {
               ptyProc.write(`${input}\r`);
               console.log("[agent chat] message accepted by PTY");
             }
+            // Acknowledge only after the message has been accepted on the Mac
+            // and the durable resumed turn has been launched. The phone can
+            // safely background after it receives this status.
             sendChatStatus("working");
           } else {
             ptyProc?.write(msg.data);
