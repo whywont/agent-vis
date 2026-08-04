@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import type { SessionMeta } from "@/lib/types";
 import { formatTime } from "@/utils/format";
-import { listSessions } from "./desktop-api";
+import { deleteSession, listSessions } from "./desktop-api";
 import DesktopSessionDetail from "./DesktopSessionDetail";
 import DesktopSessionList from "./DesktopSessionList";
 import DesktopSettingsPage from "./DesktopSettingsPage";
+import { loadSessionAliases, saveSessionAlias, sessionAlias } from "./session-aliases";
 import { refreshSelectedSession, sessionListsEqual } from "./session-refresh";
 import { startWindowDrag } from "./window-drag";
 
@@ -13,6 +14,8 @@ const SESSION_POLL_INTERVAL_MS = 5000;
 export interface SessionMatchTarget {
   eventTs: string;
   eventKind: string;
+  eventIdentity?: string;
+  requestId?: number;
 }
 
 export default function App() {
@@ -24,6 +27,7 @@ export default function App() {
   const [sessionSidebarOpen, setSessionSidebarOpen] = useState(true);
   const [activeTab, setActiveTab] = useState<"session" | "files">("session");
   const [matchTarget, setMatchTarget] = useState<SessionMatchTarget | null>(null);
+  const [sessionAliases, setSessionAliases] = useState(() => loadSessionAliases());
   const sidebarRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -89,6 +93,7 @@ export default function App() {
     <div id="app" className={selected ? "has-session" : "no-session"}>
       <DesktopMacTitlebar
         session={showSettings ? null : selected}
+        sessionName={selected ? sessionAlias(sessionAliases, selected) : null}
         activeTab={activeTab}
         onActiveTabChange={(tab) => {
           if (tab === "files") setMatchTarget(null);
@@ -105,6 +110,7 @@ export default function App() {
                 loading={loading}
                 error={error}
                 settingsActive={showSettings}
+                sessionAliases={sessionAliases}
                 onOpenSettings={() => { setShowSettings(true); setMatchTarget(null); setSelected(null); }}
                 onHideSessions={() => setSessionSidebarOpen(false)}
                 onSelectSession={(files, target) => {
@@ -112,6 +118,19 @@ export default function App() {
                   setActiveTab("session");
                   setMatchTarget(target);
                   setSelected(sessions.find((session) => (session.files?.join(",") || session.file) === files) || null);
+                }}
+                onDeleteSession={async (files) => {
+                  await deleteSession(files);
+                  setSessions((current) => current.filter(
+                    (session) => (session.files?.join(",") || session.file) !== files,
+                  ));
+                  if (selectedFiles === files) {
+                    setSelected(null);
+                    setMatchTarget(null);
+                  }
+                }}
+                onRenameSession={(session, name) => {
+                  setSessionAliases((current) => saveSessionAlias(current, session, name));
                 }}
               />
               <div className="resize-handle right" />
@@ -144,6 +163,7 @@ export default function App() {
             <DesktopSessionDetail
               key={selectedFiles}
               session={selected}
+              sessionName={sessionAlias(sessionAliases, selected)}
               activeTab={activeTab}
               onActiveTabChange={(tab) => {
                 if (tab === "files") setMatchTarget(null);
@@ -160,10 +180,12 @@ export default function App() {
 
 function DesktopMacTitlebar({
   session,
+  sessionName,
   activeTab,
   onActiveTabChange,
 }: {
   session: SessionMeta | null;
+  sessionName: string | null;
   activeTab: "session" | "files";
   onActiveTabChange: (tab: "session" | "files") => void;
 }) {
@@ -178,10 +200,15 @@ function DesktopMacTitlebar({
       <div className="desktop-macos-titlebar-gutter" />
       {session && (
         <div className="desktop-titlebar-meta" data-window-no-drag>
-          <span className="mono">{session.id}</span>
+          <span
+            className={`mono${sessionName ? " desktop-session-name" : ""}`}
+            title={sessionName ? `Session ID: ${session.id}` : session.id}
+          >
+            {sessionName || session.id}
+          </span>
           <button
             className="desktop-copy-session-id"
-            title={copied ? "Copied session ID" : "Copy session ID"}
+            title={copied ? "Session ID copied" : `Session ID: ${session.id} — click to copy`}
             aria-label={copied ? "Copied session ID" : "Copy session ID"}
             onClick={() => {
               navigator.clipboard.writeText(session.id).then(() => {

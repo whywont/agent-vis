@@ -1,6 +1,7 @@
 "use client";
 
 import type { AppEvent } from "@/lib/types";
+import { deduplicateTimelineEvents } from "@/lib/timeline-events";
 import TimelineEntry from "./TimelineEntry";
 import { detectDbQuery } from "@/lib/db-parser";
 import type { DbQuery } from "@/lib/db-parser";
@@ -25,30 +26,7 @@ export default function Timeline({
   // Display newest first (reversed), skip session_start
   // Key by original (pre-reversal) index so appending new events never changes
   // existing keys — preserving each entry's collapsed/expanded state.
-  const rawEvents = events.filter((e) => e.kind !== "session_start");
-
-  // Content-based dedup: Codex emits event_msg + response_item for the same
-  // message, producing two events with identical content. Use a fingerprint of
-  // (kind + first 120 chars of content) — timestamps can differ so we can't
-  // rely on them alone.
-  function fingerprint(e: AppEvent): string {
-    switch (e.kind) {
-      case "user_message":  return "u:" + (e.text || "").slice(0, 120);
-      case "agent_message": return "a:" + (e.text || "").slice(0, 120);
-      case "reasoning":     return "r:" + (e.text || "").slice(0, 120);
-      case "shell_command": return "s:" + e.ts + ":" + e.cmd.slice(0, 80);
-      case "file_change":   return "f:" + e.ts + ":" + e.files.map(f => f.path).join(",");
-      case "tool_output":   return "o:" + (e.callId || e.ts);
-      default:              return e.kind + ":" + e.ts;
-    }
-  }
-  const seen = new Set<string>();
-  const filteredEvents = rawEvents.filter((e) => {
-    const key = fingerprint(e);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  const filteredEvents = deduplicateTimelineEvents(events);
 
   const displayEvents = filteredEvents.slice().reverse();
 

@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { MouseEvent as ReactMouseEvent } from "react";
 import ColoredText from "@/components/ColoredText";
 import Toolbar from "@/components/Toolbar";
 import type { AppEvent } from "@/lib/types";
+import { deduplicateTimelineEvents, timelineEventIdentity } from "@/lib/timeline-events";
 import type { SessionMatchTarget } from "./App";
 import { formatTime, formatTokens, toDisplayString, truncate } from "@/utils/format";
 import DesktopDiffView from "./DesktopDiffView";
@@ -34,29 +36,16 @@ export default function DesktopTimeline({
     loadTimelineFilterPreferences(sessionKey)
   );
   const { activeFilters, showTokenUsage } = filterPreferences;
-  const [collapseToken, setCollapseToken] = useState(0);
+  const [expandedEvents, setExpandedEvents] = useState<Set<string>>(() => new Set());
   const [eventLimit, setEventLimit] = useState(INITIAL_EVENT_LIMIT);
   const timelineRef = useRef<HTMLDivElement>(null);
-  const displayEvents = useMemo<TimelineEvent[]>(() => {
-    const seen = new Set<string>();
-    return events.filter((event): event is TimelineEvent => {
-      if (event.kind === "session_start") return false;
-      const content = event.kind === "file_change"
-        ? event.files.map((file) => file.path).join(",")
-        : event.kind === "shell_command"
-          ? event.cmd
-          : event.kind === "tool_output"
-            ? event.callId || event.output
-            : event.kind === "token_usage"
-              ? `${event.ts}:${event.total_tokens}`
-              : event.text;
-      const key = `${event.kind}:${content.slice(0, 160)}`;
-      const isMatch = matchTarget?.eventKind === event.kind && matchTarget.eventTs === event.ts;
-      if (seen.has(key) && !isMatch) return false;
-      seen.add(key);
-      return true;
-    }).reverse();
-  }, [events, matchTarget]);
+  const displayEvents = useMemo<TimelineEvent[]>(
+    () => deduplicateTimelineEvents(
+      events,
+      (event) => targetMatchesEvent(matchTarget, event),
+    ).reverse(),
+    [events, matchTarget],
+  );
   const visibleEvents = useMemo(() => {
     const effectiveFilters = new Set(activeFilters);
     if (matchTarget) effectiveFilters.add(matchTarget.eventKind);
@@ -72,7 +61,7 @@ export default function DesktopTimeline({
     if (!matchTarget) return;
     const timer = window.setTimeout(() => {
       timelineRef.current
-        ?.querySelector<HTMLElement>(`[data-event-key="${eventKey(matchTarget.eventKind, matchTarget.eventTs)}"]`)
+        ?.querySelector<HTMLElement>(targetEventSelector(matchTarget))
         ?.scrollIntoView({ behavior: "smooth", block: "center" });
     }, 80);
     return () => window.clearTimeout(timer);
@@ -105,18 +94,27 @@ export default function DesktopTimeline({
         showTokenUsage={showTokenUsage}
         onToggleFilter={toggleFilter}
         onToggleTokenUsage={toggleTokenUsage}
-        onCollapseAll={() => setCollapseToken((token) => token + 1)}
+        onCollapseAll={() => setExpandedEvents(new Set())}
       />
       <div className="timeline" ref={timelineRef}>
-        {page.rendered.map((event, index) => (
+        {page.rendered.map((event) => (
           <DesktopTimelineEntry
-            key={`${collapseToken}:${event.kind}:${event.ts}:${index}`}
+            key={timelineEventIdentity(event)}
             event={event}
             sessionCwd={sessionCwd}
             contextText={event.kind === "file_change" ? precedingUserRequest(events, event.ts) : undefined}
-            matched={Boolean(matchTarget
-              && matchTarget.eventKind === event.kind
-              && matchTarget.eventTs === event.ts)}
+            matched={targetMatchesEvent(matchTarget, event)}
+            matchRequestKey={targetMatchesEvent(matchTarget, event) ? targetRequestKey(matchTarget) : null}
+            expanded={expandedEvents.has(timelineEventIdentity(event))}
+            onExpandedChange={(nextExpanded) => {
+              const identity = timelineEventIdentity(event);
+              setExpandedEvents((current) => {
+                const next = new Set(current);
+                if (nextExpanded) next.add(identity);
+                else next.delete(identity);
+                return next;
+              });
+            }}
           />
         ))}
         {page.remaining > 0 && (
@@ -145,19 +143,40 @@ function DesktopTimelineEntry({
   sessionCwd,
   contextText,
   matched,
+  matchRequestKey,
+  expanded,
+  onExpandedChange,
 }: {
   event: TimelineEvent;
   sessionCwd: string;
   contextText?: string;
   matched: boolean;
+  matchRequestKey: string | null;
+  expanded: boolean;
+  onExpandedChange: (expanded: boolean) => void;
 }) {
-  const [collapsedState, setCollapsed] = useState(true);
-  const collapsed = matched ? false : collapsedState;
+  const [dismissedMatchRequest, setDismissedMatchRequest] = useState<string | null>(null);
+  const highlightKey = `hl:${sessionCwd}:${event.ts}`;
+  const [highlighted, setHighlighted] = useState(() => localStorage.getItem(highlightKey) === "1");
+  const forcedOpen = matched && matchRequestKey !== dismissedMatchRequest;
+  const collapsed = forcedOpen ? false : !expanded;
+
+  function toggleHighlight(clickEvent: ReactMouseEvent<HTMLButtonElement>) {
+    clickEvent.stopPropagation();
+    setHighlighted((current) => {
+      const next = !current;
+      if (next) localStorage.setItem(highlightKey, "1");
+      else localStorage.removeItem(highlightKey);
+      return next;
+    });
+  }
+
   if (event.kind === "token_usage") {
     return (
       <div
         className={`timeline-entry token-usage-entry${matched ? " desktop-search-match" : ""}`}
-        data-event-key={eventKey(event.kind, event.ts)}
+        data-event-key={eventKey(event)}
+        data-event-search-key={eventSearchKey(event)}
       >
         <div className="token-usage-bar">
           <span className="token-usage-icon">T</span>
@@ -172,13 +191,33 @@ function DesktopTimelineEntry({
   const style = entryStyle(event);
   return (
     <div
-      className={`timeline-entry ${style.className}${matched ? " desktop-search-match" : ""}`}
-      data-event-key={eventKey(event.kind, event.ts)}
+      className={`timeline-entry ${style.className}${forcedOpen ? " desktop-search-match" : ""}${highlighted ? " highlighted" : ""}`}
+      data-event-key={eventKey(event)}
+      data-event-search-key={eventSearchKey(event)}
     >
-      <div className="entry-header" onClick={() => setCollapsed((value) => !value)}>
+      <div
+        className="entry-header"
+        onClick={() => {
+          if (forcedOpen) {
+            setDismissedMatchRequest(matchRequestKey);
+            onExpandedChange(false);
+          } else {
+            onExpandedChange(!expanded);
+          }
+        }}
+      >
         <span className={`entry-badge ${style.badge}`}>{style.label}</span>
         {collapsed && <span className="entry-summary">{summary(event)}</span>}
         <span className="entry-time">{formatTime(event.ts)}</span>
+        <button
+          type="button"
+          className={`entry-highlight-btn${highlighted ? " active" : ""}`}
+          onClick={toggleHighlight}
+          title={highlighted ? "Remove highlight" : "Highlight"}
+          aria-label={highlighted ? "Remove highlight" : "Highlight this timeline event"}
+        >
+          ★
+        </button>
       </div>
       <div className={`entry-body${collapsed ? " collapsed" : ""}${event.kind === "file_change" ? " diff-body" : ""}`}>
         <div className="entry-body-section">
@@ -200,8 +239,28 @@ function DesktopTimelineEntry({
   );
 }
 
-function eventKey(kind: string, timestamp: string): string {
-  return encodeURIComponent(`${kind}:${timestamp}`);
+function eventKey(event: TimelineEvent): string {
+  return encodeURIComponent(timelineEventIdentity(event));
+}
+
+function eventSearchKey(event: TimelineEvent): string {
+  return encodeURIComponent(`${event.kind}:${event.ts}`);
+}
+
+function targetEventSelector(target: SessionMatchTarget): string {
+  const attribute = target.eventIdentity ? "data-event-key" : "data-event-search-key";
+  const value = encodeURIComponent(target.eventIdentity || `${target.eventKind}:${target.eventTs}`);
+  return `[${attribute}="${value}"]`;
+}
+
+function targetMatchesEvent(target: SessionMatchTarget | null, event: TimelineEvent): boolean {
+  if (!target || target.eventKind !== event.kind || target.eventTs !== event.ts) return false;
+  return !target.eventIdentity || target.eventIdentity === timelineEventIdentity(event);
+}
+
+function targetRequestKey(target: SessionMatchTarget | null): string | null {
+  if (!target) return null;
+  return [target.eventIdentity || `${target.eventKind}:${target.eventTs}`, target.requestId || 0].join(":");
 }
 
 function entryStyle(event: Exclude<TimelineEvent, { kind: "token_usage" }>) {

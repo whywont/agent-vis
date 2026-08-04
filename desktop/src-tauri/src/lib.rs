@@ -8,7 +8,7 @@ mod workspace;
 
 use explain::explain_diff;
 use search::{search_sessions, SearchIndexState};
-use sessions::{list_sessions, read_session_records};
+use sessions::{delete_session, list_sessions, read_session_records};
 use settings::{get_desktop_settings, save_desktop_settings};
 use tauri::Manager;
 use workspace::{get_git_branch, read_workspace_file, save_workspace_file};
@@ -24,6 +24,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             list_sessions,
+            delete_session,
             search_sessions,
             read_session_records,
             get_desktop_settings,

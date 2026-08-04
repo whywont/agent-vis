@@ -300,6 +300,33 @@ pub(crate) fn list_sessions() -> Result<Vec<SessionMeta>, String> {
     Ok(grouped)
 }
 
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) fn delete_session(file_refs: String) -> Result<usize, String> {
+    let home = dirs::home_dir().ok_or("Could not resolve the home directory")?;
+    delete_session_refs(&home, &file_refs)
+}
+
+fn delete_session_refs(home: &Path, file_refs: &str) -> Result<usize, String> {
+    let refs = file_refs
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    if refs.is_empty() || refs.len() > MAX_GROUPED_FILES {
+        return Err("Invalid grouped session reference".to_owned());
+    }
+
+    let resolved = refs
+        .iter()
+        .map(|file_ref| resolve_session_ref(home, file_ref).map(|(path, _)| path))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    for path in &resolved {
+        fs::remove_file(path).map_err(|error| format!("Could not delete session: {error}"))?;
+    }
+    Ok(resolved.len())
+}
+
 pub(crate) fn resolve_session_ref(
     home: &Path,
     file_ref: &str,
@@ -648,6 +675,44 @@ mod tests {
         fs::create_dir_all(home.join(".codex/sessions")).unwrap();
         assert!(resolve_session_ref(&home, "../../.ssh/id_rsa.jsonl").is_err());
         assert!(resolve_session_ref(&home, "/tmp/session.jsonl").is_err());
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn deletes_only_resolved_grouped_session_files() {
+        let home = temp_dir("delete-session");
+        let codex_root = home.join(".codex/sessions/2026/08/03");
+        let claude_root = home.join(".claude/projects/-Users-alice-project");
+        fs::create_dir_all(&codex_root).unwrap();
+        fs::create_dir_all(&claude_root).unwrap();
+        let codex = codex_root.join("one.jsonl");
+        let claude = claude_root.join("two.jsonl");
+        fs::write(&codex, "{}\n").unwrap();
+        fs::write(&claude, "{}\n").unwrap();
+
+        assert_eq!(
+            delete_session_refs(
+                &home,
+                "2026/08/03/one.jsonl,claude:-Users-alice-project/two.jsonl",
+            )
+            .unwrap(),
+            2,
+        );
+        assert!(!codex.exists());
+        assert!(!claude.exists());
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn validates_every_grouped_reference_before_deleting() {
+        let home = temp_dir("delete-session-validation");
+        let codex_root = home.join(".codex/sessions");
+        fs::create_dir_all(&codex_root).unwrap();
+        let valid = codex_root.join("valid.jsonl");
+        fs::write(&valid, "{}\n").unwrap();
+
+        assert!(delete_session_refs(&home, "valid.jsonl,../../outside.jsonl").is_err());
+        assert!(valid.exists());
         fs::remove_dir_all(home).unwrap();
     }
 

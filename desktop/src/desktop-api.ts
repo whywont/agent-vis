@@ -45,6 +45,7 @@ export interface ExplainDiffRequest {
   patch: string;
   contextText?: string;
   fileContent?: string;
+  detailLevel?: "detailed";
 }
 
 interface WorkspaceFile {
@@ -78,6 +79,10 @@ export function listSessions(): Promise<SessionMeta[]> {
 
 export function searchSessions(query: string): Promise<SessionSearchResponse> {
   return invoke<SessionSearchResponse>("search_sessions", { query });
+}
+
+export function deleteSession(fileRefs: string): Promise<number> {
+  return invoke<number>("delete_session", { fileRefs });
 }
 
 export function getGitBranch(workspaceRoot: string): Promise<string | null> {

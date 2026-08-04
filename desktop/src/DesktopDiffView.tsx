@@ -1,6 +1,13 @@
 import { useMemo, useRef, useState } from "react";
 import ColoredText from "@/components/ColoredText";
 import { explainDiff, readWorkspaceFile, saveWorkspaceFile } from "./desktop-api";
+import {
+  detailedDiffExplanationKey,
+  diffExplanationKey,
+  loadDiffExplanation,
+  removeDiffExplanation,
+  saveDiffExplanation,
+} from "./diff-explanation-cache";
 
 interface DiffBlock {
   action: "update" | "add" | "delete";
@@ -53,14 +60,25 @@ export default function DesktopDiffView({
   if (blocks.length === 0) return <>{patch}</>;
   return (
     <>
-      {blocks.map((block) => (
-        <DesktopDiffBlock
-          block={block}
-          contextText={contextText}
-          workspaceRoot={workspaceRoot}
-          key={`${block.action}:${block.filepath}`}
-        />
-      ))}
+      {blocks.map((block) => {
+        const blockPatch = block.lines.map((line) => line.text).join("\n");
+        const explanationKey = diffExplanationKey({
+          workspaceRoot,
+          filepath: block.filepath,
+          action: block.action,
+          patch: blockPatch,
+          contextText,
+        });
+        return (
+          <DesktopDiffBlock
+            block={block}
+            contextText={contextText}
+            workspaceRoot={workspaceRoot}
+            explanationKey={explanationKey}
+            key={explanationKey}
+          />
+        );
+      })}
     </>
   );
 }
@@ -69,15 +87,23 @@ function DesktopDiffBlock({
   block,
   contextText,
   workspaceRoot,
+  explanationKey,
 }: {
   block: DiffBlock;
   contextText?: string;
   workspaceRoot: string;
+  explanationKey: string;
 }) {
+  const detailedExplanationKey = detailedDiffExplanationKey(explanationKey);
   const [copied, setCopied] = useState(false);
-  const [explanation, setExplanation] = useState<string | null>(null);
+  const [explanation, setExplanation] = useState<string | null>(() => loadDiffExplanation(explanationKey));
   const [explanationError, setExplanationError] = useState<string | null>(null);
   const [explaining, setExplaining] = useState(false);
+  const [detailedExplanation, setDetailedExplanation] = useState<string | null>(
+    () => loadDiffExplanation(detailedExplanationKey),
+  );
+  const [detailedExplanationError, setDetailedExplanationError] = useState<string | null>(null);
+  const [explainingDetails, setExplainingDetails] = useState(false);
   const [fullContent, setFullContent] = useState<string | null>(null);
   const [showFull, setShowFull] = useState(false);
   const [loadingFile, setLoadingFile] = useState(false);
@@ -164,16 +190,47 @@ function DesktopDiffBlock({
           // The patch remains sufficient if the current file is unavailable.
         }
       }
-      setExplanation(await explainDiff({
+      const result = await explainDiff({
         filepath: block.filepath,
         patch,
         contextText,
         fileContent,
-      }));
+      });
+      saveDiffExplanation(explanationKey, result);
+      setExplanation(result);
     } catch (reason: unknown) {
       setExplanationError(desktopError(reason));
     } finally {
       setExplaining(false);
+    }
+  }
+
+  async function explainMore() {
+    if (explainingDetails) return;
+    setDetailedExplanationError(null);
+    setExplainingDetails(true);
+    try {
+      let fileContent: string | undefined;
+      if (block.action !== "delete") {
+        try {
+          fileContent = await loadCurrentFile();
+        } catch {
+          // The patch remains sufficient if the current file is unavailable.
+        }
+      }
+      const result = await explainDiff({
+        filepath: block.filepath,
+        patch,
+        contextText,
+        fileContent,
+        detailLevel: "detailed",
+      });
+      saveDiffExplanation(detailedExplanationKey, result);
+      setDetailedExplanation(result);
+    } catch (reason: unknown) {
+      setDetailedExplanationError(desktopError(reason));
+    } finally {
+      setExplainingDetails(false);
     }
   }
 
@@ -267,7 +324,14 @@ function DesktopDiffBlock({
             {explanationError ? "explanation error" : "ai explanation"}
             <button
               className="diff-explain-dismiss"
-              onClick={() => { setExplanation(null); setExplanationError(null); }}
+              onClick={() => {
+                removeDiffExplanation(explanationKey);
+                removeDiffExplanation(detailedExplanationKey);
+                setExplanation(null);
+                setExplanationError(null);
+                setDetailedExplanation(null);
+                setDetailedExplanationError(null);
+              }}
               aria-label="Dismiss explanation"
             >
               &times;
@@ -276,6 +340,23 @@ function DesktopDiffBlock({
           <div className={explanationError ? "desktop-explain-error" : "diff-explain-text"} role={explanationError ? "alert" : undefined}>
             {explanationError ?? explanation}
           </div>
+          {!explanationError && explanation !== null && (
+            <>
+              <div className="desktop-explain-actions">
+                <button type="button" disabled={explainingDetails} onClick={() => void explainMore()}>
+                  {explainingDetails ? "getting more information..." : detailedExplanation ? "Refresh more information" : "More information"}
+                </button>
+              </div>
+              {(detailedExplanation !== null || detailedExplanationError !== null) && (
+                <div className={`desktop-explain-detail${detailedExplanationError ? " error" : ""}`}>
+                  <div className="desktop-explain-detail-label">more information</div>
+                  <div className={detailedExplanationError ? "desktop-explain-error" : "diff-explain-text"} role={detailedExplanationError ? "alert" : undefined}>
+                    {detailedExplanationError ?? detailedExplanation}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
         </div>
       )}
     </div>

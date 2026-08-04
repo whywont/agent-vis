@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
-import type { AppEvent, SessionMeta } from "@/lib/types";
+import type { AppEvent, FileChangeEvent, SessionMeta } from "@/lib/types";
+import { timelineEventIdentity } from "@/lib/timeline-events";
 import type { SessionMatchTarget } from "./App";
 import { formatTime } from "@/utils/format";
 import DesktopFileTree from "./DesktopFileTree";
@@ -11,11 +12,13 @@ import { startWindowDrag } from "./window-drag";
 
 export default function DesktopSessionDetail({
   session,
+  sessionName,
   activeTab,
   onActiveTabChange,
   matchTarget,
 }: {
   session: SessionMeta;
+  sessionName: string | null;
   activeTab: "session" | "files";
   onActiveTabChange: (tab: "session" | "files") => void;
   matchTarget: SessionMatchTarget | null;
@@ -26,9 +29,14 @@ export default function DesktopSessionDetail({
   const [loadedBatches, setLoadedBatches] = useState(0);
   const [branch, setBranch] = useState<string | null>(null);
   const [filePanelOpen, setFilePanelOpen] = useState(true);
+  const [fileTimelineSelection, setFileTimelineSelection] = useState<{
+    baseTarget: SessionMatchTarget | null;
+    target: SessionMatchTarget;
+  } | null>(null);
   const [copiedId, setCopiedId] = useState(false);
   const fileTreeRef = useRef<HTMLDivElement>(null);
   const resizeHandleRef = useRef<HTMLDivElement>(null);
+  const jumpRequestId = useRef(0);
   const files = session.files?.join(",") || session.file;
 
   useEffect(() => {
@@ -92,6 +100,19 @@ export default function DesktopSessionDetail({
   const id = meta?.kind === "session_start" ? meta.id : session.id;
   const timestamp = meta?.kind === "session_start" ? meta.ts : session.timestamp;
 
+  function jumpToPatch(event: FileChangeEvent) {
+    jumpRequestId.current += 1;
+    setFileTimelineSelection({
+      baseTarget: matchTarget,
+      target: {
+        eventTs: event.ts,
+        eventKind: event.kind,
+        eventIdentity: timelineEventIdentity(event),
+        requestId: jumpRequestId.current,
+      },
+    });
+  }
+
   useEffect(() => {
     let cancelled = false;
     if (!cwd) return;
@@ -113,11 +134,16 @@ export default function DesktopSessionDetail({
         onMouseDown={startWindowDrag}
       >
         <div className="detail-meta" data-window-no-drag>
-          <span className="mono">{id}</span>
+          <span
+            className={`mono${sessionName ? " desktop-session-name" : ""}`}
+            title={sessionName ? `Session ID: ${id}` : id}
+          >
+            {sessionName || id}
+          </span>
           <button
             className="desktop-copy-session-id"
             type="button"
-            title={copiedId ? "Copied session ID" : "Copy session ID"}
+            title={copiedId ? "Session ID copied" : `Session ID: ${id} — click to copy`}
             aria-label={copiedId ? "Copied session ID" : "Copy session ID"}
             onClick={() => {
               navigator.clipboard.writeText(id).then(() => {
@@ -176,7 +202,7 @@ export default function DesktopSessionDetail({
                     <span>{branch}</span>
                   </div>
                 )}
-                <DesktopFileTree events={events} sessionCwd={cwd} />
+                <DesktopFileTree events={events} sessionCwd={cwd} onJumpToPatch={jumpToPatch} />
               </div>
               <div className="file-tree-resize-handle" ref={resizeHandleRef} />
             </>
@@ -195,7 +221,9 @@ export default function DesktopSessionDetail({
             events={events}
             sessionCwd={cwd}
             sessionKey={`${session.source}:${session.id}`}
-            matchTarget={matchTarget}
+            matchTarget={fileTimelineSelection?.baseTarget === matchTarget
+              ? fileTimelineSelection.target
+              : matchTarget}
           />
         </div>
       )}
