@@ -86,6 +86,33 @@ fn stop_terminal_process(mut child: Child) {
     let _ = child.wait();
 }
 
+fn decode_terminal_output(pending: &mut Vec<u8>, chunk: &[u8]) -> String {
+    pending.extend_from_slice(chunk);
+    match std::str::from_utf8(pending) {
+        Ok(text) => {
+            let text = text.to_owned();
+            pending.clear();
+            text
+        }
+        Err(error) if error.error_len().is_none() => {
+            // A multi-byte character was split across PTY reads. Emit only the
+            // complete prefix and retain the unfinished suffix for next time.
+            let valid = error.valid_up_to();
+            let text = String::from_utf8_lossy(&pending[..valid]).into_owned();
+            let remainder = pending.split_off(valid);
+            *pending = remainder;
+            text
+        }
+        Err(_) => {
+            // Invalid bytes are unusual in a terminal stream, but should not
+            // stall output forever. Render them lossily and resume cleanly.
+            let text = String::from_utf8_lossy(pending).into_owned();
+            pending.clear();
+            text
+        }
+    }
+}
+
 // Spawn the login shell on a real PTY. The prior `script` shim injected its
 // own control output and could not track pane resizing.
 fn spawn_shell(workspace_root: &std::path::Path) -> Result<(Child, File, File), String> {
@@ -183,15 +210,20 @@ pub(crate) fn start_terminal(
     std::thread::spawn(move || {
         let mut output = stdout;
         let mut buffer = [0_u8; 8192];
+        let mut pending_utf8 = Vec::new();
         loop {
             match output.read(&mut buffer) {
                 Ok(0) | Err(_) => break,
                 Ok(size) => {
+                    let data = decode_terminal_output(&mut pending_utf8, &buffer[..size]);
+                    if data.is_empty() {
+                        continue;
+                    }
                     let _ = app_for_output.emit(
                         "terminal-output",
                         TerminalOutput {
                             terminal_id: output_id.clone(),
-                            data: String::from_utf8_lossy(&buffer[..size]).into_owned(),
+                            data,
                         },
                     );
                 }
@@ -207,6 +239,21 @@ pub(crate) fn start_terminal(
         .map_err(|_| "Terminal state is unavailable.".to_owned())?
         .insert(terminal_id, input);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_terminal_output;
+
+    #[test]
+    fn preserves_unicode_split_across_pty_reads() {
+        let mut pending = Vec::new();
+        let spinner = "⠋".as_bytes();
+
+        assert_eq!(decode_terminal_output(&mut pending, &spinner[..2]), "");
+        assert_eq!(decode_terminal_output(&mut pending, &spinner[2..]), "⠋");
+        assert!(pending.is_empty());
+    }
 }
 
 type TerminalInput = Arc<Mutex<File>>;
