@@ -22,18 +22,13 @@ pub(crate) enum ExplainProvider {
     Openrouter,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum DesktopAppearance {
+    #[default]
     WarmDark,
     BlueDark,
     Light,
-}
-
-impl Default for DesktopAppearance {
-    fn default() -> Self {
-        Self::WarmDark
-    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
