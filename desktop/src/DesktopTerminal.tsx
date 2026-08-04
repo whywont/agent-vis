@@ -14,12 +14,16 @@ export default function DesktopTerminal({
   sessionSource,
   panelHeight,
   active,
+  prefillResume,
+  paneCount,
 }: {
   sessionCwd: string;
   sessionId: string;
   sessionSource: "codex" | "claude-code";
   panelHeight: number;
   active: boolean;
+  prefillResume: boolean;
+  paneCount: number;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<import("@xterm/xterm").Terminal | null>(null);
@@ -106,18 +110,20 @@ export default function DesktopTerminal({
       started = true;
       lastSize = "";
       fitToContainer();
-      // zsh emits its first prompt after startup. Send the draft to its line
-      // editor without a newline, so it remains editable and Enter executes it.
-      draftTimer = window.setTimeout(() => {
-        if (!disposed) {
-          void writeTerminal(
-            terminalId,
-            sessionSource === "codex"
-              ? `codex resume ${sessionId}`
-              : `claude --resume ${sessionId}`,
-          );
-        }
-      }, 300);
+      if (prefillResume) {
+        // zsh emits its first prompt after startup. Send the draft to its line
+        // editor without a newline, so it remains editable and Enter executes it.
+        draftTimer = window.setTimeout(() => {
+          if (!disposed) {
+            void writeTerminal(
+              terminalId,
+              sessionSource === "codex"
+                ? `codex resume ${sessionId}`
+                : `claude --resume ${sessionId}`,
+            );
+          }
+        }, 300);
+      }
       if (disposed) {
         await stopTerminal(terminalId);
       }
@@ -135,7 +141,7 @@ export default function DesktopTerminal({
       fitAddonRef.current = null;
       void stopTerminal(terminalId);
     };
-  }, [sessionCwd, sessionId, sessionSource]);
+  }, [prefillResume, sessionCwd, sessionId, sessionSource]);
 
   useLayoutEffect(() => {
     if (!active) return;
@@ -166,7 +172,7 @@ export default function DesktopTerminal({
       cancelAnimationFrame(firstFrame);
       timers.forEach((timer) => window.clearTimeout(timer));
     };
-  }, [active, panelHeight]);
+  }, [active, paneCount, panelHeight]);
 
   function scrollTerminal(event: React.WheelEvent<HTMLDivElement>) {
     const terminal = terminalRef.current;

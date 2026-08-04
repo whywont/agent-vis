@@ -42,6 +42,8 @@ export default function DesktopSessionDetail({
   const [terminalDragging, setTerminalDragging] = useState(false);
   const [sessionsDockBounds, setSessionsDockBounds] = useState<CSSProperties | null>(null);
   const [terminals, setTerminals] = useState<TerminalSession[]>([]);
+  const [activeTerminalBySession, setActiveTerminalBySession] = useState<Record<string, string>>({});
+  const [splitTerminalSessions, setSplitTerminalSessions] = useState<Set<string>>(() => new Set());
   const [fileTimelineSelection, setFileTimelineSelection] = useState<{
     baseTarget: SessionMatchTarget | null;
     target: SessionMatchTarget;
@@ -205,18 +207,23 @@ export default function DesktopSessionDetail({
   const cwd = meta?.kind === "session_start" ? meta.cwd : session.cwd;
   const id = meta?.kind === "session_start" ? meta.id : session.id;
   const timestamp = meta?.kind === "session_start" ? meta.ts : session.timestamp;
-  const currentTerminal = terminalSession(session, session.id, session.cwd);
-  const visibleTerminal = terminals.find((terminal) => terminal.key === currentTerminal.key) || null;
+  const currentSessionKey = terminalSessionKey(session, session.id);
+  const visibleTerminals = terminals.filter((terminal) => terminal.sessionKey === currentSessionKey);
+  const activeTerminalKey = activeTerminalBySession[currentSessionKey];
+  const visibleTerminal = visibleTerminals.find((terminal) => terminal.key === activeTerminalKey) || visibleTerminals[0] || null;
+  const terminalSplit = splitTerminalSessions.has(currentSessionKey);
   // Terminal identity must come from the selected list record, not parsed
   // timeline metadata which briefly belongs to the prior selection on switch.
   useEffect(() => {
     function openTerminal(event: Event) {
       const requested = (event as CustomEvent<SessionMeta>).detail;
       if (!requested) return;
-      const terminal = terminalSession(requested, requested.id, requested.cwd);
-      setTerminals((current) => current.some((item) => item.key === terminal.key)
-        ? current
-        : [...current, terminal]);
+      const terminal = firstTerminalSession(requested, requested.id, requested.cwd);
+      setTerminals((current) => {
+        if (current.some((item) => item.sessionKey === terminal.sessionKey)) return current;
+        setActiveTerminalBySession((active) => ({ ...active, [terminal.sessionKey]: terminal.key }));
+        return [...current, terminal];
+      });
     }
     window.addEventListener("open-session-terminal", openTerminal);
     return () => window.removeEventListener("open-session-terminal", openTerminal);
@@ -226,8 +233,43 @@ export default function DesktopSessionDetail({
     if (!visibleTerminal) return;
     setTerminals((current) => {
       const next = current.filter((terminal) => terminal.key !== visibleTerminal.key);
+      const remaining = next.filter((terminal) => terminal.sessionKey === currentSessionKey);
+      setActiveTerminalBySession((active) => {
+        const updated = { ...active };
+        if (remaining.length) updated[currentSessionKey] = remaining[0].key;
+        else delete updated[currentSessionKey];
+        return updated;
+      });
+      if (remaining.length < 2) {
+        setSplitTerminalSessions((sessions) => {
+          const nextSessions = new Set(sessions);
+          nextSessions.delete(currentSessionKey);
+          return nextSessions;
+        });
+      }
       if (!next.length) onTerminalClose();
       if (!next.length) setTerminalPlacement("bottom");
+      return next;
+    });
+  }
+
+  function addTerminalPane() {
+    if (!visibleTerminal) return;
+    const pane = {
+        ...visibleTerminal,
+        key: `${currentSessionKey}:pane-${crypto.randomUUID()}`,
+        prefillResume: false,
+    };
+    setTerminals((current) => [...current, pane]);
+    setActiveTerminalBySession((active) => ({ ...active, [currentSessionKey]: pane.key }));
+  }
+
+  function toggleTerminalSplit() {
+    if (visibleTerminals.length < 2) return;
+    setSplitTerminalSessions((sessions) => {
+      const next = new Set(sessions);
+      if (next.has(currentSessionKey)) next.delete(currentSessionKey);
+      else next.add(currentSessionKey);
       return next;
     });
   }
@@ -367,8 +409,11 @@ export default function DesktopSessionDetail({
           />
         </div>
       )}
-      {terminalOpen && visibleTerminal && terminalPlacement === "bottom" && terminalPanel("bottom")}
-      {terminalOpen && visibleTerminal && terminalPlacement === "sessions" && terminalSidePanel()}
+      {/* Keep terminal renderers mounted while browsing a session without one.
+          Unmounting them here used to look like navigation but also sent the
+          native stop command, killing the shell and its resumed agent. */}
+      {terminalOpen && terminals.length > 0 && terminalPlacement === "bottom" && terminalPanel("bottom")}
+      {terminalOpen && terminals.length > 0 && terminalPlacement === "sessions" && terminalSidePanel()}
     </div>
   );
 
@@ -379,9 +424,10 @@ export default function DesktopSessionDetail({
 
   function terminalPanel(placement: "bottom" | "sessions") {
     const snapped = placement === "sessions";
+    const parked = !visibleTerminal;
     return (
       <section
-        className={`desktop-terminal-panel${snapped ? " desktop-terminal-sessions" : ""}`}
+        className={`desktop-terminal-panel${snapped ? " desktop-terminal-sessions" : ""}${parked ? " desktop-terminal-parked" : ""}`}
         style={snapped ? sessionsDockBounds || { visibility: "hidden" } : { height: terminalHeight }}
         aria-label="Terminal panel"
       >
@@ -400,25 +446,63 @@ export default function DesktopSessionDetail({
             >
               <TerminalGlyph />
             </button>
+            {visibleTerminals.map((terminal, index) => (
+              <button
+                className={`desktop-terminal-pane-tab${terminal.key === visibleTerminal?.key ? " active" : ""}`}
+                key={terminal.key}
+                onClick={() => setActiveTerminalBySession((active) => ({ ...active, [currentSessionKey]: terminal.key }))}
+                title={`Terminal ${index + 1}`}
+              >
+                {index + 1}
+              </button>
+            ))}
+            <button
+              className="desktop-terminal-add"
+              onClick={addTerminalPane}
+              title="New terminal"
+              aria-label="New terminal"
+            >
+              +
+            </button>
+            <button
+              className={`desktop-terminal-split${terminalSplit ? " active" : ""}`}
+              onClick={toggleTerminalSplit}
+              disabled={visibleTerminals.length < 2}
+              title={terminalSplit ? "Show one terminal" : "Split terminals"}
+              aria-label={terminalSplit ? "Show one terminal" : "Split terminals"}
+            >
+              <SplitTerminalGlyph />
+            </button>
             <button
               className="desktop-terminal-close"
               onClick={closeActiveTerminal}
               title="Close active terminal"
-              aria-label="Close terminal"
+              aria-label="Close active terminal"
             >
               ×
             </button>
           </div>
-          {terminals.map((terminal) => (
-            <DesktopTerminal
-              active={terminal.key === visibleTerminal?.key}
-              key={terminal.key}
-              sessionCwd={terminal.cwd}
-              sessionId={terminal.id}
-              sessionSource={terminal.source}
-              panelHeight={snapped ? -1 : terminalHeight}
-            />
-          ))}
+          {groupTerminalPanes(terminals).map(([sessionKey, panes]) => {
+            const isCurrent = sessionKey === currentSessionKey;
+            const isSplit = splitTerminalSessions.has(sessionKey);
+            const activeKey = activeTerminalBySession[sessionKey] || panes[0]?.key;
+            return (
+            <div className={`desktop-terminal-pane-grid${isCurrent ? " active" : ""}${isSplit ? " split" : ""}`} key={sessionKey}>
+              {panes.map((terminal) => (
+                <DesktopTerminal
+                  active={isCurrent && (isSplit || terminal.key === activeKey)}
+                  key={terminal.key}
+                  sessionCwd={terminal.cwd}
+                  sessionId={terminal.id}
+                  sessionSource={terminal.source}
+                  panelHeight={snapped ? -1 : terminalHeight}
+                  prefillResume={terminal.prefillResume}
+                  paneCount={isSplit ? panes.length : 1}
+                />
+              ))}
+            </div>
+            );
+          })}
       </section>
     );
   }
@@ -426,19 +510,43 @@ export default function DesktopSessionDetail({
 
 interface TerminalSession {
   key: string;
+  sessionKey: string;
   cwd: string;
   id: string;
   source: "codex" | "claude-code";
+  prefillResume: boolean;
 }
 
-function terminalSession(session: SessionMeta, id: string, cwd: string): TerminalSession {
-  return { key: `${session.source}:${id}`, cwd, id, source: session.source };
+function terminalSessionKey(session: SessionMeta, id: string): string {
+  return `${session.source}:${id}`;
+}
+
+function firstTerminalSession(session: SessionMeta, id: string, cwd: string): TerminalSession {
+  const sessionKey = terminalSessionKey(session, id);
+  return { key: sessionKey, sessionKey, cwd, id, source: session.source, prefillResume: true };
+}
+
+function groupTerminalPanes(terminals: TerminalSession[]): [string, TerminalSession[]][] {
+  const groups = new Map<string, TerminalSession[]>();
+  for (const terminal of terminals) {
+    groups.set(terminal.sessionKey, [...(groups.get(terminal.sessionKey) || []), terminal]);
+  }
+  return [...groups.entries()];
 }
 
 function TerminalGlyph() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
       <path d="m5 5 6 7-6 7M13 19h6" />
+    </svg>
+  );
+}
+
+function SplitTerminalGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="4" y="5" width="16" height="14" rx="1" />
+      <path d="M12 5v14" />
     </svg>
   );
 }
