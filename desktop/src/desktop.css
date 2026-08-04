@@ -1404,6 +1404,38 @@ body.terminal-over-sessions #sidebar {
 
 .desktop-terminal-add:hover { background: #252526; color: #ffffff; }
 
+.desktop-terminal-pane-tab {
+  display: grid;
+  width: 27px;
+  place-items: center;
+  align-self: stretch;
+  border: 0;
+  border-right: 1px solid #2d2d2d;
+  background: transparent;
+  color: #777777;
+  cursor: pointer;
+  font: 11px/1 var(--font-mono);
+}
+
+.desktop-terminal-pane-tab:hover,
+.desktop-terminal-pane-tab.active { background: #252526; color: #d4d4d4; }
+
+.desktop-terminal-split {
+  display: grid;
+  width: 28px;
+  place-items: center;
+  border: 0;
+  border-right: 1px solid #2d2d2d;
+  background: transparent;
+  color: #9a9a9a;
+  cursor: pointer;
+}
+
+.desktop-terminal-split:hover:not(:disabled),
+.desktop-terminal-split.active { background: #252526; color: #ffffff; }
+.desktop-terminal-split:disabled { cursor: default; opacity: 0.35; }
+.desktop-terminal-split svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.7; }
+
 .desktop-terminal-panel-tab svg {
   width: 16px;
   height: 16px;
@@ -1447,6 +1479,9 @@ body.terminal-over-sessions #sidebar {
 
 .desktop-terminal-pane-grid.active { display: grid; }
 
+.desktop-terminal-pane-grid:not(.split) { display: none; }
+.desktop-terminal-pane-grid:not(.split).active { display: block; }
+
 .desktop-terminal-surface,
 .desktop-terminal-container {
   min-height: 0;
@@ -1454,14 +1489,24 @@ body.terminal-over-sessions #sidebar {
 }
 
 .desktop-terminal-surface {
-  position: relative;
+  position: absolute;
+  inset: 0;
   display: flex;
   overflow: hidden;
   background: #181818;
   border-right: 1px solid #2d2d2d;
+  visibility: hidden;
+  pointer-events: none;
 }
 
-.desktop-terminal-surface:last-child { border-right: 0; }
+.desktop-terminal-surface.active { visibility: visible; pointer-events: auto; }
+.desktop-terminal-pane-grid.split .desktop-terminal-surface {
+  position: relative;
+  inset: auto;
+  visibility: visible;
+  pointer-events: auto;
+}
+.desktop-terminal-pane-grid.split .desktop-terminal-surface:last-child { border-right: 0; }
 
 body.terminal-dragging,
 body.terminal-dragging * { cursor: grabbing !important; }
