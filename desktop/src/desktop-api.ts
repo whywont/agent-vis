@@ -80,6 +80,10 @@ export function searchSessions(query: string): Promise<SessionSearchResponse> {
   return invoke<SessionSearchResponse>("search_sessions", { query });
 }
 
+export function deleteSession(fileRefs: string): Promise<number> {
+  return invoke<number>("delete_session", { fileRefs });
+}
+
 export function getGitBranch(workspaceRoot: string): Promise<string | null> {
   return invoke<string | null>("get_git_branch", { workspaceRoot });
 }

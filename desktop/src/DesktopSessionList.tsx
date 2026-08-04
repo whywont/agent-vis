@@ -1,8 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { SessionMeta } from "@/lib/types";
+import { toCompactMarkdown } from "@/lib/compact-utils";
 import { formatDate, formatTime } from "@/utils/format";
 import type { SessionMatchTarget } from "./App";
-import { searchSessions, type SessionSearchResponse } from "./desktop-api";
+import { readSession, searchSessions, type SessionSearchResponse } from "./desktop-api";
+import { MAX_SESSION_ALIAS_LENGTH, sessionAlias, type SessionAliases } from "./session-aliases";
+import { loadPinnedSessions, savePinnedSessions } from "./session-pins";
 import { sessionIdentity } from "./session-refresh";
 
 type SortBy = "newest" | "oldest" | "project";
@@ -15,9 +18,12 @@ interface DesktopSessionListProps {
   loading: boolean;
   error: string;
   settingsActive: boolean;
+  sessionAliases: SessionAliases;
   onOpenSettings: () => void;
   onHideSessions: () => void;
   onSelectSession: (files: string, target: SessionMatchTarget | null) => void;
+  onDeleteSession: (files: string) => Promise<void>;
+  onRenameSession: (session: SessionMeta, name: string) => void;
 }
 
 function fileKey(session: SessionMeta): string {
@@ -56,19 +62,41 @@ export default function DesktopSessionList({
   loading,
   error,
   settingsActive,
+  sessionAliases,
   onOpenSettings,
   onHideSessions,
   onSelectSession,
+  onDeleteSession,
+  onRenameSession,
 }: DesktopSessionListProps) {
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState<SortBy>("newest");
   const [groupBy, setGroupBy] = useState<GroupBy>("date");
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
   const [optionsOpen, setOptionsOpen] = useState(false);
+  const [menuOpenFor, setMenuOpenFor] = useState<string | null>(null);
+  const [renamingFor, setRenamingFor] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [pinned, setPinned] = useState<Set<string>>(() => loadPinnedSessions());
+  const [sessionActionError, setSessionActionError] = useState("");
+  const [sessionActionNotice, setSessionActionNotice] = useState("");
   const [searchState, setSearchState] = useState<{ query: string; response: SessionSearchResponse } | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const activeQuery = search.trim();
   const searchResponse = searchState?.query === activeQuery ? searchState.response : null;
   const searching = activeQuery.length >= 2 && !searchResponse;
+  const renamingSession = renamingFor
+    ? sessions.find((session) => fileKey(session) === renamingFor) || null
+    : null;
+
+  useEffect(() => {
+    if (!menuOpenFor) return;
+    function closeMenu(event: MouseEvent) {
+      if (!menuRef.current?.contains(event.target as Node)) setMenuOpenFor(null);
+    }
+    document.addEventListener("mousedown", closeMenu);
+    return () => document.removeEventListener("mousedown", closeMenu);
+  }, [menuOpenFor]);
 
   useEffect(() => {
     const query = search.trim();
@@ -121,13 +149,26 @@ export default function DesktopSessionList({
         if (session && sourceFilter === "codex" && session.source !== "codex") return [];
         return session ? [{ session, result }] : [];
       });
-      return [{ label: "", items: matches.map(({ session }) => session) }];
+      const matchedKeys = new Set(matches.map(({ session }) => fileKey(session)));
+      const aliasMatches = sessions.filter((session) => {
+        if (matchedKeys.has(fileKey(session))) return false;
+        if (sourceFilter === "claude" && session.source !== "claude-code") return false;
+        if (sourceFilter === "codex" && session.source !== "codex") return false;
+        return sessionAlias(sessionAliases, session)?.toLowerCase().includes(query);
+      });
+      const matchedSessions = [...aliasMatches, ...matches.map(({ session }) => session)];
+      const pinnedSessions = matchedSessions.filter((session) => pinned.has(fileKey(session)));
+      const otherSessions = matchedSessions.filter((session) => !pinned.has(fileKey(session)));
+      return [
+        ...(pinnedSessions.length > 0 ? [{ label: "★ Pinned", items: pinnedSessions }] : []),
+        { label: "", items: otherSessions },
+      ];
     }
     const filtered = sessions.filter((session) => {
       if (sourceFilter === "claude" && session.source !== "claude-code") return false;
       if (sourceFilter === "codex" && session.source !== "codex") return false;
       if (!query) return true;
-      return [session.id, session.cwd, session.project, session.file]
+      return [sessionAlias(sessionAliases, session), session.id, session.cwd, session.project, session.file]
         .filter(Boolean)
         .join(" ")
         .toLowerCase()
@@ -140,19 +181,45 @@ export default function DesktopSessionList({
       const delta = activityTime(right) - activityTime(left);
       return sortBy === "newest" ? delta : -delta;
     });
-    if (groupBy === "none") return [{ label: "", items: sorted }];
+    const pinnedSessions = sorted.filter((session) => pinned.has(fileKey(session)));
+    const otherSessions = sorted.filter((session) => !pinned.has(fileKey(session)));
+    const pinnedGroup = pinnedSessions.length > 0 ? [{ label: "★ Pinned", items: pinnedSessions }] : [];
+    if (groupBy === "none") return [...pinnedGroup, { label: "", items: otherSessions }];
     const buckets = new Map<string, SessionMeta[]>();
-    for (const session of sorted) {
+    for (const session of otherSessions) {
       const key = groupBy === "project"
         ? session.project || session.cwd.split("/").pop() || "unknown"
         : localDate(session.modified || session.timestamp);
       buckets.set(key, [...(buckets.get(key) || []), session]);
     }
-    return [...buckets].map(([label, items]) => ({
+    return [...pinnedGroup, ...[...buckets].map(([label, items]) => ({
       label: groupBy === "date" && label !== "unknown" ? formatDate(label) : label,
       items,
-    }));
-  }, [groupBy, search, searchResponse, sessions, sortBy, sourceFilter]);
+    }))];
+  }, [groupBy, pinned, search, searchResponse, sessionAliases, sessions, sortBy, sourceFilter]);
+
+  function togglePinned(files: string) {
+    setPinned((current) => {
+      const next = new Set(current);
+      if (next.has(files)) next.delete(files);
+      else next.add(files);
+      savePinnedSessions(next);
+      return next;
+    });
+  }
+
+  async function exportSession(session: SessionMeta, format: "json" | "compact") {
+    setSessionActionError("");
+    setSessionActionNotice("");
+    const files = fileKey(session);
+    const events = await readSession(files, session.modified);
+    const shortId = session.id.slice(0, 12);
+    if (format === "json") {
+      downloadText(`session-${shortId}.json`, JSON.stringify({ events }, null, 2), "application/json");
+    } else {
+      downloadText(`context-${shortId}.md`, toCompactMarkdown(events), "text/markdown");
+    }
+  }
 
   const resultsBySession = useMemo(
     () => new Map(searchResponse?.results.map((result) => [result.sessionKey, result]) || []),
@@ -202,29 +269,47 @@ export default function DesktopSessionList({
         {searchResponse?.semanticError && (
           <div className="desktop-search-status error">Concept search unavailable: {searchResponse.semanticError}</div>
         )}
+        {sessionActionError && <div className="desktop-search-status error">{sessionActionError}</div>}
+        {sessionActionNotice && <div className="desktop-search-status success">{sessionActionNotice}</div>}
         {loading && <div className="desktop-status">Reading local sessions...</div>}
         {error && <div className="desktop-status error">{error}</div>}
         {!loading && !error && groups.map((group) => (
           <div className="session-group" key={group.label || "all"}>
-            {group.label && <div className="session-group-header">{group.label}</div>}
+            {group.label && (
+              <div className={`session-group-header${group.label.startsWith("★") ? " pinned" : ""}`}>
+                {group.label}
+              </div>
+            )}
             {group.items.map((session) => {
               const files = fileKey(session);
               const active = currentFile === files;
               const project = visibleProject(session);
               const result = resultsBySession.get(sessionIdentity(session));
+              const menuOpen = menuOpenFor === files;
+              const isPinned = pinned.has(files);
+              const alias = sessionAlias(sessionAliases, session);
               return (
-                <button
+                <div
                   key={files}
-                  className={`session-item desktop-session${active ? " active" : ""}`}
-                  onClick={() => onSelectSession(files, result && result.eventKind !== "metadata" ? {
-                    eventTs: result.eventTs,
-                    eventKind: result.eventKind,
-                  } : null)}
+                  className={`session-item desktop-session${active ? " active" : ""}${menuOpen ? " menu-open" : ""}`}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => {
+                    if (!menuOpen) onSelectSession(files, result && result.eventKind !== "metadata" ? {
+                      eventTs: result.eventTs,
+                      eventKind: result.eventKind,
+                    } : null);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !menuOpen) onSelectSession(files, null);
+                  }}
                 >
                   <span className={`session-source ${session.source === "claude-code" ? "source-claude" : "source-codex"}`}>
                     {session.source === "claude-code" ? "claude" : "codex"}
                   </span>
-                  <span className="session-id">{session.id.slice(0, 12)}</span>
+                  <span className={`session-id${alias ? " desktop-session-alias" : ""}`} title={alias || session.id}>
+                    {alias || session.id.slice(0, 12)}
+                  </span>
                   {project && <span className="session-project">{project}</span>}
                   <span className="session-cwd">{session.cwd.replace(/^\/(?:Users|home)\/[^/]+/, "~")}</span>
                   {result && (
@@ -236,7 +321,117 @@ export default function DesktopSessionList({
                     </>
                   )}
                   <span className="session-time">{formatTime(session.modified)}</span>
-                </button>
+                  <button
+                    type="button"
+                    className="session-item-menu-btn"
+                    title="Session actions"
+                    aria-label="Open session actions"
+                    aria-expanded={menuOpen}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setMenuOpenFor(menuOpen ? null : files);
+                    }}
+                  >
+                    •••
+                  </button>
+                  {menuOpen && (
+                    <div className="session-item-dropdown desktop-session-dropdown" ref={menuRef}>
+                      <button
+                        type="button"
+                        className="session-item-dropdown-btn"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setMenuOpenFor(null);
+                          togglePinned(files);
+                        }}
+                      >
+                        {isPinned ? "Unpin" : "Pin to top"}
+                      </button>
+                      <button
+                        type="button"
+                        className="session-item-dropdown-btn"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setMenuOpenFor(null);
+                          setRenameValue(alias || "");
+                          setRenamingFor(files);
+                        }}
+                      >
+                        Rename chat
+                      </button>
+                      <button
+                        type="button"
+                        className="session-item-dropdown-btn"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setMenuOpenFor(null);
+                          setSessionActionError("");
+                          navigator.clipboard.writeText(session.id).then(() => {
+                            setSessionActionNotice("Session ID copied");
+                            window.setTimeout(() => setSessionActionNotice(""), 1600);
+                          }).catch(() => {
+                            setSessionActionNotice("");
+                            setSessionActionError("Could not copy the session ID.");
+                          });
+                        }}
+                      >
+                        Copy session ID
+                      </button>
+                      <button
+                        type="button"
+                        className="session-item-dropdown-btn"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setMenuOpenFor(null);
+                          void exportSession(session, "json").catch((reason: unknown) => {
+                            setSessionActionError(actionError(reason));
+                          });
+                        }}
+                      >
+                        Export JSON
+                      </button>
+                      <button
+                        type="button"
+                        className="session-item-dropdown-btn"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setMenuOpenFor(null);
+                          void exportSession(session, "compact").catch((reason: unknown) => {
+                            setSessionActionError(actionError(reason));
+                          });
+                        }}
+                      >
+                        Export Compact
+                      </button>
+                      <button
+                        type="button"
+                        className="session-item-dropdown-btn delete"
+                        onClick={async (event) => {
+                          event.stopPropagation();
+                          setMenuOpenFor(null);
+                          setSessionActionError("");
+                          setSessionActionNotice("");
+                          try {
+                            await onDeleteSession(files);
+                          } catch (reason: unknown) {
+                            setSessionActionError(actionError(reason));
+                            return;
+                          }
+                          onRenameSession(session, "");
+                          setPinned((current) => {
+                            if (!current.has(files)) return current;
+                            const next = new Set(current);
+                            next.delete(files);
+                            savePinnedSessions(next);
+                            return next;
+                          });
+                        }}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  )}
+                </div>
               );
             })}
           </div>
@@ -245,6 +440,65 @@ export default function DesktopSessionList({
           <div className="session-empty">No sessions found</div>
         )}
       </div>
+      {renamingSession && (
+        <div
+          className="desktop-rename-overlay"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setRenamingFor(null);
+          }}
+        >
+          <form
+            className="desktop-rename-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="desktop-rename-title"
+            onSubmit={(event) => {
+              event.preventDefault();
+              onRenameSession(renamingSession, renameValue);
+              setRenamingFor(null);
+            }}
+          >
+            <div className="desktop-rename-header">
+              <div>
+                <h2 id="desktop-rename-title">Rename chat</h2>
+                <p>The original session ID remains unchanged.</p>
+              </div>
+              <button
+                type="button"
+                className="desktop-rename-close"
+                onClick={() => setRenamingFor(null)}
+                aria-label="Close rename dialog"
+              >
+                &times;
+              </button>
+            </div>
+            <label htmlFor="desktop-session-name-input">Chat name</label>
+            <input
+              id="desktop-session-name-input"
+              autoFocus
+              maxLength={MAX_SESSION_ALIAS_LENGTH}
+              value={renameValue}
+              placeholder="e.g. VisionClaw build pipeline"
+              onChange={(event) => setRenameValue(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  setRenamingFor(null);
+                }
+              }}
+            />
+            <div className="desktop-rename-current-id">
+              <span>session id</span>
+              <code>{renamingSession.id}</code>
+            </div>
+            <div className="desktop-rename-actions">
+              <button type="button" onClick={() => setRenamingFor(null)}>Cancel</button>
+              <button type="submit" className="primary">Save name</button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 }
@@ -257,6 +511,21 @@ function searchKindLabel(kind: string): string {
     file_change: "patch",
     metadata: "session",
   } as Record<string, string>)[kind] || kind;
+}
+
+function downloadText(filename: string, content: string, mimeType: string) {
+  const blob = new Blob([content], { type: `${mimeType};charset=utf-8` });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function actionError(reason: unknown): string {
+  if (reason instanceof Error) return reason.message;
+  return typeof reason === "string" ? reason : "Session action failed.";
 }
 
 function SearchSnippet({ text, highlights }: { text: string; highlights: string[] }) {

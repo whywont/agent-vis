@@ -1,21 +1,39 @@
-import type { AppEvent, FileInfo } from "@/lib/types";
+import { useMemo, useRef, useState } from "react";
+import type { AppEvent, FileChangeEvent } from "@/lib/types";
+import { timelineEventIdentity } from "@/lib/timeline-events";
+import { formatTime } from "@/utils/format";
+import DesktopDiffView from "./DesktopDiffView";
+import { precedingUserRequest } from "./explain-context";
 import { workspaceRelativePath } from "./workspace-path";
+import { desktopFileEntries, type DesktopFileEntry } from "./file-tree-events";
 
-interface FileEntry {
-  path: string;
-  action: FileInfo["action"];
-  count: number;
-}
+type FileEntry = DesktopFileEntry;
 
 interface TreeNode {
   [name: string]: TreeNode | FileEntry;
 }
 
 function isFileEntry(value: TreeNode | FileEntry): value is FileEntry {
-  return "action" in value && "count" in value && "path" in value;
+  return "action" in value && "changes" in value && "path" in value;
 }
 
-function TreeView({ node, depth = 0 }: { node: TreeNode; depth?: number }) {
+function pathsMatch(left: string, right: string, sessionCwd: string): boolean {
+  const leftPath = workspaceRelativePath(left, sessionCwd).replace(/^\/+/, "");
+  const rightPath = workspaceRelativePath(right, sessionCwd).replace(/^\/+/, "");
+  return leftPath === rightPath || leftPath.endsWith(`/${rightPath}`) || rightPath.endsWith(`/${leftPath}`);
+}
+
+function TreeView({
+  node,
+  onJump,
+  onShowHistory,
+  depth = 0,
+}: {
+  node: TreeNode;
+  onJump: (file: FileEntry) => void;
+  onShowHistory: (file: FileEntry) => void;
+  depth?: number;
+}) {
   const entries = Object.entries(node).sort(([leftName, left], [rightName, right]) => {
     const leftIsDirectory = !isFileEntry(left);
     const rightIsDirectory = !isFileEntry(right);
@@ -27,10 +45,28 @@ function TreeView({ node, depth = 0 }: { node: TreeNode; depth?: number }) {
     const paddingLeft = 14 + depth * 14;
     if (isFileEntry(value)) {
       return (
-        <div className="file-tree-file" key={value.path} title={value.path} style={{ paddingLeft }}>
+        <div
+          className="file-tree-file desktop-file-tree-file"
+          key={value.displayPath}
+          title={`Jump to ${value.displayPath}`}
+          style={{ paddingLeft }}
+          onClick={() => onJump(value)}
+        >
           <span className={`file-action-dot dot-${value.action}`} />
           <span className="file-tree-filename">{name}</span>
-          <span className="file-count">{value.count}</span>
+          <span className="file-count">{value.changes.length}</span>
+          <button
+            type="button"
+            className="desktop-file-history-btn"
+            title="View all patches for this file"
+            aria-label={`View all patches for ${value.displayPath}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              onShowHistory(value);
+            }}
+          >
+            &#9776;
+          </button>
         </div>
       );
     }
@@ -39,41 +75,82 @@ function TreeView({ node, depth = 0 }: { node: TreeNode; depth?: number }) {
         <div className="file-tree-dir" style={{ paddingLeft }}>
           <span className="dir-icon">/</span>{name}
         </div>
-        <TreeView node={value} depth={depth + 1} />
+        <TreeView node={value} onJump={onJump} onShowHistory={onShowHistory} depth={depth + 1} />
       </div>
     );
   });
 }
 
-export default function DesktopFileTree({ events, sessionCwd }: { events: AppEvent[]; sessionCwd: string }) {
-  const files = new Map<string, FileEntry>();
-  for (const event of events) {
-    if (event.kind !== "file_change") continue;
-    for (const file of event.files) {
-      const displayPath = workspaceRelativePath(file.path, sessionCwd).replace(/^\/+/, "");
-      const existing = files.get(displayPath);
-      files.set(displayPath, {
-        path: file.path,
-        action: file.action,
-        count: (existing?.count || 0) + 1,
-      });
+export default function DesktopFileTree({
+  events,
+  sessionCwd,
+  onJumpToPatch,
+}: {
+  events: AppEvent[];
+  sessionCwd: string;
+  onJumpToPatch: (event: FileChangeEvent) => void;
+}) {
+  const [historyFile, setHistoryFile] = useState<FileEntry | null>(null);
+  const jumpIndexes = useRef(new Map<string, number>());
+  const files = useMemo(() => desktopFileEntries(events, sessionCwd), [events, sessionCwd]);
+
+  const tree = useMemo(() => {
+    const output: TreeNode = {};
+    for (const [displayPath, file] of files) {
+      const parts = displayPath.split("/").filter(Boolean);
+      let node = output;
+      for (const directory of parts.slice(0, -1)) {
+        if (!node[directory] || isFileEntry(node[directory])) node[directory] = {};
+        node = node[directory] as TreeNode;
+      }
+      node[parts.at(-1) || displayPath] = file;
     }
+    return output;
+  }, [files]);
+
+  function jumpToNextPatch(file: FileEntry) {
+    const index = jumpIndexes.current.get(file.displayPath) || 0;
+    const change = [...file.changes].reverse()[index % file.changes.length];
+    jumpIndexes.current.set(file.displayPath, index + 1);
+    onJumpToPatch(change);
   }
 
-  const tree: TreeNode = {};
-  for (const [displayPath, file] of files) {
-    const parts = displayPath.split("/").filter(Boolean);
-    let node = tree;
-    for (const directory of parts.slice(0, -1)) {
-      if (!node[directory] || isFileEntry(node[directory])) node[directory] = {};
-      node = node[directory] as TreeNode;
-    }
-    node[parts.at(-1) || displayPath] = file;
+  if (historyFile) {
+    return (
+      <div className="desktop-file-history">
+        <div className="desktop-file-history-header">
+          <button type="button" onClick={() => setHistoryFile(null)} title="Back to changed files">&larr;</button>
+          <span title={historyFile.displayPath}>{historyFile.displayPath.split("/").pop()}</span>
+        </div>
+        <div className="desktop-file-history-path">{historyFile.displayPath}</div>
+        {historyFile.changes.map((change) => {
+          const info = change.files.find((file) => pathsMatch(file.path, historyFile.path, sessionCwd));
+          return (
+            <div className="desktop-file-history-entry" key={timelineEventIdentity(change)}>
+              <button
+                type="button"
+                className="desktop-file-history-entry-header"
+                onClick={() => onJumpToPatch(change)}
+                title="Jump to this patch in the timeline"
+              >
+                <span className={`diff-file-action action-${info?.action || "update"}`}>{info?.action || "update"}</span>
+                <span>{formatTime(change.ts)}</span>
+              </button>
+              <DesktopDiffView
+                patch={change.patch}
+                contextText={precedingUserRequest(events, change.ts)}
+                workspaceRoot={sessionCwd}
+              />
+            </div>
+          );
+        })}
+      </div>
+    );
   }
 
   return (
     <div className="file-tree">
-      <TreeView node={tree} />
+      <TreeView node={tree} onJump={jumpToNextPatch} onShowHistory={setHistoryFile} />
       {files.size === 0 && <div className="desktop-empty-files">No changed files recorded.</div>}
     </div>
   );
