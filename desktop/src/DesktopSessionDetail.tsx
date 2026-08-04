@@ -205,16 +205,17 @@ export default function DesktopSessionDetail({
   const cwd = meta?.kind === "session_start" ? meta.cwd : session.cwd;
   const id = meta?.kind === "session_start" ? meta.id : session.id;
   const timestamp = meta?.kind === "session_start" ? meta.ts : session.timestamp;
-  const currentTerminal = terminalSession(session, session.id, session.cwd);
-  const visibleTerminal = terminals.find((terminal) => terminal.key === currentTerminal.key) || null;
+  const currentSessionKey = terminalSessionKey(session, session.id);
+  const visibleTerminals = terminals.filter((terminal) => terminal.sessionKey === currentSessionKey);
+  const visibleTerminal = visibleTerminals[0] || null;
   // Terminal identity must come from the selected list record, not parsed
   // timeline metadata which briefly belongs to the prior selection on switch.
   useEffect(() => {
     function openTerminal(event: Event) {
       const requested = (event as CustomEvent<SessionMeta>).detail;
       if (!requested) return;
-      const terminal = terminalSession(requested, requested.id, requested.cwd);
-      setTerminals((current) => current.some((item) => item.key === terminal.key)
+      const terminal = firstTerminalSession(requested, requested.id, requested.cwd);
+      setTerminals((current) => current.some((item) => item.sessionKey === terminal.sessionKey)
         ? current
         : [...current, terminal]);
     }
@@ -225,11 +226,23 @@ export default function DesktopSessionDetail({
   function closeActiveTerminal() {
     if (!visibleTerminal) return;
     setTerminals((current) => {
-      const next = current.filter((terminal) => terminal.key !== visibleTerminal.key);
+      const next = current.filter((terminal) => terminal.sessionKey !== currentSessionKey);
       if (!next.length) onTerminalClose();
       if (!next.length) setTerminalPlacement("bottom");
       return next;
     });
+  }
+
+  function addTerminalPane() {
+    if (!visibleTerminal) return;
+    setTerminals((current) => [
+      ...current,
+      {
+        ...visibleTerminal,
+        key: `${currentSessionKey}:pane-${crypto.randomUUID()}`,
+        prefillResume: false,
+      },
+    ]);
   }
 
   function jumpToPatch(event: FileChangeEvent) {
@@ -405,23 +418,37 @@ export default function DesktopSessionDetail({
               <TerminalGlyph />
             </button>
             <button
+              className="desktop-terminal-add"
+              onClick={addTerminalPane}
+              title="Add terminal pane"
+              aria-label="Add terminal pane"
+            >
+              +
+            </button>
+            <button
               className="desktop-terminal-close"
               onClick={closeActiveTerminal}
-              title="Close active terminal"
-              aria-label="Close terminal"
+              title="Close this session's terminals"
+              aria-label="Close this session's terminals"
             >
               ×
             </button>
           </div>
-          {terminals.map((terminal) => (
-            <DesktopTerminal
-              active={terminal.key === visibleTerminal?.key}
-              key={terminal.key}
-              sessionCwd={terminal.cwd}
-              sessionId={terminal.id}
-              sessionSource={terminal.source}
-              panelHeight={snapped ? -1 : terminalHeight}
-            />
+          {groupTerminalPanes(terminals).map(([sessionKey, panes]) => (
+            <div className={`desktop-terminal-pane-grid${sessionKey === currentSessionKey ? " active" : ""}`} key={sessionKey}>
+              {panes.map((terminal) => (
+                <DesktopTerminal
+                  active={sessionKey === currentSessionKey}
+                  key={terminal.key}
+                  sessionCwd={terminal.cwd}
+                  sessionId={terminal.id}
+                  sessionSource={terminal.source}
+                  panelHeight={snapped ? -1 : terminalHeight}
+                  prefillResume={terminal.prefillResume}
+                  paneCount={panes.length}
+                />
+              ))}
+            </div>
           ))}
       </section>
     );
@@ -430,13 +457,28 @@ export default function DesktopSessionDetail({
 
 interface TerminalSession {
   key: string;
+  sessionKey: string;
   cwd: string;
   id: string;
   source: "codex" | "claude-code";
+  prefillResume: boolean;
 }
 
-function terminalSession(session: SessionMeta, id: string, cwd: string): TerminalSession {
-  return { key: `${session.source}:${id}`, cwd, id, source: session.source };
+function terminalSessionKey(session: SessionMeta, id: string): string {
+  return `${session.source}:${id}`;
+}
+
+function firstTerminalSession(session: SessionMeta, id: string, cwd: string): TerminalSession {
+  const sessionKey = terminalSessionKey(session, id);
+  return { key: sessionKey, sessionKey, cwd, id, source: session.source, prefillResume: true };
+}
+
+function groupTerminalPanes(terminals: TerminalSession[]): [string, TerminalSession[]][] {
+  const groups = new Map<string, TerminalSession[]>();
+  for (const terminal of terminals) {
+    groups.set(terminal.sessionKey, [...(groups.get(terminal.sessionKey) || []), terminal]);
+  }
+  return [...groups.entries()];
 }
 
 function TerminalGlyph() {

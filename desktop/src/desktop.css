@@ -1392,6 +1392,18 @@ body.terminal-over-sessions #sidebar {
 
 .desktop-terminal-panel-tab:active { cursor: grabbing; }
 
+.desktop-terminal-add {
+  width: 28px;
+  border: 0;
+  border-right: 1px solid #2d2d2d;
+  background: transparent;
+  color: #b5b5b5;
+  cursor: pointer;
+  font: 20px/1 var(--font-mono);
+}
+
+.desktop-terminal-add:hover { background: #252526; color: #ffffff; }
+
 .desktop-terminal-panel-tab svg {
   width: 16px;
   height: 16px;
@@ -1421,6 +1433,20 @@ body.terminal-over-sessions #sidebar {
   color: #ffffff;
 }
 
+.desktop-terminal-pane-grid {
+  position: absolute;
+  top: 28px;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: none;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  overflow: hidden;
+  background: #181818;
+}
+
+.desktop-terminal-pane-grid.active { display: grid; }
+
 .desktop-terminal-surface,
 .desktop-terminal-container {
   min-height: 0;
@@ -1428,22 +1454,14 @@ body.terminal-over-sessions #sidebar {
 }
 
 .desktop-terminal-surface {
-  position: absolute;
-  top: 28px;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  visibility: hidden;
+  position: relative;
   display: flex;
   overflow: hidden;
   background: #181818;
-  pointer-events: none;
+  border-right: 1px solid #2d2d2d;
 }
 
-.desktop-terminal-surface.active {
-  visibility: visible;
-  pointer-events: auto;
-}
+.desktop-terminal-surface:last-child { border-right: 0; }
 
 body.terminal-dragging,
 body.terminal-dragging * { cursor: grabbing !important; }
