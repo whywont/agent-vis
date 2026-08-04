@@ -297,6 +297,7 @@ function eventIdentity(event: AppEvent) {
   if (event.kind === "shell_command") return `${event.kind}:${event.callId || event.ts}:${event.cmd}`;
   if (event.kind === "tool_output") return `${event.kind}:${event.callId || event.ts}:${event.output}`;
   if (event.kind === "token_usage") return `${event.kind}:${event.ts}:${event.total_tokens}`;
+  if (event.kind === "context_compaction") return `${event.kind}:${event.ts}`;
   return `${event.kind}:${event.ts}:${event.text}`;
 }
 

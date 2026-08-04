@@ -856,6 +856,7 @@ body {
 .timeline-entry.file-delete { border-left-color: var(--red); }
 .timeline-entry.shell-cmd { border-left-color: var(--orange); }
 .timeline-entry.reasoning { border-left-color: var(--text-dim); }
+.timeline-entry.context-compaction { border-left-color: var(--purple); }
 
 .entry-header {
   display: flex;
@@ -886,6 +887,7 @@ body {
 .badge-delete { color: var(--red); }
 .badge-shell { color: var(--orange); }
 .badge-reasoning { color: var(--text-dim); }
+.badge-context-compaction { color: var(--purple); }
 .badge-db { color: #5ec4c4; }
 
 .entry-time {

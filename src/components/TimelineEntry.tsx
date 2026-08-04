@@ -34,6 +34,7 @@ function kindToClass(kind: string, isDb?: boolean, fileAction?: string): string 
       agent_message: "agent-msg",
       shell_command: "shell-cmd",
       reasoning: "reasoning",
+      context_compaction: "context-compaction",
       tool_output: "shell-cmd",
     } as Record<string, string>)[kind] || ""
   );
@@ -52,6 +53,7 @@ function kindToBadge(kind: string, isDb?: boolean, fileAction?: string): string 
       agent_message: "badge-agent",
       shell_command: "badge-shell",
       reasoning: "badge-reasoning",
+      context_compaction: "badge-context-compaction",
       tool_output: "badge-shell",
     } as Record<string, string>)[kind] || ""
   );
@@ -70,6 +72,7 @@ function kindToLabel(kind: string, isDb?: boolean, fileAction?: string): string 
       agent_message: "agent",
       shell_command: "shell",
       reasoning: "think",
+      context_compaction: "context",
       tool_output: "out",
     } as Record<string, string>)[kind] || kind
   );
@@ -84,6 +87,7 @@ function getSummary(evt: AppEvent, dbQuery?: DbQuery): string {
   if (evt.kind === "user_message") return truncate(evt.text, 120);
   if (evt.kind === "agent_message") return truncate(evt.text, 120);
   if (evt.kind === "reasoning") return truncate(evt.text, 120);
+  if (evt.kind === "context_compaction") return "Context compacted - agent is resuming with a handoff summary";
   if (evt.kind === "file_change")
     return evt.files.map((f) => `${f.action}: ${f.path}`).join(", ") || "patch";
   if (evt.kind === "shell_command") return truncate(evt.cmd, 120);
@@ -209,7 +213,7 @@ function EntryBody({
     );
   }
   const text =
-    evt.kind === "user_message" || evt.kind === "agent_message" || evt.kind === "reasoning"
+    evt.kind === "user_message" || evt.kind === "agent_message" || evt.kind === "reasoning" || evt.kind === "context_compaction"
       ? evt.text || ""
       : "";
   const images = evt.kind === "user_message" ? evt.images || [] : [];
@@ -278,7 +282,9 @@ export default function TimelineEntry({
 
   const isDb = !!dbQuery;
   const fileAction = event.kind === "file_change" ? event.files[0]?.action : undefined;
-  const visible = activeFilters.has(event.kind);
+  // Compaction is a system-status transition, not a regular message category.
+  // Keep it visible so a paused phone session always explains itself.
+  const visible = event.kind === "context_compaction" || activeFilters.has(event.kind);
   const entryClass = kindToClass(event.kind, isDb, fileAction);
   const badgeClass = kindToBadge(event.kind, isDb, fileAction);
   const badgeLabel = kindToLabel(event.kind, isDb, fileAction);

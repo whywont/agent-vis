@@ -44,4 +44,24 @@ describe("SessionRecordParser", () => {
       "agent_message",
     ]);
   });
+
+  it("keeps a Codex context compaction handoff in the desktop timeline", () => {
+    const events = parseSessionRecords([{
+      ...records,
+      lines: [
+        ...records.lines,
+        JSON.stringify({
+          type: "compacted",
+          timestamp: "2026-08-04T20:08:22Z",
+          payload: { message: "Continue from the latest phone message." },
+        }),
+      ],
+    }]);
+
+    expect(events).toContainEqual({
+      kind: "context_compaction",
+      ts: "2026-08-04T20:08:22Z",
+      text: "Continue from the latest phone message.",
+    });
+  });
 });

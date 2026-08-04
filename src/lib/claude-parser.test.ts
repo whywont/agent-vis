@@ -203,7 +203,7 @@ describe("parseClaudeEvent — assistant text message", () => {
   });
 });
 
-describe("parseClaudeEvent — assistant thinking block", () => {
+describe("parseClaudeEvent - assistant thinking block", () => {
   it("produces reasoning event", () => {
     const obj = {
       timestamp: TS,
@@ -218,6 +218,22 @@ describe("parseClaudeEvent — assistant thinking block", () => {
       kind: "reasoning",
       text: "I need to consider...",
     });
+  });
+});
+
+describe("parseClaudeEvent - context compaction", () => {
+  it("surfaces Claude's away summary as a context compaction event", () => {
+    const events = parseClaudeEvent({
+      timestamp: TS,
+      type: "system",
+      subtype: "away_summary",
+      content: "The session is ready to continue from the test results.",
+    }, makeAccum());
+    expect(events).toEqual([{
+      kind: "context_compaction",
+      ts: TS,
+      text: "The session is ready to continue from the test results.",
+    }]);
   });
 });
 

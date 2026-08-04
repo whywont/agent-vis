@@ -16,7 +16,11 @@ export function visibleTimelineEvents(
   showTokenUsage: boolean,
 ): TimelineEvent[] {
   return events.filter((event) => (
-    event.kind === "token_usage" ? showTokenUsage : activeFilters.has(event.kind)
+    event.kind === "token_usage"
+      ? showTokenUsage
+      // Context compaction explains a pause in a live session, so it is a
+      // system status rather than another filterable transcript category.
+      : event.kind === "context_compaction" || activeFilters.has(event.kind)
   ));
 }
 

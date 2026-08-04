@@ -342,6 +342,10 @@ app.prepare().then(() => {
     });
 
     ws.on("close", () => {
+      // Mobile turns are detached from Safari. iOS is free to suspend or close
+      // its WebSocket when the user changes apps; the one-shot Codex process
+      // must continue on the Mac and write its reply to the session JSONL.
+      if (chatMode) return;
       try {
         ptyProc?.kill();
       } catch {}

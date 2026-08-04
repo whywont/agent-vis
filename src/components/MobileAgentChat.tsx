@@ -70,7 +70,7 @@ export default function MobileAgentChat({
           {state === "connecting"
             ? "Connecting to your Mac..."
             : state === "working"
-              ? "Agent is working..."
+              ? "Agent is working. You can leave this app; the reply will appear in the timeline."
               : state === "error"
                 ? error || "The agent could not complete that message."
                 : "Connection closed. Reopen this session to reconnect."}

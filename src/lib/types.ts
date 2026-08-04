@@ -45,6 +45,12 @@ export interface ReasoningEvent {
   text: string;
 }
 
+export interface ContextCompactionEvent {
+  kind: "context_compaction";
+  ts: string;
+  text: string;
+}
+
 export interface FileChangeEvent {
   kind: "file_change";
   ts: string;
@@ -89,6 +95,7 @@ export type AppEvent =
   | UserMessageEvent
   | AgentMessageEvent
   | ReasoningEvent
+  | ContextCompactionEvent
   | FileChangeEvent
   | ShellCommandEvent
   | ToolOutputEvent

@@ -94,6 +94,22 @@ export function parseEvent(obj: Record<string, unknown>): AppEvent | null {
   const type = obj.type as string;
   const payload = obj.payload as Record<string, unknown>;
 
+  // Codex writes the handoff summary as a top-level event immediately before
+  // its lightweight context_compacted marker. Keep the useful summary and
+  // suppress the duplicate marker below.
+  if (type === "compacted") {
+    const text = typeof payload?.message === "string"
+      ? payload.message.trim()
+      : typeof obj.message === "string"
+        ? obj.message.trim()
+        : "";
+    return {
+      kind: "context_compaction",
+      ts,
+      text: text || "Codex compacted the conversation context.",
+    };
+  }
+
   if (type === "session_meta") {
     const p = payload as Record<string, string>;
     return {
@@ -138,6 +154,7 @@ export function parseEvent(obj: Record<string, unknown>): AppEvent | null {
     if (p.type === "agent_reasoning") {
       return { kind: "reasoning", ts, text: p.text as string };
     }
+    if (p.type === "context_compacted") return null;
     if (p.type === "token_count") {
       const info = (p.info as Record<string, unknown>) || {};
       const total = (info.total_token_usage as Record<string, number>) || {};
