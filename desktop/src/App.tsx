@@ -10,6 +10,11 @@ import { startWindowDrag } from "./window-drag";
 
 const SESSION_POLL_INTERVAL_MS = 5000;
 
+export interface SessionMatchTarget {
+  eventTs: string;
+  eventKind: string;
+}
+
 export default function App() {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [selected, setSelected] = useState<SessionMeta | null>(null);
@@ -18,6 +23,7 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [sessionSidebarOpen, setSessionSidebarOpen] = useState(true);
   const [activeTab, setActiveTab] = useState<"session" | "files">("session");
+  const [matchTarget, setMatchTarget] = useState<SessionMatchTarget | null>(null);
   const sidebarRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -84,7 +90,10 @@ export default function App() {
       <DesktopMacTitlebar
         session={showSettings ? null : selected}
         activeTab={activeTab}
-        onActiveTabChange={setActiveTab}
+        onActiveTabChange={(tab) => {
+          if (tab === "files") setMatchTarget(null);
+          setActiveTab(tab);
+        }}
       />
       <div className="desktop-app-body">
         <nav id="sidebar" ref={sidebarRef} className={sessionSidebarOpen ? "" : "desktop-sidebar-collapsed"}>
@@ -96,11 +105,12 @@ export default function App() {
                 loading={loading}
                 error={error}
                 settingsActive={showSettings}
-                onOpenSettings={() => { setShowSettings(true); setSelected(null); }}
+                onOpenSettings={() => { setShowSettings(true); setMatchTarget(null); setSelected(null); }}
                 onHideSessions={() => setSessionSidebarOpen(false)}
-                onSelectSession={(files) => {
+                onSelectSession={(files, target) => {
                   setShowSettings(false);
                   setActiveTab("session");
+                  setMatchTarget(target);
                   setSelected(sessions.find((session) => (session.files?.join(",") || session.file) === files) || null);
                 }}
               />
@@ -135,7 +145,11 @@ export default function App() {
               key={selectedFiles}
               session={selected}
               activeTab={activeTab}
-              onActiveTabChange={setActiveTab}
+              onActiveTabChange={(tab) => {
+                if (tab === "files") setMatchTarget(null);
+                setActiveTab(tab);
+              }}
+              matchTarget={matchTarget}
             />
           )}
         </main>

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import type { AppEvent, SessionMeta } from "@/lib/types";
+import type { SessionMatchTarget } from "./App";
 import { formatTime } from "@/utils/format";
 import DesktopFileTree from "./DesktopFileTree";
 import DesktopFilesCanvas from "./DesktopFilesCanvas";
@@ -12,10 +13,12 @@ export default function DesktopSessionDetail({
   session,
   activeTab,
   onActiveTabChange,
+  matchTarget,
 }: {
   session: SessionMeta;
   activeTab: "session" | "files";
   onActiveTabChange: (tab: "session" | "files") => void;
+  matchTarget: SessionMatchTarget | null;
 }) {
   const [events, setEvents] = useState<AppEvent[]>([]);
   const [loading, setLoading] = useState(true);
@@ -192,6 +195,7 @@ export default function DesktopSessionDetail({
             events={events}
             sessionCwd={cwd}
             sessionKey={`${session.source}:${session.id}`}
+            matchTarget={matchTarget}
           />
         </div>
       )}

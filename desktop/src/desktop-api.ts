@@ -51,8 +51,33 @@ interface WorkspaceFile {
   content: string;
 }
 
+export interface SessionSearchResult {
+  sessionKey: string;
+  eventTs: string;
+  eventKind: string;
+  snippet: string;
+  highlights: string[];
+  matchKind: "keyword" | "concept";
+  score: number;
+}
+
+export interface SessionSearchResponse {
+  results: SessionSearchResult[];
+  indexing: boolean;
+  indexedFiles: number;
+  totalFiles: number;
+  semanticReady: boolean;
+  semanticIndexing: boolean;
+  semanticError?: string | null;
+  error?: string | null;
+}
+
 export function listSessions(): Promise<SessionMeta[]> {
   return invoke<SessionMeta[]>("list_sessions");
+}
+
+export function searchSessions(query: string): Promise<SessionSearchResponse> {
+  return invoke<SessionSearchResponse>("search_sessions", { query });
 }
 
 export function getGitBranch(workspaceRoot: string): Promise<string | null> {

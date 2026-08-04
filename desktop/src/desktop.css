@@ -696,6 +696,54 @@
   min-height: 0;
 }
 
+.desktop-search-status {
+  margin: 0 0 6px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-dim);
+  font: 10px var(--font-mono);
+}
+
+.desktop-search-status.error { color: var(--red); }
+
+.desktop-search-kind {
+  display: inline-block;
+  margin: 3px 5px 0 0;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--bg-card);
+  color: var(--text-dim);
+  font: 9px var(--font-mono);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.desktop-search-kind.kind-user_message { color: var(--blue); }
+.desktop-search-kind.kind-agent_message { color: var(--green); }
+.desktop-search-kind.kind-file_change { color: var(--accent); }
+.desktop-search-kind.match-concept { color: #5ec4c4; }
+
+.desktop-search-snippet {
+  display: block;
+  margin-top: 4px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font: 11px/1.4 var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.desktop-search-snippet mark {
+  border-radius: 2px;
+  background: rgba(201, 165, 90, 0.2);
+  color: var(--text);
+}
+
+.desktop-search-match {
+  box-shadow: inset 0 0 0 1px var(--accent-dim), 0 0 16px rgba(201, 165, 90, 0.12);
+}
+
 .session-controls {
   height: 39px;
   border-bottom: 0;
