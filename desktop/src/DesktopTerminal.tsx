@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import "@xterm/xterm/css/xterm.css";
 import { resizeTerminal, startTerminal, stopTerminal, writeTerminal } from "./desktop-api";
@@ -11,11 +11,15 @@ interface TerminalOutput {
 export default function DesktopTerminal({
   sessionCwd,
   sessionId,
+  sessionSource,
   panelHeight,
+  active,
 }: {
   sessionCwd: string;
   sessionId: string;
+  sessionSource: "codex" | "claude-code";
   panelHeight: number;
+  active: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<import("@xterm/xterm").Terminal | null>(null);
@@ -31,6 +35,7 @@ export default function DesktopTerminal({
     let fitAddon: import("@xterm/addon-fit").FitAddon | undefined;
     let lastSize = "";
     let started = false;
+    let draftTimer: number | undefined;
 
     function fitToContainer() {
       if (!terminal || !fitAddon) return;
@@ -101,6 +106,18 @@ export default function DesktopTerminal({
       started = true;
       lastSize = "";
       fitToContainer();
+      // zsh emits its first prompt after startup. Send the draft to its line
+      // editor without a newline, so it remains editable and Enter executes it.
+      draftTimer = window.setTimeout(() => {
+        if (!disposed) {
+          void writeTerminal(
+            terminalId,
+            sessionSource === "codex"
+              ? `codex resume ${sessionId}`
+              : `claude --resume ${sessionId}`,
+          );
+        }
+      }, 300);
       if (disposed) {
         await stopTerminal(terminalId);
       }
@@ -111,24 +128,45 @@ export default function DesktopTerminal({
     });
     return () => {
       disposed = true;
+      if (draftTimer !== undefined) window.clearTimeout(draftTimer);
       unlisten?.();
       terminal?.dispose();
       terminalRef.current = null;
       fitAddonRef.current = null;
       void stopTerminal(terminalId);
     };
-  }, [sessionCwd]);
+  }, [sessionCwd, sessionId, sessionSource]);
 
-  useEffect(() => {
-    const frame = requestAnimationFrame(() => {
+  useLayoutEffect(() => {
+    if (!active) return;
+    const timers: number[] = [];
+    function refit(): boolean {
       const terminal = terminalRef.current;
       const fitAddon = fitAddonRef.current;
-      if (!terminal || !fitAddon) return;
+      const container = containerRef.current;
+      if (!terminal || !fitAddon || !container) return false;
+      // xterm caches its canvas size. Never fit against the hidden/zero-width
+      // layout it had while another session terminal was visible.
+      if (container.getBoundingClientRect().width < 100) return false;
       fitAddon.fit();
+      terminal.refresh(0, terminal.rows - 1);
+      terminal.focus();
       void resizeTerminal(terminalIdRef.current, terminal.cols, terminal.rows);
+      return true;
+    }
+    // Session-owned canvases can reactivate after the dock's portal and width
+    // have both settled. A few bounded retries avoid a resize-observer loop.
+    const firstFrame = requestAnimationFrame(() => {
+      if (refit()) return;
+      [40, 140, 320].forEach((delay) => {
+        timers.push(window.setTimeout(() => { refit(); }, delay));
+      });
     });
-    return () => cancelAnimationFrame(frame);
-  }, [panelHeight]);
+    return () => {
+      cancelAnimationFrame(firstFrame);
+      timers.forEach((timer) => window.clearTimeout(timer));
+    };
+  }, [active, panelHeight]);
 
   function scrollTerminal(event: React.WheelEvent<HTMLDivElement>) {
     const terminal = terminalRef.current;
@@ -138,7 +176,11 @@ export default function DesktopTerminal({
   }
 
   return (
-    <div className="desktop-terminal-surface" aria-label={`Terminal for ${sessionId}`} onWheel={scrollTerminal}>
+    <div
+      className={`desktop-terminal-surface${active ? " active" : ""}`}
+      aria-label={`Terminal for ${sessionId}`}
+      onWheel={scrollTerminal}
+    >
       {error ? (
         <div className="desktop-terminal-error">{error}</div>
       ) : (

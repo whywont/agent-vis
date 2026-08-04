@@ -3,6 +3,7 @@
 }
 
 .desktop-app-body {
+  position: relative;
   display: flex;
   flex: 1;
   gap: 6px;
@@ -10,6 +11,19 @@
   min-height: 0;
   padding: 2px 6px 6px;
   background: #0b0b0b;
+}
+
+/* A terminal dropped on Sessions shares the left two columns with Sessions
+   and Changed Files. The Timeline stays an independent full-height column. */
+#app:has(.desktop-terminal-sessions) .desktop-app-body > #sidebar,
+#app:has(.desktop-terminal-sessions) .file-tree-panel,
+#app:has(.desktop-terminal-sessions) .file-tree-resize-handle {
+  margin-bottom: calc(var(--terminal-sessions-height) + 6px);
+}
+
+body.terminal-over-sessions #sidebar {
+  outline: 1px dashed var(--accent);
+  outline-offset: -4px;
 }
 
 .desktop-app-body > #sidebar,
@@ -1268,6 +1282,7 @@
    third navigation destination. */
 .desktop-terminal-panel {
   display: flex;
+  position: relative;
   min-height: 140px;
   flex-direction: column;
   margin-top: 6px;
@@ -1277,7 +1292,16 @@
   background: #181818;
 }
 
+.desktop-terminal-sessions {
+  position: absolute;
+  min-height: 0;
+  margin: 0;
+  border-radius: 8px;
+}
+
 .desktop-terminal-panel-header {
+  position: relative;
+  z-index: 1;
   display: flex;
   height: 28px;
   flex-shrink: 0;
@@ -1294,7 +1318,21 @@
   border-right: 1px solid #2d2d2d;
   background: #252526;
   color: #d4d4d4;
+  cursor: grab;
 }
+
+.desktop-terminal-panel-tab:not(.active) {
+  border-right-color: #252526;
+  background: #181818;
+  color: #777777;
+}
+
+.desktop-terminal-panel-tab.active {
+  border-top: 1px solid var(--accent);
+  background: #252526;
+}
+
+.desktop-terminal-panel-tab:active { cursor: grabbing; }
 
 .desktop-terminal-panel-tab svg {
   width: 16px;
@@ -1332,10 +1370,25 @@
 }
 
 .desktop-terminal-surface {
+  position: absolute;
+  top: 28px;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  visibility: hidden;
   display: flex;
   overflow: hidden;
   background: #181818;
+  pointer-events: none;
 }
+
+.desktop-terminal-surface.active {
+  visibility: visible;
+  pointer-events: auto;
+}
+
+body.terminal-dragging,
+body.terminal-dragging * { cursor: grabbing !important; }
 
 .desktop-terminal-container {
   position: relative;

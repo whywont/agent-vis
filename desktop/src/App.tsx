@@ -101,7 +101,10 @@ export default function App() {
           if (tab === "files") setMatchTarget(null);
           setActiveTab(tab);
         }}
-        onTerminalToggle={() => setTerminalOpen((open) => !open)}
+        onTerminalOpen={() => {
+          setTerminalOpen(true);
+          if (selected) window.dispatchEvent(new CustomEvent("open-session-terminal", { detail: selected }));
+        }}
       />
       <div className="desktop-app-body">
         <nav id="sidebar" ref={sidebarRef} className={sessionSidebarOpen ? "" : "desktop-sidebar-collapsed"}>
@@ -119,7 +122,6 @@ export default function App() {
                 onSelectSession={(files, target) => {
                   setShowSettings(false);
                   setActiveTab("session");
-                  setTerminalOpen(false);
                   setMatchTarget(target);
                   setSelected(sessions.find((session) => (session.files?.join(",") || session.file) === files) || null);
                 }}
@@ -166,7 +168,6 @@ export default function App() {
             </div>
           ) : (
             <DesktopSessionDetail
-              key={selectedFiles}
               session={selected}
               sessionName={sessionAlias(sessionAliases, selected)}
               activeTab={activeTab}
@@ -175,7 +176,11 @@ export default function App() {
                 if (tab === "files") setMatchTarget(null);
                 setActiveTab(tab);
               }}
-              onTerminalToggle={() => setTerminalOpen((open) => !open)}
+              onTerminalOpen={() => {
+                setTerminalOpen(true);
+                if (selected) window.dispatchEvent(new CustomEvent("open-session-terminal", { detail: selected }));
+              }}
+              onTerminalClose={() => setTerminalOpen(false)}
               matchTarget={matchTarget}
             />
           )}
@@ -191,14 +196,14 @@ function DesktopMacTitlebar({
   activeTab,
   terminalOpen,
   onActiveTabChange,
-  onTerminalToggle,
+  onTerminalOpen,
 }: {
   session: SessionMeta | null;
   sessionName: string | null;
   activeTab: "session" | "files";
   terminalOpen: boolean;
   onActiveTabChange: (tab: "session" | "files") => void;
-  onTerminalToggle: () => void;
+  onTerminalOpen: () => void;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -250,8 +255,8 @@ function DesktopMacTitlebar({
           </button>
           <button
             className={`desktop-terminal-toggle${terminalOpen ? " active" : ""}`}
-            onClick={onTerminalToggle}
-            title={terminalOpen ? "Hide terminal" : "Open terminal"}
+            onClick={onTerminalOpen}
+            title="Open terminal for this session"
             aria-pressed={terminalOpen}
           >
             <TerminalGlyph />
