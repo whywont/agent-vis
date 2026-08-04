@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
+import { createPortal } from "react-dom";
 import type { AppEvent, FileChangeEvent, SessionMeta } from "@/lib/types";
 import { timelineEventIdentity } from "@/lib/timeline-events";
 import type { SessionMatchTarget } from "./App";
@@ -7,6 +8,7 @@ import { formatTime } from "@/utils/format";
 import DesktopFileTree from "./DesktopFileTree";
 import DesktopFilesCanvas from "./DesktopFilesCanvas";
 import DesktopTimeline from "./DesktopTimeline";
+import DesktopTerminal from "./DesktopTerminal";
 import { getGitBranch, readSession } from "./desktop-api";
 import { startWindowDrag } from "./window-drag";
 
@@ -14,13 +16,19 @@ export default function DesktopSessionDetail({
   session,
   sessionName,
   activeTab,
+  terminalOpen,
   onActiveTabChange,
+  onTerminalOpen,
+  onTerminalClose,
   matchTarget,
 }: {
   session: SessionMeta;
   sessionName: string | null;
   activeTab: "session" | "files";
+  terminalOpen: boolean;
   onActiveTabChange: (tab: "session" | "files") => void;
+  onTerminalOpen: () => void;
+  onTerminalClose: () => void;
   matchTarget: SessionMatchTarget | null;
 }) {
   const [events, setEvents] = useState<AppEvent[]>([]);
@@ -29,6 +37,11 @@ export default function DesktopSessionDetail({
   const [loadedBatches, setLoadedBatches] = useState(0);
   const [branch, setBranch] = useState<string | null>(null);
   const [filePanelOpen, setFilePanelOpen] = useState(true);
+  const [terminalHeight, setTerminalHeight] = useState(224);
+  const [terminalPlacement, setTerminalPlacement] = useState<"bottom" | "sessions">("bottom");
+  const [terminalDragging, setTerminalDragging] = useState(false);
+  const [sessionsDockBounds, setSessionsDockBounds] = useState<CSSProperties | null>(null);
+  const [terminals, setTerminals] = useState<TerminalSession[]>([]);
   const [fileTimelineSelection, setFileTimelineSelection] = useState<{
     baseTarget: SessionMatchTarget | null;
     target: SessionMatchTarget;
@@ -95,10 +108,129 @@ export default function DesktopSessionDetail({
     };
   }, [activeTab, error, filePanelOpen, loading]);
 
+  useLayoutEffect(() => {
+    if (terminalPlacement !== "sessions") return;
+    const app = document.getElementById("app");
+    const body = document.querySelector<HTMLElement>(".desktop-app-body");
+    const sidebar = document.getElementById("sidebar");
+    const filesPanel = fileTreeRef.current;
+    const timelinePanel = document.querySelector<HTMLElement>(".timeline-panel");
+    if (!app || !body || !sidebar || !filesPanel || !timelinePanel) return;
+    const dockBody = body;
+    const dockSidebar = sidebar;
+    const dockFilesPanel = filesPanel;
+    const dockTimelinePanel = timelinePanel;
+    function updateBounds() {
+      const bodyBounds = dockBody.getBoundingClientRect();
+      const sidebarBounds = dockSidebar.getBoundingClientRect();
+      const timelineBounds = dockTimelinePanel.getBoundingClientRect();
+      setSessionsDockBounds({
+        left: sidebarBounds.left - bodyBounds.left,
+        bottom: 0,
+        width: timelineBounds.left - sidebarBounds.left - 6,
+        height: terminalHeight,
+      });
+    }
+    updateBounds();
+    app.style.setProperty("--terminal-sessions-height", `${terminalHeight}px`);
+    const observer = new ResizeObserver(updateBounds);
+    observer.observe(dockBody);
+    observer.observe(dockSidebar);
+    observer.observe(dockFilesPanel);
+    observer.observe(dockTimelinePanel);
+    return () => {
+      observer.disconnect();
+      app.style.removeProperty("--terminal-sessions-height");
+    };
+  }, [terminalHeight, terminalPlacement]);
+
+  function resizeTerminal(event: React.MouseEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const startY = event.clientY;
+    const startHeight = terminalHeight;
+    document.body.classList.add("resizing");
+    function onMove(moveEvent: MouseEvent) {
+      setTerminalHeight(Math.max(140, Math.min(600, startHeight + startY - moveEvent.clientY)));
+    }
+    function onUp() {
+      document.body.classList.remove("resizing");
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    }
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }
+
+  function startTerminalDrag(event: React.MouseEvent<HTMLElement>) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    let dragging = false;
+    function onMove(moveEvent: MouseEvent) {
+      if (!dragging && Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY) > 5) {
+        dragging = true;
+        setTerminalDragging(true);
+        document.body.classList.add("terminal-dragging");
+      }
+      const sessions = document.getElementById("sidebar")?.getBoundingClientRect();
+      const overSessions = sessions
+        && moveEvent.clientX >= sessions.left
+        && moveEvent.clientX <= sessions.right
+        && moveEvent.clientY >= sessions.top
+        && moveEvent.clientY <= sessions.bottom;
+      document.body.classList.toggle("terminal-over-sessions", Boolean(overSessions));
+    }
+    function onUp(upEvent: MouseEvent) {
+      if (dragging) {
+        const sessions = document.getElementById("sidebar")?.getBoundingClientRect();
+        const droppedInSessions = sessions
+          && upEvent.clientX >= sessions.left
+          && upEvent.clientX <= sessions.right
+          && upEvent.clientY >= sessions.top
+          && upEvent.clientY <= sessions.bottom;
+        setTerminalPlacement(droppedInSessions ? "sessions" : "bottom");
+      }
+      setTerminalDragging(false);
+      document.body.classList.remove("terminal-dragging");
+      document.body.classList.remove("terminal-over-sessions");
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    }
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }
+
   const meta = events.find((event) => event.kind === "session_start");
   const cwd = meta?.kind === "session_start" ? meta.cwd : session.cwd;
   const id = meta?.kind === "session_start" ? meta.id : session.id;
   const timestamp = meta?.kind === "session_start" ? meta.ts : session.timestamp;
+  const currentTerminal = terminalSession(session, session.id, session.cwd);
+  const visibleTerminal = terminals.find((terminal) => terminal.key === currentTerminal.key) || null;
+  // Terminal identity must come from the selected list record, not parsed
+  // timeline metadata which briefly belongs to the prior selection on switch.
+  useEffect(() => {
+    function openTerminal(event: Event) {
+      const requested = (event as CustomEvent<SessionMeta>).detail;
+      if (!requested) return;
+      const terminal = terminalSession(requested, requested.id, requested.cwd);
+      setTerminals((current) => current.some((item) => item.key === terminal.key)
+        ? current
+        : [...current, terminal]);
+    }
+    window.addEventListener("open-session-terminal", openTerminal);
+    return () => window.removeEventListener("open-session-terminal", openTerminal);
+  }, []);
+
+  function closeActiveTerminal() {
+    if (!visibleTerminal) return;
+    setTerminals((current) => {
+      const next = current.filter((terminal) => terminal.key !== visibleTerminal.key);
+      if (!next.length) onTerminalClose();
+      if (!next.length) setTerminalPlacement("bottom");
+      return next;
+    });
+  }
 
   function jumpToPatch(event: FileChangeEvent) {
     jumpRequestId.current += 1;
@@ -170,6 +302,14 @@ export default function DesktopSessionDetail({
           >
             Files
           </button>
+          <button
+            className={`desktop-terminal-toggle${visibleTerminal ? " active" : ""}`}
+            onClick={onTerminalOpen}
+            title="Open terminal for this session"
+            aria-pressed={Boolean(visibleTerminal)}
+          >
+            <TerminalGlyph />
+          </button>
         </div>
       </div>
       {loading ? (
@@ -227,7 +367,79 @@ export default function DesktopSessionDetail({
           />
         </div>
       )}
+      {terminalOpen && visibleTerminal && terminalPlacement === "bottom" && terminalPanel("bottom")}
+      {terminalOpen && visibleTerminal && terminalPlacement === "sessions" && terminalSidePanel()}
     </div>
+  );
+
+  function terminalSidePanel() {
+    const target = document.querySelector<HTMLElement>(".desktop-app-body");
+    return target ? createPortal(terminalPanel("sessions"), target) : null;
+  }
+
+  function terminalPanel(placement: "bottom" | "sessions") {
+    const snapped = placement === "sessions";
+    return (
+      <section
+        className={`desktop-terminal-panel${snapped ? " desktop-terminal-sessions" : ""}`}
+        style={snapped ? sessionsDockBounds || { visibility: "hidden" } : { height: terminalHeight }}
+        aria-label="Terminal panel"
+      >
+        {!snapped && (
+          <div
+            className="desktop-terminal-resize-handle"
+            onMouseDown={resizeTerminal}
+            title="Drag to resize terminal"
+          />
+        )}
+          <div className="desktop-terminal-panel-header">
+            <button
+              className="desktop-terminal-panel-tab active"
+              onMouseDown={startTerminalDrag}
+              title={`Drag ${visibleTerminal?.source === "codex" ? "Codex" : "Claude"} terminal into Sessions to snap`}
+            >
+              <TerminalGlyph />
+            </button>
+            <button
+              className="desktop-terminal-close"
+              onClick={closeActiveTerminal}
+              title="Close active terminal"
+              aria-label="Close terminal"
+            >
+              ×
+            </button>
+          </div>
+          {terminals.map((terminal) => (
+            <DesktopTerminal
+              active={terminal.key === visibleTerminal?.key}
+              key={terminal.key}
+              sessionCwd={terminal.cwd}
+              sessionId={terminal.id}
+              sessionSource={terminal.source}
+              panelHeight={snapped ? -1 : terminalHeight}
+            />
+          ))}
+      </section>
+    );
+  }
+}
+
+interface TerminalSession {
+  key: string;
+  cwd: string;
+  id: string;
+  source: "codex" | "claude-code";
+}
+
+function terminalSession(session: SessionMeta, id: string, cwd: string): TerminalSession {
+  return { key: `${session.source}:${id}`, cwd, id, source: session.source };
+}
+
+function TerminalGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="m5 5 6 7-6 7M13 19h6" />
+    </svg>
   );
 }
 
