@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { MouseEvent as ReactMouseEvent } from "react";
+import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import ColoredText from "@/components/ColoredText";
 import Toolbar from "@/components/Toolbar";
 import type { AppEvent } from "@/lib/types";
@@ -26,17 +26,20 @@ export default function DesktopTimeline({
   sessionCwd,
   sessionKey,
   matchTarget,
+  liveConversation,
 }: {
   events: AppEvent[];
   sessionCwd: string;
   sessionKey: string;
   matchTarget: SessionMatchTarget | null;
+  liveConversation?: ReactNode;
 }) {
   const [filterPreferences, setFilterPreferences] = useState<TimelineFilterPreferences>(() =>
     loadTimelineFilterPreferences(sessionKey)
   );
   const { activeFilters, showTokenUsage } = filterPreferences;
   const [expandedEvents, setExpandedEvents] = useState<Set<string>>(() => new Set());
+  const [dismissedAutoExpandedAgentEvent, setDismissedAutoExpandedAgentEvent] = useState<string | null>(null);
   const [eventLimit, setEventLimit] = useState(INITIAL_EVENT_LIMIT);
   const timelineRef = useRef<HTMLDivElement>(null);
   const displayEvents = useMemo<TimelineEvent[]>(
@@ -51,6 +54,14 @@ export default function DesktopTimeline({
     if (matchTarget) effectiveFilters.add(matchTarget.eventKind);
     return visibleTimelineEvents(displayEvents, effectiveFilters, showTokenUsage);
   }, [activeFilters, displayEvents, matchTarget, showTokenUsage]);
+  const latestConversationEvent = useMemo(
+    () => displayEvents.find((event) => event.kind === "agent_message" || event.kind === "user_message"),
+    [displayEvents],
+  );
+  const autoExpandedAgentEvent = latestConversationEvent?.kind === "agent_message"
+    && timelineEventIdentity(latestConversationEvent) !== dismissedAutoExpandedAgentEvent
+    ? timelineEventIdentity(latestConversationEvent)
+    : null;
   const page = paginateTimelineEvents(
     visibleEvents,
     matchTarget ? Number.POSITIVE_INFINITY : eventLimit,
@@ -96,6 +107,7 @@ export default function DesktopTimeline({
         onToggleTokenUsage={toggleTokenUsage}
         onCollapseAll={() => setExpandedEvents(new Set())}
       />
+      {liveConversation}
       <div className="timeline" ref={timelineRef}>
         {page.rendered.map((event) => (
           <DesktopTimelineEntry
@@ -105,9 +117,10 @@ export default function DesktopTimeline({
             contextText={event.kind === "file_change" ? precedingUserRequest(events, event.ts) : undefined}
             matched={targetMatchesEvent(matchTarget, event)}
             matchRequestKey={targetMatchesEvent(matchTarget, event) ? targetRequestKey(matchTarget) : null}
-            expanded={expandedEvents.has(timelineEventIdentity(event))}
+            expanded={expandedEvents.has(timelineEventIdentity(event)) || autoExpandedAgentEvent === timelineEventIdentity(event)}
             onExpandedChange={(nextExpanded) => {
               const identity = timelineEventIdentity(event);
+              if (!nextExpanded && autoExpandedAgentEvent === identity) setDismissedAutoExpandedAgentEvent(identity);
               setExpandedEvents((current) => {
                 const next = new Set(current);
                 if (nextExpanded) next.add(identity);
@@ -189,6 +202,7 @@ function DesktopTimelineEntry({
   }
 
   const style = entryStyle(event);
+  const userImages = event.kind === "user_message" ? event.images || [] : [];
   return (
     <div
       className={`timeline-entry ${style.className}${forcedOpen ? " desktop-search-match" : ""}${highlighted ? " highlighted" : ""}`}
@@ -231,12 +245,35 @@ function DesktopTimelineEntry({
           ) : event.kind === "tool_output" ? (
             <ColoredText text={toDisplayString(event.output)} />
           ) : (
-            event.text
+            <>
+              {event.text}
+              {userImages.length > 0 && (
+                <div className="desktop-message-images">
+                  {userImages.map((image, index) => (
+                    <button
+                      key={`${image}-${index}`}
+                      type="button"
+                      className="desktop-message-image"
+                      title="Copy image"
+                      onClick={() => void copyImage(image)}
+                    >
+                      <img src={image} alt={`User image ${index + 1}`} />
+                    </button>
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>
     </div>
   );
+}
+
+async function copyImage(url: string) {
+  const response = await fetch(url);
+  const blob = await response.blob();
+  await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
 }
 
 function eventKey(event: TimelineEvent): string {

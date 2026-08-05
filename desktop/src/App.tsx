@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { SessionMeta } from "@/lib/types";
 import { formatTime } from "@/utils/format";
-import { deleteSession, getDesktopSettings, listSessions } from "./desktop-api";
+import { deleteSession, getDesktopAppearance, listSessions } from "./desktop-api";
 import DesktopSessionDetail from "./DesktopSessionDetail";
 import DesktopSessionList from "./DesktopSessionList";
 import DesktopSettingsPage from "./DesktopSettingsPage";
@@ -33,7 +33,7 @@ export default function App() {
   const sidebarRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
-    void getDesktopSettings().then((settings) => {
+    void getDesktopAppearance().then((settings) => {
       applyDesktopAppearance(settings.appearance);
     }).catch(() => {
       // Appearance is cosmetic; leave the default theme in place on a settings error.

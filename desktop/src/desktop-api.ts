@@ -29,6 +29,10 @@ export interface DesktopSettings {
   openRouterKeyConfigured: boolean;
 }
 
+export interface DesktopAppearanceSettings {
+  appearance: DesktopAppearance;
+}
+
 export interface SaveDesktopSettingsRequest {
   appearance: DesktopAppearance;
   provider: ExplainProvider;
@@ -108,8 +112,31 @@ export function stopTerminal(terminalId: string): Promise<void> {
   return invoke<void>("stop_terminal", { request: { terminalId } });
 }
 
+export function connectCodexThread(sessionKey: string, threadId: string, cwd: string): Promise<void> {
+  return invoke<void>("connect_codex_thread", { requestData: { sessionKey, threadId, cwd } });
+}
+
+export function sendCodexTurn(
+  sessionKey: string,
+  threadId: string,
+  text: string,
+  imageUrls: string[],
+): Promise<void> {
+  return invoke<void>("send_codex_turn", {
+    requestData: { sessionKey, threadId, text, imageUrls },
+  });
+}
+
+export function respondToCodexApproval(sessionKey: string, requestId: unknown, result: unknown): Promise<void> {
+  return invoke<void>("respond_to_codex_approval", { response: { sessionKey, requestId, result } });
+}
+
 export function getDesktopSettings(): Promise<DesktopSettings> {
   return invoke<DesktopSettings>("get_desktop_settings");
+}
+
+export function getDesktopAppearance(): Promise<DesktopAppearanceSettings> {
+  return invoke<DesktopAppearanceSettings>("get_desktop_appearance");
 }
 
 export function saveDesktopSettings(request: SaveDesktopSettingsRequest): Promise<DesktopSettings> {

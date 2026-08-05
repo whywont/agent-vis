@@ -260,7 +260,7 @@ pub(crate) fn start_terminal(
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_terminal_output, MAX_TERMINAL_TRANSCRIPT_BYTES};
+    use super::decode_terminal_output;
 
     #[test]
     fn preserves_unicode_split_across_pty_reads() {
@@ -270,11 +270,6 @@ mod tests {
         assert_eq!(decode_terminal_output(&mut pending, &spinner[..2]), "");
         assert_eq!(decode_terminal_output(&mut pending, &spinner[2..]), "⠋");
         assert!(pending.is_empty());
-    }
-
-    #[test]
-    fn transcript_limit_is_large_enough_for_an_approval_screen() {
-        assert!(MAX_TERMINAL_TRANSCRIPT_BYTES > 8 * 1024);
     }
 }
 

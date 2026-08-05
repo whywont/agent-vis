@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import type { AppEvent, FileChangeEvent, SessionMeta } from "@/lib/types";
@@ -9,6 +9,7 @@ import DesktopFileTree from "./DesktopFileTree";
 import DesktopFilesCanvas from "./DesktopFilesCanvas";
 import DesktopTimeline from "./DesktopTimeline";
 import DesktopTerminal from "./DesktopTerminal";
+import DesktopCodexConversation from "./DesktopCodexConversation";
 import { getGitBranch, readSession, stopTerminal } from "./desktop-api";
 import { startWindowDrag } from "./window-drag";
 
@@ -48,6 +49,7 @@ export default function DesktopSessionDetail({
     baseTarget: SessionMatchTarget | null;
     target: SessionMatchTarget;
   } | null>(null);
+  const [approvalCommand, setApprovalCommand] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState(false);
   const fileTreeRef = useRef<HTMLDivElement>(null);
   const resizeHandleRef = useRef<HTMLDivElement>(null);
@@ -208,6 +210,19 @@ export default function DesktopSessionDetail({
   const id = meta?.kind === "session_start" ? meta.id : session.id;
   const timestamp = meta?.kind === "session_start" ? meta.ts : session.timestamp;
   const currentSessionKey = terminalSessionKey(session, session.id);
+  const approvalTimelineTarget = useMemo(() => {
+    if (!approvalCommand) return null;
+    const matchingEvent = [...events].reverse().find((event) =>
+      event.kind === "shell_command" && event.cmd.trim() === approvalCommand.trim(),
+    );
+    return matchingEvent ? {
+      eventTs: matchingEvent.ts,
+      eventKind: matchingEvent.kind,
+    } : null;
+  }, [approvalCommand, events]);
+  const handleApprovalChange = useCallback((command: string | null) => {
+    setApprovalCommand(command);
+  }, []);
   const visibleTerminals = terminals.filter((terminal) => terminal.sessionKey === currentSessionKey);
   const activeTerminalKey = activeTerminalBySession[currentSessionKey];
   const visibleTerminal = visibleTerminals.find((terminal) => terminal.key === activeTerminalKey) || visibleTerminals[0] || null;
@@ -404,9 +419,17 @@ export default function DesktopSessionDetail({
             events={events}
             sessionCwd={cwd}
             sessionKey={`${session.source}:${session.id}`}
-            matchTarget={fileTimelineSelection?.baseTarget === matchTarget
+            matchTarget={approvalTimelineTarget || (fileTimelineSelection?.baseTarget === matchTarget
               ? fileTimelineSelection.target
-              : matchTarget}
+              : matchTarget)}
+            liveConversation={session.source === "codex" ? (
+              <DesktopCodexConversation
+                sessionKey={`${session.source}:${session.id}`}
+                threadId={session.id}
+                cwd={cwd}
+                onApprovalChange={handleApprovalChange}
+              />
+            ) : undefined}
           />
         </div>
       )}
@@ -525,7 +548,16 @@ function terminalSessionKey(session: SessionMeta, id: string): string {
 
 function firstTerminalSession(session: SessionMeta, id: string, cwd: string): TerminalSession {
   const sessionKey = terminalSessionKey(session, id);
-  return { key: sessionKey, sessionKey, cwd, id, source: session.source, prefillResume: true };
+  // Codex is driven by the app-server conversation surface. The dock remains
+  // an independent workspace shell, avoiding a second client on one thread.
+  return {
+    key: sessionKey,
+    sessionKey,
+    cwd,
+    id,
+    source: session.source,
+    prefillResume: session.source === "claude-code",
+  };
 }
 
 function groupTerminalPanes(terminals: TerminalSession[]): [string, TerminalSession[]][] {
