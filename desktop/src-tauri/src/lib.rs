@@ -1,3 +1,4 @@
+mod claude_stream;
 mod codex_app_server;
 mod explain;
 mod search;
@@ -8,6 +9,7 @@ mod settings;
 mod terminal;
 mod workspace;
 
+use claude_stream::{connect_claude_thread, send_claude_turn, ClaudeStreamState};
 use codex_app_server::{
     connect_codex_thread, respond_to_codex_approval, send_codex_turn, CodexAppServerState,
 };
@@ -28,6 +30,7 @@ pub fn run() {
             app.manage(search);
             app.manage(TerminalState::new());
             app.manage(CodexAppServerState::new());
+            app.manage(ClaudeStreamState::new());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -48,7 +51,9 @@ pub fn run() {
             stop_terminal,
             connect_codex_thread,
             send_codex_turn,
-            respond_to_codex_approval
+            respond_to_codex_approval,
+            connect_claude_thread,
+            send_claude_turn,
         ])
         .run(tauri::generate_context!())
         .expect("error while running agent-vis desktop");

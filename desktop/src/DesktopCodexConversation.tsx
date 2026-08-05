@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { connectCodexThread, respondToCodexApproval, sendCodexTurn } from "./desktop-api";
+import {
+  connectClaudeThread,
+  connectCodexThread,
+  respondToCodexApproval,
+  sendClaudeTurn,
+  sendCodexTurn,
+} from "./desktop-api";
 
 type ApprovalDecision = string | Record<string, unknown>;
 
@@ -23,13 +29,21 @@ interface AppServerEvent {
   };
 }
 
+interface ClaudeStreamEvent {
+  sessionKey: string;
+  message: Record<string, unknown>;
+}
+
+type LiveProvider = "codex" | "claude-code";
+
 type ConnectionState = "idle" | "connecting" | "ready" | "error";
 
 type ImageAttachment = { id: string; url: string; name: string };
 const MAX_IMAGE_ATTACHMENTS = 4;
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 
-export default function DesktopCodexConversation({ sessionKey, threadId, cwd, onApprovalChange }: {
+export default function DesktopLiveConversation({ provider, sessionKey, threadId, cwd, onApprovalChange }: {
+  provider: LiveProvider;
   sessionKey: string;
   threadId: string;
   cwd: string;
@@ -51,6 +65,38 @@ export default function DesktopCodexConversation({ sessionKey, threadId, cwd, on
   useEffect(() => {
     let cancelled = false;
     let unlisten: UnlistenFn | undefined;
+    if (provider === "claude-code") {
+      void listen<ClaudeStreamEvent>("claude-stream-event", (event) => {
+        if (event.payload.sessionKey !== sessionKey) return;
+        const message = event.payload.message;
+        if (message.type === "agent-vis/disconnected") {
+          setState("error");
+          setError("Claude disconnected");
+          setActiveTurnId(null);
+          return;
+        }
+        if (message.type === "system" && message.status === "requesting") {
+          setActiveTurnId("claude-turn");
+          return;
+        }
+        if (message.type === "result") {
+          setActiveTurnId(null);
+          if (message.subtype !== "success") {
+            setState("error");
+            setError(typeof message.result === "string" ? message.result : "Claude could not complete this turn.");
+          } else {
+            setState("ready");
+          }
+        }
+      }).then((stop) => {
+        if (cancelled) stop();
+        else unlisten = stop;
+      });
+      return () => {
+        cancelled = true;
+        unlisten?.();
+      };
+    }
     void listen<AppServerEvent>("codex-app-server-event", (event) => {
       if (event.payload.sessionKey !== sessionKey) return;
       const { message } = event.payload;
@@ -104,14 +150,15 @@ export default function DesktopCodexConversation({ sessionKey, threadId, cwd, on
       cancelled = true;
       unlisten?.();
     };
-  }, [onApprovalChange, sessionKey]);
+  }, [onApprovalChange, provider, sessionKey]);
 
   async function connect(): Promise<boolean> {
     if (state === "connecting") return false;
     setState("connecting");
     setError("");
     try {
-      await connectCodexThread(sessionKey, threadId, cwd);
+      if (provider === "codex") await connectCodexThread(sessionKey, threadId, cwd);
+      else await connectClaudeThread(sessionKey, threadId, cwd);
       setState("ready");
       return true;
     } catch (reason) {
@@ -130,7 +177,14 @@ export default function DesktopCodexConversation({ sessionKey, threadId, cwd, on
       return;
     }
     try {
-      await sendCodexTurn(sessionKey, threadId, text, images.map((image) => image.url));
+      const imageUrls = images.map((image) => image.url);
+      if (provider === "codex") await sendCodexTurn(sessionKey, threadId, text, imageUrls);
+      else {
+        await sendClaudeTurn(sessionKey, text, imageUrls);
+        // Claude's stream reports completion as a result frame. Mark it busy
+        // immediately so the shared status glyph cannot lag behind the send.
+        setActiveTurnId("claude-turn");
+      }
       setDraft("");
       setImages([]);
     } catch (reason) {
@@ -168,18 +222,18 @@ export default function DesktopCodexConversation({ sessionKey, threadId, cwd, on
   }
 
   return (
-    <section className="desktop-codex-live-strip" aria-label="Message Codex">
+    <section className="desktop-codex-live-strip" aria-label={`Message ${provider === "codex" ? "Codex" : "Claude"}`}>
       <div className={`desktop-codex-live-bar${images.length ? " has-images" : ""}`}>
         <span
           className={`desktop-codex-live-dot ${approval ? "running" : activeTurnId ? "paused" : state}`}
-          aria-label={approval ? "Codex needs approval" : activeTurnId ? "Codex working" : "Codex ready"}
+          aria-label={approval ? "Codex needs approval" : activeTurnId ? `${provider === "codex" ? "Codex" : "Claude"} working` : `${provider === "codex" ? "Codex" : "Claude"} ready`}
           role="status"
         />
         <textarea
           ref={composerRef}
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
-          placeholder={activeTurnId ? "Steer Codex..." : "Message Codex..."}
+          placeholder={activeTurnId ? `Steer ${provider === "codex" ? "Codex" : "Claude"}...` : `Message ${provider === "codex" ? "Codex" : "Claude"}...`}
           rows={1}
           onFocus={() => {
             if (state !== "ready" && state !== "connecting") void connect();

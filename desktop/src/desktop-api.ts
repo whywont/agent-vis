@@ -131,6 +131,14 @@ export function respondToCodexApproval(sessionKey: string, requestId: unknown, r
   return invoke<void>("respond_to_codex_approval", { response: { sessionKey, requestId, result } });
 }
 
+export function connectClaudeThread(sessionKey: string, threadId: string, cwd: string): Promise<void> {
+  return invoke<void>("connect_claude_thread", { requestData: { sessionKey, threadId, cwd } });
+}
+
+export function sendClaudeTurn(sessionKey: string, text: string, imageUrls: string[]): Promise<void> {
+  return invoke<void>("send_claude_turn", { requestData: { sessionKey, text, imageUrls } });
+}
+
 export function getDesktopSettings(): Promise<DesktopSettings> {
   return invoke<DesktopSettings>("get_desktop_settings");
 }

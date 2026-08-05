@@ -9,7 +9,7 @@ import DesktopFileTree from "./DesktopFileTree";
 import DesktopFilesCanvas from "./DesktopFilesCanvas";
 import DesktopTimeline from "./DesktopTimeline";
 import DesktopTerminal from "./DesktopTerminal";
-import DesktopCodexConversation from "./DesktopCodexConversation";
+import DesktopLiveConversation from "./DesktopCodexConversation";
 import { getGitBranch, readSession, stopTerminal } from "./desktop-api";
 import { startWindowDrag } from "./window-drag";
 
@@ -422,8 +422,10 @@ export default function DesktopSessionDetail({
             matchTarget={approvalTimelineTarget || (fileTimelineSelection?.baseTarget === matchTarget
               ? fileTimelineSelection.target
               : matchTarget)}
-            liveConversation={session.source === "codex" ? (
-              <DesktopCodexConversation
+            liveConversation={session.source === "codex" || session.source === "claude-code" ? (
+              <DesktopLiveConversation
+                key={`${session.source}:${session.id}`}
+                provider={session.source}
                 sessionKey={`${session.source}:${session.id}`}
                 threadId={session.id}
                 cwd={cwd}
@@ -548,15 +550,15 @@ function terminalSessionKey(session: SessionMeta, id: string): string {
 
 function firstTerminalSession(session: SessionMeta, id: string, cwd: string): TerminalSession {
   const sessionKey = terminalSessionKey(session, id);
-  // Codex is driven by the app-server conversation surface. The dock remains
-  // an independent workspace shell, avoiding a second client on one thread.
+  // Live sessions are driven by native structured harness adapters. The dock
+  // remains an independent shell instead of opening another resumed client.
   return {
     key: sessionKey,
     sessionKey,
     cwd,
     id,
     source: session.source,
-    prefillResume: session.source === "claude-code",
+    prefillResume: false,
   };
 }
 
