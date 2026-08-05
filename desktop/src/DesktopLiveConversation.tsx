@@ -45,6 +45,9 @@ export default function DesktopLiveConversation({
   onContextCompaction,
   onTimelineEvent,
   tokenUsage,
+  visible = true,
+  pinned = false,
+  onNeedsAttention,
 }: {
   provider: LiveProvider;
   sessionKey: string;
@@ -54,6 +57,9 @@ export default function DesktopLiveConversation({
   onContextCompaction?: () => void;
   onTimelineEvent?: (event: AppEvent) => void;
   tokenUsage?: { total: number; input: number; output: number };
+  visible?: boolean;
+  pinned?: boolean;
+  onNeedsAttention?: () => void;
 }) {
   const adapter = getHarnessAdapter(provider);
   const [state, setState] = useState<ConnectionState>("idle");
@@ -76,6 +82,9 @@ export default function DesktopLiveConversation({
   const exactSlashCommand = slashQuery !== null && slashCommands.includes(slashQuery);
   const slashHasArguments = Boolean(slashInput && /\s/.test(slashInput));
   const showSlashPicker = matchingCommands.length > 0 && !slashHasArguments;
+  useEffect(() => {
+    if (approval) onNeedsAttention?.();
+  }, [approval, onNeedsAttention]);
 
   useEffect(() => {
     if (!draft) composerRef.current?.style.removeProperty("height");
@@ -358,7 +367,7 @@ export default function DesktopLiveConversation({
   }
 
   return (
-    <section className="desktop-codex-live-strip" aria-label={`Message ${provider === "codex" ? "Codex" : "Claude"}`}>
+    <section className={`desktop-codex-live-strip${pinned ? " is-pinned" : ""}${visible ? "" : " is-hidden"}`} aria-label={`Message ${adapter.label}`}>
       <div className={`desktop-codex-live-bar${images.length ? " has-images" : ""}`}>
         <span
           className={`desktop-codex-live-dot ${approval ? "running" : activeTurnId ? "paused" : state}`}

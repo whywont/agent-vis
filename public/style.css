@@ -706,6 +706,64 @@ body {
   flex-shrink: 0;
 }
 
+.toolbar-chat-menu {
+  position: relative;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.filter-btn.toolbar-chat-trigger {
+  display: grid;
+  min-width: 26px;
+  padding-inline: 0;
+  border-color: transparent !important;
+  background: transparent !important;
+  place-items: center;
+}
+
+.filter-btn.toolbar-chat-trigger:hover,
+.filter-btn.toolbar-chat-trigger.active,
+.filter-btn.toolbar-chat-trigger.pinned {
+  border-color: transparent !important;
+  background: transparent !important;
+  color: var(--accent);
+}
+
+.toolbar-vertical-ellipsis,
+.toolbar-vertical-ellipsis::before,
+.toolbar-vertical-ellipsis::after {
+  display: block;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  content: "";
+}
+
+.toolbar-vertical-ellipsis { position: relative; }
+.toolbar-vertical-ellipsis::before { position: absolute; top: -5px; }
+.toolbar-vertical-ellipsis::after { position: absolute; top: 5px; }
+.toolbar-chat-dropdown { width: 196px; }
+.toolbar-pin-icon {
+  position: relative;
+  width: 9px;
+  height: 10px;
+  flex: 0 0 auto;
+  border: 1px solid currentColor;
+  border-radius: 2px 2px 0 0;
+  color: var(--text-dim);
+  transform: rotate(45deg);
+}
+.toolbar-pin-icon::after {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  width: 5px;
+  border-top: 1px solid currentColor;
+  content: "";
+}
+.toolbar-pin-icon.active { color: var(--accent); filter: drop-shadow(0 0 3px rgba(var(--accent-rgb), 0.55)); }
+
 .toolbar-filter-trigger {
   display: flex;
   min-width: 130px;

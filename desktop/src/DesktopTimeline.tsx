@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
+import { cloneElement } from "react";
+import type { MouseEvent as ReactMouseEvent, ReactElement } from "react";
 import ColoredText from "@/components/ColoredText";
 import Toolbar from "@/components/Toolbar";
 import type { AppEvent } from "@/lib/types";
@@ -20,6 +21,26 @@ import {
 } from "./timeline-filter-preferences";
 
 const INITIAL_EVENT_LIMIT = 350;
+const CHAT_PREFERENCES_KEY = "agent-vis:timeline-chat";
+
+type ChatPreferences = { visible: boolean; pinned: boolean };
+
+function loadChatPreferences(sessionKey: string): ChatPreferences {
+  try {
+    const value = JSON.parse(window.localStorage.getItem(`${CHAT_PREFERENCES_KEY}:${sessionKey}`) || "{}") as Partial<ChatPreferences>;
+    return { visible: value.visible !== false, pinned: value.pinned === true };
+  } catch {
+    return { visible: true, pinned: false };
+  }
+}
+
+function saveChatPreferences(sessionKey: string, value: ChatPreferences) {
+  try {
+    window.localStorage.setItem(`${CHAT_PREFERENCES_KEY}:${sessionKey}`, JSON.stringify(value));
+  } catch {
+    // The timeline remains usable when storage is unavailable.
+  }
+}
 
 export default function DesktopTimeline({
   events,
@@ -32,7 +53,31 @@ export default function DesktopTimeline({
   sessionCwd: string;
   sessionKey: string;
   matchTarget: SessionMatchTarget | null;
-  liveConversation?: ReactNode;
+  liveConversation?: ReactElement<{
+    visible?: boolean;
+    pinned?: boolean;
+    onNeedsAttention?: () => void;
+  }>;
+}) {
+  return <DesktopTimelineForSession key={sessionKey} events={events} sessionCwd={sessionCwd} sessionKey={sessionKey} matchTarget={matchTarget} liveConversation={liveConversation} />;
+}
+
+function DesktopTimelineForSession({
+  events,
+  sessionCwd,
+  sessionKey,
+  matchTarget,
+  liveConversation,
+}: {
+  events: AppEvent[];
+  sessionCwd: string;
+  sessionKey: string;
+  matchTarget: SessionMatchTarget | null;
+  liveConversation?: ReactElement<{
+    visible?: boolean;
+    pinned?: boolean;
+    onNeedsAttention?: () => void;
+  }>;
 }) {
   const [filterPreferences, setFilterPreferences] = useState<TimelineFilterPreferences>(() =>
     loadTimelineFilterPreferences(sessionKey)
@@ -41,6 +86,8 @@ export default function DesktopTimeline({
   const [expandedEvents, setExpandedEvents] = useState<Set<string>>(() => new Set());
   const [dismissedAutoExpandedAgentEvent, setDismissedAutoExpandedAgentEvent] = useState<string | null>(null);
   const [eventLimit, setEventLimit] = useState(INITIAL_EVENT_LIMIT);
+  const [chatPreferences, setChatPreferences] = useState(() => loadChatPreferences(sessionKey));
+  const { visible: chatVisible, pinned: chatPinned } = chatPreferences;
   const timelineRef = useRef<HTMLDivElement>(null);
   const displayEvents = useMemo<TimelineEvent[]>(
     () => deduplicateTimelineEvents(
@@ -90,6 +137,14 @@ export default function DesktopTimeline({
     return () => window.clearTimeout(timer);
   }, [matchTarget]);
 
+  function updateChatPreferences(change: Partial<ChatPreferences>) {
+    setChatPreferences((current) => {
+      const next = { ...current, ...change };
+      saveChatPreferences(sessionKey, next);
+      return next;
+    });
+  }
+
   function toggleFilter(key: string) {
     setFilterPreferences((current) => {
       const activeFilters = new Set(current.activeFilters);
@@ -111,15 +166,27 @@ export default function DesktopTimeline({
 
   return (
     <div className="timeline-panel">
-      <Toolbar
-        events={events}
-        activeFilters={activeFilters}
-        showTokenUsage={showTokenUsage}
-        onToggleFilter={toggleFilter}
-        onToggleTokenUsage={toggleTokenUsage}
-        onCollapseAll={() => setExpandedEvents(new Set())}
-      />
-      {liveConversation}
+      <div className="desktop-timeline-live-header">
+        <Toolbar
+          events={events}
+          activeFilters={activeFilters}
+          showTokenUsage={showTokenUsage}
+          onToggleFilter={toggleFilter}
+          onToggleTokenUsage={toggleTokenUsage}
+          onCollapseAll={() => setExpandedEvents(new Set())}
+          liveChat={liveConversation ? {
+            visible: chatVisible,
+            pinned: chatPinned,
+            onVisibleChange: (visible) => updateChatPreferences({ visible }),
+            onPinnedChange: (pinned) => updateChatPreferences({ pinned }),
+          } : undefined}
+        />
+        {liveConversation && cloneElement(liveConversation, {
+          visible: chatVisible,
+          pinned: chatPinned,
+          onNeedsAttention: () => updateChatPreferences({ visible: true }),
+        })}
+      </div>
       <div className="timeline" ref={timelineRef}>
         {page.rendered.map((event) => (
           <DesktopTimelineEntry

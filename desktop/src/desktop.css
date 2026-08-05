@@ -510,6 +510,15 @@ body.terminal-over-sessions #sidebar {
   border-bottom: 1px solid var(--border);
   background: linear-gradient(90deg, rgba(16, 163, 127, 0.07), transparent 42%);
 }
+.desktop-codex-live-strip.is-hidden { display: none; }
+
+.desktop-timeline-live-header:has(.desktop-codex-live-strip.is-pinned) {
+  position: sticky;
+  z-index: 5;
+  top: 0;
+  background: var(--bg);
+  box-shadow: 0 5px 12px rgba(0, 0, 0, 0.15);
+}
 
 .desktop-codex-live-bar {
   position: relative;
