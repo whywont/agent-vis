@@ -47,6 +47,7 @@ export default function Toolbar({
   const fileChanges = events.filter((e) => e.kind === "file_change").length;
   const shellCmds = events.filter((e) => e.kind === "shell_command").length;
   const userMsgs = events.filter((e) => e.kind === "user_message").length;
+  const compactions = events.filter((e) => e.kind === "context_compaction").length;
   const tokenEvents = events.filter((e) => e.kind === "token_usage");
   const lastToken =
     tokenEvents.length > 0
@@ -117,6 +118,12 @@ export default function Toolbar({
               {formatTokens(displayedTokens)}
             </span>
             <span className="stat-lbl"> tokens</span>
+          </span>
+        )}
+        {compactions > 0 && (
+          <span>
+            <span className="stat-val">{compactions}</span>
+            <span className="stat-lbl"> compacts</span>
           </span>
         )}
       </div>
