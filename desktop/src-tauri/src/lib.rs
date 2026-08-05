@@ -9,11 +9,14 @@ mod settings;
 mod terminal;
 mod workspace;
 
-use claude_stream::{connect_claude_thread, send_claude_turn, ClaudeStreamState};
+use claude_stream::{
+    connect_claude_thread, send_claude_turn, start_claude_session, ClaudeStreamState,
+};
 use codex_app_server::{
     compact_codex_thread, connect_codex_thread, interrupt_codex_turn, list_codex_mcp_servers,
     list_codex_models, list_codex_skills, read_codex_thread_status, respond_to_codex_approval,
-    send_codex_turn, set_codex_thread_model, start_codex_review, CodexAppServerState,
+    send_codex_turn, set_codex_thread_model, start_codex_review, start_codex_session,
+    CodexAppServerState,
 };
 use explain::explain_diff;
 use search::{search_sessions, SearchIndexState};
@@ -22,7 +25,8 @@ use settings::{get_desktop_appearance, get_desktop_settings, save_desktop_settin
 use tauri::Manager;
 use terminal::{resize_terminal, start_terminal, stop_terminal, write_terminal, TerminalState};
 use workspace::{
-    get_git_branch, read_workspace_file, resolve_workspace_filepaths, save_workspace_file,
+    choose_workspace_directory, get_git_branch, read_workspace_file, resolve_workspace_filepaths,
+    save_workspace_file,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -47,6 +51,7 @@ pub fn run() {
             save_desktop_settings,
             explain_diff,
             get_git_branch,
+            choose_workspace_directory,
             resolve_workspace_filepaths,
             read_workspace_file,
             save_workspace_file,
@@ -55,6 +60,7 @@ pub fn run() {
             resize_terminal,
             stop_terminal,
             connect_codex_thread,
+            start_codex_session,
             send_codex_turn,
             compact_codex_thread,
             list_codex_models,
@@ -66,6 +72,7 @@ pub fn run() {
             interrupt_codex_turn,
             respond_to_codex_approval,
             connect_claude_thread,
+            start_claude_session,
             send_claude_turn,
         ])
         .run(tauri::generate_context!())

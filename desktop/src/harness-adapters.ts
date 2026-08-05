@@ -70,7 +70,7 @@ const CLAUDE_COMMANDS: readonly HarnessCommand[] = [
   ["simplify", "Simplify the current work"], ["usage", "Show account usage"],
 ].map(([id, description]) => ({ id, description }));
 
-const CLAUDE_MODEL_OPTIONS: readonly ModelOption[] = [
+export const CLAUDE_MODEL_OPTIONS: readonly ModelOption[] = [
   ["default", "Claude's configured default"],
   ["opus", "Highest capability"],
   ["sonnet", "Balanced speed and capability"],

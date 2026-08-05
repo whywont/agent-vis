@@ -50,6 +50,15 @@ pub(crate) struct ClaudeTurnRequest {
     image_urls: Vec<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct NewClaudeSessionRequest {
+    session_key: String,
+    thread_id: String,
+    cwd: String,
+    model: Option<String>,
+}
+
 #[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct ClaudeStreamEvent {
@@ -89,24 +98,34 @@ fn claude_executable() -> String {
 fn start_connection(
     app: AppHandle,
     session_key: String,
-    thread_id: &str,
+    resume_thread_id: Option<&str>,
+    new_thread_id: Option<&str>,
     cwd: &str,
+    model: Option<&str>,
 ) -> Result<Arc<ClaudeStreamConnection>, String> {
-    let mut child = Command::new(claude_executable())
-        .current_dir(cwd)
-        .args([
-            "-p",
-            "--verbose",
-            "--input-format",
-            "stream-json",
-            "--output-format",
-            "stream-json",
-            "--include-partial-messages",
-            "--permission-mode",
-            "manual",
-            "--resume",
-            thread_id,
-        ])
+    let mut command = Command::new(claude_executable());
+    command.current_dir(cwd).args([
+        "-p",
+        "--verbose",
+        "--input-format",
+        "stream-json",
+        "--output-format",
+        "stream-json",
+        "--include-partial-messages",
+        "--permission-mode",
+        "manual",
+    ]);
+    if let Some(thread_id) = resume_thread_id {
+        command.args(["--resume", thread_id]);
+    } else {
+        let thread_id =
+            new_thread_id.ok_or_else(|| "New Claude sessions require an ID.".to_owned())?;
+        command.args(["--session-id", thread_id]);
+        if let Some(model) = model.filter(|model| !model.is_empty() && *model != "default") {
+            command.args(["--model", model]);
+        }
+    }
+    let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -158,11 +177,39 @@ fn connection_for(
     let connection = start_connection(
         app.clone(),
         request.session_key.clone(),
-        &request.thread_id,
+        Some(&request.thread_id),
+        None,
         &request.cwd,
+        None,
     )?;
     connections.insert(request.session_key.clone(), Arc::clone(&connection));
     Ok(connection)
+}
+
+#[tauri::command]
+pub(crate) fn start_claude_session(
+    app: AppHandle,
+    state: State<'_, ClaudeStreamState>,
+    request_data: NewClaudeSessionRequest,
+) -> Result<String, String> {
+    let session_key = request_data.session_key.clone();
+    let mut connections = state
+        .connections
+        .lock()
+        .map_err(|_| "Claude stream state is unavailable.".to_owned())?;
+    if connections.contains_key(&session_key) {
+        return Ok(session_key);
+    }
+    let connection = start_connection(
+        app,
+        session_key.clone(),
+        None,
+        Some(&request_data.thread_id),
+        &request_data.cwd,
+        request_data.model.as_deref(),
+    )?;
+    connections.insert(session_key.clone(), connection);
+    Ok(request_data.thread_id)
 }
 
 #[tauri::command]

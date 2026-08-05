@@ -23,6 +23,7 @@ export default function DesktopSessionDetail({
   onTerminalOpen,
   onTerminalClose,
   matchTarget,
+  liveSessionKey,
 }: {
   session: SessionMeta;
   sessionName: string | null;
@@ -33,9 +34,11 @@ export default function DesktopSessionDetail({
   onTerminalOpen: () => void;
   onTerminalClose: () => void;
   matchTarget: SessionMatchTarget | null;
+  liveSessionKey?: string;
 }) {
-  const [events, setEvents] = useState<AppEvent[]>([]);
-  const [loading, setLoading] = useState(true);
+  const isNewSession = session.file.startsWith("live:");
+  const [events, setEvents] = useState<AppEvent[]>(() => isNewSession ? [sessionStartEvent(session)] : []);
+  const [loading, setLoading] = useState(!isNewSession);
   const [error, setError] = useState("");
   const [loadedBatches, setLoadedBatches] = useState(0);
   const [branch, setBranch] = useState<string | null>(null);
@@ -61,6 +64,7 @@ export default function DesktopSessionDetail({
   const files = session.files?.join(",") || session.file;
 
   useEffect(() => {
+    if (isNewSession) return;
     let cancelled = false;
     readSession(files, session.modified, setLoadedBatches)
       .then((nextEvents) => {
@@ -78,7 +82,7 @@ export default function DesktopSessionDetail({
     return () => {
       cancelled = true;
     };
-  }, [files, session.modified]);
+  }, [files, isNewSession, session.modified, session.timestamp, session.id, session.cwd, session.model, session.source]);
 
   useEffect(() => {
     const panel = fileTreeRef.current;
@@ -464,7 +468,7 @@ export default function DesktopSessionDetail({
               <DesktopLiveConversation
                 key={`${session.source}:${session.id}`}
                 provider={session.source}
-                sessionKey={`${session.source}:${session.id}`}
+                sessionKey={liveSessionKey || `${session.source}:${session.id}`}
                 threadId={session.id}
                 cwd={cwd}
                 onApprovalChange={handleApprovalChange}
@@ -572,6 +576,17 @@ export default function DesktopSessionDetail({
       </section>
     );
   }
+}
+
+function sessionStartEvent(session: SessionMeta): AppEvent {
+  return {
+    kind: "session_start",
+    ts: session.timestamp,
+    id: session.id,
+    cwd: session.cwd,
+    model: session.model,
+    source: session.source,
+  };
 }
 
 interface TerminalSession {
