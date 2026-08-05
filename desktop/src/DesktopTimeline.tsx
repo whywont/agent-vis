@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { MouseEvent as ReactMouseEvent } from "react";
+import { cloneElement } from "react";
+import type { MouseEvent as ReactMouseEvent, ReactElement } from "react";
 import ColoredText from "@/components/ColoredText";
 import Toolbar from "@/components/Toolbar";
 import type { AppEvent } from "@/lib/types";
@@ -20,24 +21,73 @@ import {
 } from "./timeline-filter-preferences";
 
 const INITIAL_EVENT_LIMIT = 350;
+const CHAT_PREFERENCES_KEY = "agent-vis:timeline-chat";
+
+type ChatPreferences = { visible: boolean; pinned: boolean };
+
+function loadChatPreferences(sessionKey: string): ChatPreferences {
+  try {
+    const value = JSON.parse(window.localStorage.getItem(`${CHAT_PREFERENCES_KEY}:${sessionKey}`) || "{}") as Partial<ChatPreferences>;
+    return { visible: value.visible !== false, pinned: value.pinned === true };
+  } catch {
+    return { visible: true, pinned: false };
+  }
+}
+
+function saveChatPreferences(sessionKey: string, value: ChatPreferences) {
+  try {
+    window.localStorage.setItem(`${CHAT_PREFERENCES_KEY}:${sessionKey}`, JSON.stringify(value));
+  } catch {
+    // The timeline remains usable when storage is unavailable.
+  }
+}
 
 export default function DesktopTimeline({
   events,
   sessionCwd,
   sessionKey,
   matchTarget,
+  liveConversation,
 }: {
   events: AppEvent[];
   sessionCwd: string;
   sessionKey: string;
   matchTarget: SessionMatchTarget | null;
+  liveConversation?: ReactElement<{
+    visible?: boolean;
+    pinned?: boolean;
+    onNeedsAttention?: () => void;
+  }>;
+}) {
+  return <DesktopTimelineForSession key={sessionKey} events={events} sessionCwd={sessionCwd} sessionKey={sessionKey} matchTarget={matchTarget} liveConversation={liveConversation} />;
+}
+
+function DesktopTimelineForSession({
+  events,
+  sessionCwd,
+  sessionKey,
+  matchTarget,
+  liveConversation,
+}: {
+  events: AppEvent[];
+  sessionCwd: string;
+  sessionKey: string;
+  matchTarget: SessionMatchTarget | null;
+  liveConversation?: ReactElement<{
+    visible?: boolean;
+    pinned?: boolean;
+    onNeedsAttention?: () => void;
+  }>;
 }) {
   const [filterPreferences, setFilterPreferences] = useState<TimelineFilterPreferences>(() =>
     loadTimelineFilterPreferences(sessionKey)
   );
   const { activeFilters, showTokenUsage } = filterPreferences;
   const [expandedEvents, setExpandedEvents] = useState<Set<string>>(() => new Set());
+  const [dismissedAutoExpandedAgentEvent, setDismissedAutoExpandedAgentEvent] = useState<string | null>(null);
   const [eventLimit, setEventLimit] = useState(INITIAL_EVENT_LIMIT);
+  const [chatPreferences, setChatPreferences] = useState(() => loadChatPreferences(sessionKey));
+  const { visible: chatVisible, pinned: chatPinned } = chatPreferences;
   const timelineRef = useRef<HTMLDivElement>(null);
   const displayEvents = useMemo<TimelineEvent[]>(
     () => deduplicateTimelineEvents(
@@ -49,8 +99,28 @@ export default function DesktopTimeline({
   const visibleEvents = useMemo(() => {
     const effectiveFilters = new Set(activeFilters);
     if (matchTarget) effectiveFilters.add(matchTarget.eventKind);
-    return visibleTimelineEvents(displayEvents, effectiveFilters, showTokenUsage);
+    const normallyVisible = new Set(visibleTimelineEvents(displayEvents, effectiveFilters, showTokenUsage));
+    const localCommandIds = new Set(displayEvents.flatMap((event) =>
+      event.kind === "shell_command" && event.toolName === "local_command" && event.callId
+        ? [event.callId]
+        : [],
+    ));
+    // Session-command results are part of the command interaction, not the
+    // noisy general tool-output stream controlled by the output filter.
+    return displayEvents.filter((event) => {
+      if (normallyVisible.has(event)) return true;
+      if (event.kind !== "tool_output" || !event.callId) return false;
+      return localCommandIds.has(event.callId);
+    });
   }, [activeFilters, displayEvents, matchTarget, showTokenUsage]);
+  const latestConversationEvent = useMemo(
+    () => displayEvents.find((event) => event.kind === "agent_message" || event.kind === "user_message"),
+    [displayEvents],
+  );
+  const autoExpandedAgentEvent = latestConversationEvent?.kind === "agent_message"
+    && timelineEventIdentity(latestConversationEvent) !== dismissedAutoExpandedAgentEvent
+    ? timelineEventIdentity(latestConversationEvent)
+    : null;
   const page = paginateTimelineEvents(
     visibleEvents,
     matchTarget ? Number.POSITIVE_INFINITY : eventLimit,
@@ -66,6 +136,14 @@ export default function DesktopTimeline({
     }, 80);
     return () => window.clearTimeout(timer);
   }, [matchTarget]);
+
+  function updateChatPreferences(change: Partial<ChatPreferences>) {
+    setChatPreferences((current) => {
+      const next = { ...current, ...change };
+      saveChatPreferences(sessionKey, next);
+      return next;
+    });
+  }
 
   function toggleFilter(key: string) {
     setFilterPreferences((current) => {
@@ -88,14 +166,27 @@ export default function DesktopTimeline({
 
   return (
     <div className="timeline-panel">
-      <Toolbar
-        events={events}
-        activeFilters={activeFilters}
-        showTokenUsage={showTokenUsage}
-        onToggleFilter={toggleFilter}
-        onToggleTokenUsage={toggleTokenUsage}
-        onCollapseAll={() => setExpandedEvents(new Set())}
-      />
+      <div className="desktop-timeline-live-header">
+        <Toolbar
+          events={events}
+          activeFilters={activeFilters}
+          showTokenUsage={showTokenUsage}
+          onToggleFilter={toggleFilter}
+          onToggleTokenUsage={toggleTokenUsage}
+          onCollapseAll={() => setExpandedEvents(new Set())}
+          liveChat={liveConversation ? {
+            visible: chatVisible,
+            pinned: chatPinned,
+            onVisibleChange: (visible) => updateChatPreferences({ visible }),
+            onPinnedChange: (pinned) => updateChatPreferences({ pinned }),
+          } : undefined}
+        />
+        {liveConversation && cloneElement(liveConversation, {
+          visible: chatVisible,
+          pinned: chatPinned,
+          onNeedsAttention: () => updateChatPreferences({ visible: true }),
+        })}
+      </div>
       <div className="timeline" ref={timelineRef}>
         {page.rendered.map((event) => (
           <DesktopTimelineEntry
@@ -105,9 +196,10 @@ export default function DesktopTimeline({
             contextText={event.kind === "file_change" ? precedingUserRequest(events, event.ts) : undefined}
             matched={targetMatchesEvent(matchTarget, event)}
             matchRequestKey={targetMatchesEvent(matchTarget, event) ? targetRequestKey(matchTarget) : null}
-            expanded={expandedEvents.has(timelineEventIdentity(event))}
+            expanded={expandedEvents.has(timelineEventIdentity(event)) || autoExpandedAgentEvent === timelineEventIdentity(event)}
             onExpandedChange={(nextExpanded) => {
               const identity = timelineEventIdentity(event);
+              if (!nextExpanded && autoExpandedAgentEvent === identity) setDismissedAutoExpandedAgentEvent(identity);
               setExpandedEvents((current) => {
                 const next = new Set(current);
                 if (nextExpanded) next.add(identity);
@@ -188,7 +280,24 @@ function DesktopTimelineEntry({
     );
   }
 
+  if (event.kind === "context_compaction") {
+    return (
+      <div
+        className="desktop-context-compaction"
+        data-event-key={eventKey(event)}
+        data-event-search-key={eventSearchKey(event)}
+        role="status"
+      >
+        <span className="desktop-context-compaction-mark" aria-hidden="true">...</span>
+        <span>Context compacted</span>
+        <small>agent continuing with a handoff</small>
+        <time>{formatTime(event.ts)}</time>
+      </div>
+    );
+  }
+
   const style = entryStyle(event);
+  const userImages = event.kind === "user_message" ? event.images || [] : [];
   return (
     <div
       className={`timeline-entry ${style.className}${forcedOpen ? " desktop-search-match" : ""}${highlighted ? " highlighted" : ""}`}
@@ -231,12 +340,35 @@ function DesktopTimelineEntry({
           ) : event.kind === "tool_output" ? (
             <ColoredText text={toDisplayString(event.output)} />
           ) : (
-            event.text
+            <>
+              {event.text}
+              {userImages.length > 0 && (
+                <div className="desktop-message-images">
+                  {userImages.map((image, index) => (
+                    <button
+                      key={`${image}-${index}`}
+                      type="button"
+                      className="desktop-message-image"
+                      title="Copy image"
+                      onClick={() => void copyImage(image)}
+                    >
+                      <img src={image} alt={`User image ${index + 1}`} />
+                    </button>
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>
     </div>
   );
+}
+
+async function copyImage(url: string) {
+  const response = await fetch(url);
+  const blob = await response.blob();
+  await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
 }
 
 function eventKey(event: TimelineEvent): string {

@@ -18,6 +18,16 @@ export function parseClaudeEvent(
   const ts = obj.timestamp as string;
   const type = obj.type as string;
 
+  if (type === "system" && obj.subtype === "local_command") {
+    const output = localCommandOutput(obj.content);
+    return output ? [{
+      kind: "tool_output",
+      ts,
+      output,
+      callId: typeof obj.parentUuid === "string" ? obj.parentUuid : "",
+    }] : [];
+  }
+
   // Claude records its condensed handoff as a system away_summary rather than
   // a normal assistant message. It is the equivalent of Codex's compaction.
   if (type === "system" && obj.subtype === "away_summary") {
@@ -33,9 +43,22 @@ export function parseClaudeEvent(
     const message = obj.message as Record<string, unknown> | undefined;
     if (typeof message?.content === "string") {
       const text = message.content as string;
+      const command = parseLocalCommand(text);
+      if (command) {
+        return [{
+          kind: "shell_command",
+          ts,
+          cmd: command,
+          workdir: typeof obj.cwd === "string" ? obj.cwd : "",
+          callId: typeof obj.uuid === "string" ? obj.uuid : "",
+          toolName: "local_command",
+          description: "Claude session command",
+        }];
+      }
       if (
         text.includes("<task-notification>") ||
-        text.includes("<system-reminder>")
+        text.includes("<system-reminder>") ||
+        text.includes("<local-command-caveat>")
       ) {
         return [];
       }
@@ -65,7 +88,8 @@ export function parseClaudeEvent(
         const text = textParts.join("\n");
         if (
           text.includes("<task-notification>") ||
-          text.includes("<system-reminder>")
+          text.includes("<system-reminder>") ||
+          text.includes("<local-command-caveat>")
         ) {
           return [];
         }
@@ -128,6 +152,19 @@ function extractImages(obj: Record<string, unknown>): string[] {
     }
   }
   return images;
+}
+
+function parseLocalCommand(content: string): string | null {
+  const name = content.match(/<command-name>\s*(\/[^<\s]+)\s*<\/command-name>/)?.[1];
+  if (!name) return null;
+  const args = content.match(/<command-args>\s*([\s\S]*?)\s*<\/command-args>/)?.[1]?.trim();
+  return args ? `${name} ${args}` : name;
+}
+
+function localCommandOutput(content: unknown): string {
+  if (typeof content !== "string") return "";
+  const match = content.match(/<local-command-(?:stdout|stderr)>\s*([\s\S]*?)\s*<\/local-command-(?:stdout|stderr)>/);
+  return match?.[1]?.trim() || "";
 }
 
 /**

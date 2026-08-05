@@ -77,6 +77,12 @@ pub(crate) struct DesktopSettings {
     open_router_key_configured: bool,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DesktopAppearanceSettings {
+    appearance: DesktopAppearance,
+}
+
 impl DesktopSettings {
     pub(crate) fn new(settings: &DesktopSettingsFile, secrets: &ExplainSecrets) -> Self {
         Self {
@@ -307,6 +313,18 @@ pub(crate) fn get_desktop_settings(app: tauri::AppHandle) -> Result<DesktopSetti
     let (settings, secrets) =
         load_desktop_settings(&desktop_settings_path(&app)?, &SystemSecretStore)?;
     Ok(DesktopSettings::new(&settings, &secrets))
+}
+
+/// Appearance lives in the regular settings file. Do not unlock Keychain just
+/// to paint the first frame of the app after every debug rebuild.
+#[tauri::command]
+pub(crate) fn get_desktop_appearance(
+    app: tauri::AppHandle,
+) -> Result<DesktopAppearanceSettings, String> {
+    let settings = read_desktop_settings(&desktop_settings_path(&app)?)?;
+    Ok(DesktopAppearanceSettings {
+        appearance: settings.appearance,
+    })
 }
 
 #[tauri::command]

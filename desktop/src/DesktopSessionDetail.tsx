@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import type { AppEvent, FileChangeEvent, SessionMeta } from "@/lib/types";
@@ -9,7 +9,8 @@ import DesktopFileTree from "./DesktopFileTree";
 import DesktopFilesCanvas from "./DesktopFilesCanvas";
 import DesktopTimeline from "./DesktopTimeline";
 import DesktopTerminal from "./DesktopTerminal";
-import { getGitBranch, readSession } from "./desktop-api";
+import DesktopLiveConversation from "./DesktopLiveConversation";
+import { getGitBranch, readSession, stopTerminal } from "./desktop-api";
 import { startWindowDrag } from "./window-drag";
 
 export default function DesktopSessionDetail({
@@ -48,6 +49,7 @@ export default function DesktopSessionDetail({
     baseTarget: SessionMatchTarget | null;
     target: SessionMatchTarget;
   } | null>(null);
+  const [approvalCommand, setApprovalCommand] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState(false);
   const fileTreeRef = useRef<HTMLDivElement>(null);
   const resizeHandleRef = useRef<HTMLDivElement>(null);
@@ -208,6 +210,38 @@ export default function DesktopSessionDetail({
   const id = meta?.kind === "session_start" ? meta.id : session.id;
   const timestamp = meta?.kind === "session_start" ? meta.ts : session.timestamp;
   const currentSessionKey = terminalSessionKey(session, session.id);
+  const approvalTimelineTarget = useMemo(() => {
+    if (!approvalCommand) return null;
+    const matchingEvent = [...events].reverse().find((event) =>
+      event.kind === "shell_command" && event.cmd.trim() === approvalCommand.trim(),
+    );
+    return matchingEvent ? {
+      eventTs: matchingEvent.ts,
+      eventKind: matchingEvent.kind,
+    } : null;
+  }, [approvalCommand, events]);
+  const handleApprovalChange = useCallback((command: string | null) => {
+    setApprovalCommand(command);
+  }, []);
+  const handleContextCompaction = useCallback(() => {
+    setEvents((current) => [
+      ...current,
+      {
+        kind: "context_compaction",
+        ts: new Date().toISOString(),
+        text: `${session.source === "codex" ? "Codex" : "Claude"} compacted the conversation context.`,
+      },
+    ]);
+  }, [session.source]);
+  const handleLiveTimelineEvent = useCallback((event: AppEvent) => {
+    setEvents((current) => [...current, event]);
+  }, []);
+  const tokenUsage = useMemo(() => {
+    const latest = [...events].reverse().find((event) => event.kind === "token_usage");
+    return latest?.kind === "token_usage"
+      ? { total: latest.total_tokens, input: latest.total_input, output: latest.total_output }
+      : undefined;
+  }, [events]);
   const visibleTerminals = terminals.filter((terminal) => terminal.sessionKey === currentSessionKey);
   const activeTerminalKey = activeTerminalBySession[currentSessionKey];
   const visibleTerminal = visibleTerminals.find((terminal) => terminal.key === activeTerminalKey) || visibleTerminals[0] || null;
@@ -231,6 +265,7 @@ export default function DesktopSessionDetail({
 
   function closeActiveTerminal() {
     if (!visibleTerminal) return;
+    void stopTerminal(nativeTerminalId(visibleTerminal));
     setTerminals((current) => {
       const next = current.filter((terminal) => terminal.key !== visibleTerminal.key);
       const remaining = next.filter((terminal) => terminal.sessionKey === currentSessionKey);
@@ -403,9 +438,22 @@ export default function DesktopSessionDetail({
             events={events}
             sessionCwd={cwd}
             sessionKey={`${session.source}:${session.id}`}
-            matchTarget={fileTimelineSelection?.baseTarget === matchTarget
+            matchTarget={approvalTimelineTarget || (fileTimelineSelection?.baseTarget === matchTarget
               ? fileTimelineSelection.target
-              : matchTarget}
+              : matchTarget)}
+            liveConversation={session.source === "codex" || session.source === "claude-code" ? (
+              <DesktopLiveConversation
+                key={`${session.source}:${session.id}`}
+                provider={session.source}
+                sessionKey={`${session.source}:${session.id}`}
+                threadId={session.id}
+                cwd={cwd}
+                onApprovalChange={handleApprovalChange}
+                onContextCompaction={handleContextCompaction}
+                onTimelineEvent={handleLiveTimelineEvent}
+                tokenUsage={tokenUsage}
+              />
+            ) : undefined}
           />
         </div>
       )}
@@ -495,6 +543,7 @@ export default function DesktopSessionDetail({
                   sessionCwd={terminal.cwd}
                   sessionId={terminal.id}
                   sessionSource={terminal.source}
+                  terminalId={nativeTerminalId(terminal)}
                   panelHeight={snapped ? -1 : terminalHeight}
                   prefillResume={terminal.prefillResume}
                   paneCount={isSplit ? panes.length : 1}
@@ -523,7 +572,16 @@ function terminalSessionKey(session: SessionMeta, id: string): string {
 
 function firstTerminalSession(session: SessionMeta, id: string, cwd: string): TerminalSession {
   const sessionKey = terminalSessionKey(session, id);
-  return { key: sessionKey, sessionKey, cwd, id, source: session.source, prefillResume: true };
+  // Live sessions are driven by native structured harness adapters. The dock
+  // remains an independent shell instead of opening another resumed client.
+  return {
+    key: sessionKey,
+    sessionKey,
+    cwd,
+    id,
+    source: session.source,
+    prefillResume: false,
+  };
 }
 
 function groupTerminalPanes(terminals: TerminalSession[]): [string, TerminalSession[]][] {
@@ -532,6 +590,10 @@ function groupTerminalPanes(terminals: TerminalSession[]): [string, TerminalSess
     groups.set(terminal.sessionKey, [...(groups.get(terminal.sessionKey) || []), terminal]);
   }
   return [...groups.entries()];
+}
+
+function nativeTerminalId(terminal: TerminalSession): string {
+  return `terminal-${terminal.key}`;
 }
 
 function TerminalGlyph() {

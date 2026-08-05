@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseEvent, extractPatchFiles, structuredPatchToPatch } from "./parser";
+import { parseEvent, extractPatchFiles, structuredPatchToPatch } from "./codex-parser";
 
 // Helper: build patch header strings at runtime so the literal "*** Verb File:"
 // pattern doesn't appear in this source file (which would confuse agent-vis's

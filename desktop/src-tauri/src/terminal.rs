@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, State};
 
 const MAX_TERMINAL_ID_LENGTH: usize = 160;
+const MAX_TERMINAL_TRANSCRIPT_BYTES: usize = 256 * 1024;
 
 pub(crate) struct TerminalState {
     terminals: Mutex<HashMap<String, Child>>,
@@ -183,20 +184,35 @@ pub(crate) fn start_terminal(
     app: AppHandle,
     state: State<'_, TerminalState>,
     request: StartTerminalRequest,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let terminal_id = validate_terminal_id(&request.terminal_id)?.to_owned();
+    // A webview reload should attach to the existing PTY, not SIGHUP the
+    // session it is displaying. Explicit close still reaches stop_terminal.
+    if state
+        .terminals
+        .lock()
+        .map_err(|_| "Terminal state is unavailable.".to_owned())?
+        .contains_key(&terminal_id)
+    {
+        if let Some(data) = TERMINAL_TRANSCRIPTS
+            .lock()
+            .ok()
+            .and_then(|transcripts| transcripts.get(&terminal_id).cloned())
+        {
+            let _ = app.emit(
+                "terminal-output",
+                TerminalOutput {
+                    terminal_id: terminal_id.clone(),
+                    data,
+                },
+            );
+        }
+        return Ok(false);
+    }
     let roots = trusted_workspace_roots()?;
     let workspace_root = validate_workspace_root(&request.workspace_root, &roots)?;
     let (child, input, stdout) = spawn_shell(&workspace_root)?;
 
-    if let Some(existing) = state
-        .terminals
-        .lock()
-        .map_err(|_| "Terminal state is unavailable.".to_owned())?
-        .remove(&terminal_id)
-    {
-        stop_terminal_process(existing);
-    }
     state
         .terminals
         .lock()
@@ -219,6 +235,7 @@ pub(crate) fn start_terminal(
                     if data.is_empty() {
                         continue;
                     }
+                    append_terminal_transcript(&output_id, &data);
                     let _ = app_for_output.emit(
                         "terminal-output",
                         TerminalOutput {
@@ -238,7 +255,7 @@ pub(crate) fn start_terminal(
         .lock()
         .map_err(|_| "Terminal state is unavailable.".to_owned())?
         .insert(terminal_id, input);
-    Ok(())
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -259,6 +276,24 @@ mod tests {
 type TerminalInput = Arc<Mutex<File>>;
 static TERMINAL_INPUTS: std::sync::LazyLock<Mutex<HashMap<String, TerminalInput>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+static TERMINAL_TRANSCRIPTS: std::sync::LazyLock<Mutex<HashMap<String, String>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn append_terminal_transcript(terminal_id: &str, data: &str) {
+    let Ok(mut transcripts) = TERMINAL_TRANSCRIPTS.lock() else {
+        return;
+    };
+    let transcript = transcripts.entry(terminal_id.to_owned()).or_default();
+    transcript.push_str(data);
+    if transcript.len() <= MAX_TERMINAL_TRANSCRIPT_BYTES {
+        return;
+    }
+    let mut start = transcript.len() - MAX_TERMINAL_TRANSCRIPT_BYTES;
+    while !transcript.is_char_boundary(start) {
+        start += 1;
+    }
+    transcript.drain(..start);
+}
 
 #[tauri::command]
 pub(crate) fn write_terminal(request: TerminalInputRequest) -> Result<(), String> {
@@ -318,6 +353,9 @@ pub(crate) fn stop_terminal(
         .lock()
         .map_err(|_| "Terminal state is unavailable.".to_owned())?
         .remove(terminal_id);
+    let _ = TERMINAL_TRANSCRIPTS
+        .lock()
+        .map(|mut transcripts| transcripts.remove(terminal_id));
     if let Some(child) = state
         .terminals
         .lock()

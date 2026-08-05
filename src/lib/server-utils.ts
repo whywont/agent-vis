@@ -2,7 +2,7 @@ import fs from "fs";
 import readline from "readline";
 import path from "path";
 import os from "os";
-import { parseEvent } from "./parser";
+import { parseEvent } from "./codex-parser";
 import { parseClaudeEvent, buildClaudeSessionStart, createTokenAccumulator } from "./claude-parser";
 import { deduplicateUserMessages, deduplicateAgentMessages } from "./dedup";
 import { isInsideDir } from "./path-safety";

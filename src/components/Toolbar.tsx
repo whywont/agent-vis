@@ -11,6 +11,12 @@ interface ToolbarProps {
   onToggleFilter: (key: string) => void;
   onToggleTokenUsage: () => void;
   onCollapseAll: () => void;
+  liveChat?: {
+    visible: boolean;
+    pinned: boolean;
+    onVisibleChange: (visible: boolean) => void;
+    onPinnedChange: (pinned: boolean) => void;
+  };
 }
 
 const FILTERS = [
@@ -29,11 +35,13 @@ export default function Toolbar({
   onToggleFilter,
   onToggleTokenUsage,
   onCollapseAll,
+  liveChat,
 }: ToolbarProps) {
   const toolbarRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const [compact, setCompact] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [chatMenuOpen, setChatMenuOpen] = useState(false);
   const fileChanges = events.filter((e) => e.kind === "file_change").length;
   const shellCmds = events.filter((e) => e.kind === "shell_command").length;
   const userMsgs = events.filter((e) => e.kind === "user_message").length;
@@ -54,12 +62,18 @@ export default function Toolbar({
   }, []);
 
   useEffect(() => {
-    if (!menuOpen) return;
+    if (!menuOpen && !chatMenuOpen) return;
     function onPointerDown(event: PointerEvent) {
-      if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false);
+      if (!menuRef.current?.contains(event.target as Node)) {
+        setMenuOpen(false);
+        setChatMenuOpen(false);
+      }
     }
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") setMenuOpen(false);
+      if (event.key === "Escape") {
+        setMenuOpen(false);
+        setChatMenuOpen(false);
+      }
     }
     document.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);
@@ -67,7 +81,7 @@ export default function Toolbar({
       document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [menuOpen]);
+  }, [chatMenuOpen, menuOpen]);
 
   const selectedCount = FILTERS.filter((filter) => activeFilters.has(filter.key)).length + Number(showTokenUsage);
 
@@ -165,6 +179,42 @@ export default function Toolbar({
           </button>
         </div>
       )}
+      {liveChat && <div className="toolbar-chat-menu" ref={menuRef}>
+        <button
+          className={`filter-btn toolbar-chat-trigger${chatMenuOpen ? " active" : ""}${liveChat.pinned ? " pinned" : ""}`}
+          onClick={() => setChatMenuOpen((open) => !open)}
+          aria-label="Chat options"
+          aria-haspopup="menu"
+          aria-expanded={chatMenuOpen}
+          title="Chat options"
+        >
+          <span className="toolbar-vertical-ellipsis" aria-hidden="true" />
+        </button>
+        {chatMenuOpen && <div className="toolbar-filter-dropdown toolbar-chat-dropdown" role="menu">
+          <button
+            className="toolbar-filter-option"
+            role="menuitemcheckbox"
+            aria-checked={liveChat.pinned}
+            onClick={() => {
+              liveChat.onPinnedChange(!liveChat.pinned);
+              setChatMenuOpen(false);
+            }}
+          >
+            <span className={`toolbar-pin-icon${liveChat.pinned ? " active" : ""}`} aria-hidden="true" />
+            <span>{liveChat.pinned ? "Unpin chat" : "Pin chat with toolbar"}</span>
+          </button>
+          <button
+            className="toolbar-filter-option"
+            onClick={() => {
+              liveChat.onVisibleChange(!liveChat.visible);
+              setChatMenuOpen(false);
+            }}
+          >
+            <span className="toolbar-filter-check">{liveChat.visible ? "−" : "+"}</span>
+            <span>{liveChat.visible ? "Hide chat" : "Show chat"}</span>
+          </button>
+        </div>}
+      </div>}
     </div>
   );
 }
