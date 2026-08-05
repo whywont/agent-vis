@@ -9,7 +9,7 @@ import DesktopFileTree from "./DesktopFileTree";
 import DesktopFilesCanvas from "./DesktopFilesCanvas";
 import DesktopTimeline from "./DesktopTimeline";
 import DesktopTerminal from "./DesktopTerminal";
-import DesktopLiveConversation from "./DesktopCodexConversation";
+import DesktopLiveConversation from "./DesktopLiveConversation";
 import { getGitBranch, readSession, stopTerminal } from "./desktop-api";
 import { startWindowDrag } from "./window-drag";
 

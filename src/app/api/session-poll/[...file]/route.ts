@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
 const MAX_LINE_CHARS = 10 * 1024 * 1024;
 import { resolveSessionFile } from "@/lib/server-utils";
-import { parseEvent } from "@/lib/parser";
+import { parseEvent } from "@/lib/codex-parser";
 import { parseClaudeEvent, createTokenAccumulator } from "@/lib/claude-parser";
 import { deduplicateUserMessages, deduplicateAgentMessages } from "@/lib/dedup";
 import type { AppEvent } from "@/lib/types";

@@ -1,6 +1,6 @@
 import { buildClaudeSessionStart, createTokenAccumulator, parseClaudeEvent } from "@/lib/claude-parser";
 import { deduplicateAgentMessages, deduplicateUserMessages } from "@/lib/dedup";
-import { parseEvent } from "@/lib/parser";
+import { parseEvent } from "@/lib/codex-parser";
 import type { AppEvent, SessionMeta } from "@/lib/types";
 
 export interface SessionRecordFile {
