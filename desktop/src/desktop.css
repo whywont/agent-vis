@@ -21,6 +21,12 @@
   margin-bottom: calc(var(--terminal-sessions-height) + 6px);
 }
 
+/* The persistent dock is portaled to the app body for both placements. Reserve
+   the bottom lane only while it is below the detail view. */
+#app:has(.desktop-terminal-bottom) .desktop-app-body > #main-content {
+  margin-bottom: calc(var(--terminal-sessions-height) + 6px);
+}
+
 body.terminal-over-sessions #sidebar {
   outline: 1px dashed var(--accent);
   outline-offset: -4px;
@@ -789,11 +795,6 @@ body.terminal-over-sessions #sidebar {
   height: 100%;
   min-width: 82px;
   padding: 0 14px;
-}
-
-.desktop-header-tabs .desktop-terminal-toggle {
-  align-self: center;
-  margin-right: 4px;
 }
 
 .desktop-settings-page {
@@ -1574,19 +1575,27 @@ body.terminal-over-sessions #sidebar {
   border-radius: 8px;
 }
 
+.desktop-terminal-bottom {
+  position: absolute;
+  min-height: 0;
+  margin: 0;
+}
+
 /* Keep inactive session terminals alive without leaving an empty dock onscreen.
    Returning to their session reuses the same PTY and xterm instance. */
 .desktop-terminal-parked { display: none; }
 
 .desktop-terminal-panel-header {
   position: relative;
-  z-index: 1;
+  z-index: 10;
   display: flex;
   height: 28px;
   flex-shrink: 0;
   align-items: center;
   border-bottom: 1px solid #2d2d2d;
   background: #181818;
+  cursor: grab;
+  pointer-events: auto;
 }
 
 .desktop-terminal-panel-tab {
@@ -1612,6 +1621,7 @@ body.terminal-over-sessions #sidebar {
 }
 
 .desktop-terminal-panel-tab:active { cursor: grabbing; }
+.desktop-terminal-panel-header:active { cursor: grabbing; }
 
 .desktop-terminal-add {
   width: 28px;
@@ -1741,23 +1751,31 @@ body.terminal-dragging * { cursor: grabbing !important; }
   position: absolute;
   right: 0;
   left: 0;
-  height: 7px;
-  margin-top: -4px;
+  height: 12px;
+  margin-top: -6px;
   cursor: row-resize;
-  z-index: 10;
+  z-index: 20;
 }
 
 .desktop-terminal-resize-handle::after {
-  display: block;
-  width: 32px;
-  height: 2px;
-  margin: 2px auto 0;
-  border-radius: 999px;
-  background: #3d3d3d;
-  content: "";
+  display: grid;
+  width: 28px;
+  height: 12px;
+  margin: 0 auto;
+  place-items: center;
+  border: 1px solid #3d3d3d;
+  border-radius: 0 0 5px 5px;
+  background: #252526;
+  color: #777777;
+  content: "↕";
+  font: 12px/1 var(--font-mono);
 }
 
-.desktop-terminal-resize-handle:hover::after { background: #777777; }
+.desktop-terminal-resize-handle:hover::after {
+  border-color: var(--accent-dim);
+  background: #333333;
+  color: var(--accent);
+}
 
 .desktop-terminal-container .xterm,
 .desktop-terminal-container .xterm-screen { height: 100%; }

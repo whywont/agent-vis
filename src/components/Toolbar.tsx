@@ -11,6 +11,7 @@ interface ToolbarProps {
   onToggleFilter: (key: string) => void;
   onToggleTokenUsage: () => void;
   onCollapseAll: () => void;
+  onOpenTerminal?: () => void;
   liveChat?: {
     visible: boolean;
     pinned: boolean;
@@ -35,6 +36,7 @@ export default function Toolbar({
   onToggleFilter,
   onToggleTokenUsage,
   onCollapseAll,
+  onOpenTerminal,
   liveChat,
 }: ToolbarProps) {
   const toolbarRef = useRef<HTMLDivElement>(null);
@@ -213,6 +215,19 @@ export default function Toolbar({
             <span className="toolbar-filter-check">{liveChat.visible ? "−" : "+"}</span>
             <span>{liveChat.visible ? "Hide chat" : "Show chat"}</span>
           </button>
+          {onOpenTerminal && <>
+            <div className="toolbar-filter-dropdown-sep" />
+            <button
+              className="toolbar-filter-option"
+              onClick={() => {
+                onOpenTerminal();
+                setChatMenuOpen(false);
+              }}
+            >
+              <span className="toolbar-filter-check">&gt;_</span>
+              <span>Terminal</span>
+            </button>
+          </>}
         </div>}
       </div>}
     </div>

@@ -262,24 +262,8 @@ function DesktopMacTitlebar({
           >
             Files
           </button>
-          <button
-            className={`desktop-terminal-toggle${terminalOpen ? " active" : ""}`}
-            onClick={onTerminalOpen}
-            title="Open terminal for this session"
-            aria-pressed={terminalOpen}
-          >
-            <TerminalGlyph />
-          </button>
         </div>
       )}
     </header>
-  );
-}
-
-function TerminalGlyph() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="m5 5 6 7-6 7M13 19h6" />
-    </svg>
   );
 }

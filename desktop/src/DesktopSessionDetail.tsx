@@ -38,10 +38,11 @@ export default function DesktopSessionDetail({
   const [loadedBatches, setLoadedBatches] = useState(0);
   const [branch, setBranch] = useState<string | null>(null);
   const [filePanelOpen, setFilePanelOpen] = useState(true);
-  const [terminalHeight, setTerminalHeight] = useState(224);
+  // Match the resize floor so opening a terminal never takes more room than
+  // the user can immediately reclaim.
+  const [terminalHeight, setTerminalHeight] = useState(140);
   const [terminalPlacement, setTerminalPlacement] = useState<"bottom" | "sessions">("bottom");
-  const [terminalDragging, setTerminalDragging] = useState(false);
-  const [sessionsDockBounds, setSessionsDockBounds] = useState<CSSProperties | null>(null);
+  const [terminalDockBounds, setTerminalDockBounds] = useState<CSSProperties | null>(null);
   const [terminals, setTerminals] = useState<TerminalSession[]>([]);
   const [activeTerminalBySession, setActiveTerminalBySession] = useState<Record<string, string>>({});
   const [splitTerminalSessions, setSplitTerminalSessions] = useState<Set<string>>(() => new Set());
@@ -113,22 +114,31 @@ export default function DesktopSessionDetail({
   }, [activeTab, error, filePanelOpen, loading]);
 
   useLayoutEffect(() => {
-    if (terminalPlacement !== "sessions") return;
     const app = document.getElementById("app");
     const body = document.querySelector<HTMLElement>(".desktop-app-body");
     const sidebar = document.getElementById("sidebar");
+    const main = document.getElementById("main-content");
     const filesPanel = fileTreeRef.current;
     const timelinePanel = document.querySelector<HTMLElement>(".timeline-panel");
-    if (!app || !body || !sidebar || !filesPanel || !timelinePanel) return;
+    if (!app || !body || !main) return;
     const dockBody = body;
-    const dockSidebar = sidebar;
-    const dockFilesPanel = filesPanel;
-    const dockTimelinePanel = timelinePanel;
+    const dockMain = main;
     function updateBounds() {
       const bodyBounds = dockBody.getBoundingClientRect();
-      const sidebarBounds = dockSidebar.getBoundingClientRect();
-      const timelineBounds = dockTimelinePanel.getBoundingClientRect();
-      setSessionsDockBounds({
+      if (terminalPlacement === "bottom") {
+        const mainBounds = dockMain.getBoundingClientRect();
+        setTerminalDockBounds({
+          left: mainBounds.left - bodyBounds.left,
+          bottom: 0,
+          width: mainBounds.width,
+          height: terminalHeight,
+        });
+        return;
+      }
+      const sidebarBounds = sidebar?.getBoundingClientRect();
+      const timelineBounds = timelinePanel?.getBoundingClientRect();
+      if (!sidebarBounds || !timelineBounds) return;
+      setTerminalDockBounds({
         left: sidebarBounds.left - bodyBounds.left,
         bottom: 0,
         width: timelineBounds.left - sidebarBounds.left - 6,
@@ -139,9 +149,10 @@ export default function DesktopSessionDetail({
     app.style.setProperty("--terminal-sessions-height", `${terminalHeight}px`);
     const observer = new ResizeObserver(updateBounds);
     observer.observe(dockBody);
-    observer.observe(dockSidebar);
-    observer.observe(dockFilesPanel);
-    observer.observe(dockTimelinePanel);
+    observer.observe(dockMain);
+    if (sidebar) observer.observe(sidebar);
+    if (filesPanel) observer.observe(filesPanel);
+    if (timelinePanel) observer.observe(timelinePanel);
     return () => {
       observer.disconnect();
       app.style.removeProperty("--terminal-sessions-height");
@@ -167,6 +178,7 @@ export default function DesktopSessionDetail({
 
   function startTerminalDrag(event: React.MouseEvent<HTMLElement>) {
     if (event.button !== 0) return;
+    if ((event.target as HTMLElement).closest("button:not(.desktop-terminal-panel-tab)")) return;
     event.preventDefault();
     const startX = event.clientX;
     const startY = event.clientY;
@@ -174,7 +186,6 @@ export default function DesktopSessionDetail({
     function onMove(moveEvent: MouseEvent) {
       if (!dragging && Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY) > 5) {
         dragging = true;
-        setTerminalDragging(true);
         document.body.classList.add("terminal-dragging");
       }
       const sessions = document.getElementById("sidebar")?.getBoundingClientRect();
@@ -195,7 +206,6 @@ export default function DesktopSessionDetail({
           && upEvent.clientY <= sessions.bottom;
         setTerminalPlacement(droppedInSessions ? "sessions" : "bottom");
       }
-      setTerminalDragging(false);
       document.body.classList.remove("terminal-dragging");
       document.body.classList.remove("terminal-over-sessions");
       document.removeEventListener("mousemove", onMove);
@@ -379,14 +389,6 @@ export default function DesktopSessionDetail({
           >
             Files
           </button>
-          <button
-            className={`desktop-terminal-toggle${visibleTerminal ? " active" : ""}`}
-            onClick={onTerminalOpen}
-            title="Open terminal for this session"
-            aria-pressed={Boolean(visibleTerminal)}
-          >
-            <TerminalGlyph />
-          </button>
         </div>
       </div>
       {loading ? (
@@ -454,20 +456,20 @@ export default function DesktopSessionDetail({
                 tokenUsage={tokenUsage}
               />
             ) : undefined}
+            onOpenTerminal={onTerminalOpen}
           />
         </div>
       )}
       {/* Keep terminal renderers mounted while browsing a session without one.
           Unmounting them here used to look like navigation but also sent the
           native stop command, killing the shell and its resumed agent. */}
-      {terminalOpen && terminals.length > 0 && terminalPlacement === "bottom" && terminalPanel("bottom")}
-      {terminalOpen && terminals.length > 0 && terminalPlacement === "sessions" && terminalSidePanel()}
+      {terminalOpen && terminals.length > 0 && terminalDock()}
     </div>
   );
 
-  function terminalSidePanel() {
+  function terminalDock() {
     const target = document.querySelector<HTMLElement>(".desktop-app-body");
-    return target ? createPortal(terminalPanel("sessions"), target) : null;
+    return target ? createPortal(terminalPanel(terminalPlacement), target) : null;
   }
 
   function terminalPanel(placement: "bottom" | "sessions") {
@@ -475,21 +477,18 @@ export default function DesktopSessionDetail({
     const parked = !visibleTerminal;
     return (
       <section
-        className={`desktop-terminal-panel${snapped ? " desktop-terminal-sessions" : ""}${parked ? " desktop-terminal-parked" : ""}`}
-        style={snapped ? sessionsDockBounds || { visibility: "hidden" } : { height: terminalHeight }}
+        className={`desktop-terminal-panel${snapped ? " desktop-terminal-sessions" : " desktop-terminal-bottom"}${parked ? " desktop-terminal-parked" : ""}`}
+        style={terminalDockBounds || { visibility: "hidden" }}
         aria-label="Terminal panel"
       >
-        {!snapped && (
-          <div
-            className="desktop-terminal-resize-handle"
-            onMouseDown={resizeTerminal}
-            title="Drag to resize terminal"
-          />
-        )}
-          <div className="desktop-terminal-panel-header">
+        <div
+          className="desktop-terminal-resize-handle"
+          onMouseDown={resizeTerminal}
+          title="Drag to resize terminal"
+        />
+          <div className="desktop-terminal-panel-header" onMouseDown={startTerminalDrag}>
             <button
               className="desktop-terminal-panel-tab active"
-              onMouseDown={startTerminalDrag}
               title={`Drag ${visibleTerminal?.source === "codex" ? "Codex" : "Claude"} terminal into Sessions to snap`}
             >
               <TerminalGlyph />
