@@ -49,6 +49,7 @@ export default function DesktopTimeline({
   matchTarget,
   liveConversation,
   onOpenTerminal,
+  terminalDisabled,
 }: {
   events: AppEvent[];
   sessionCwd: string;
@@ -60,8 +61,9 @@ export default function DesktopTimeline({
     onNeedsAttention?: () => void;
   }>;
   onOpenTerminal?: () => void;
+  terminalDisabled?: boolean;
 }) {
-  return <DesktopTimelineForSession key={sessionKey} events={events} sessionCwd={sessionCwd} sessionKey={sessionKey} matchTarget={matchTarget} liveConversation={liveConversation} onOpenTerminal={onOpenTerminal} />;
+  return <DesktopTimelineForSession key={sessionKey} events={events} sessionCwd={sessionCwd} sessionKey={sessionKey} matchTarget={matchTarget} liveConversation={liveConversation} onOpenTerminal={onOpenTerminal} terminalDisabled={terminalDisabled} />;
 }
 
 function DesktopTimelineForSession({
@@ -71,6 +73,7 @@ function DesktopTimelineForSession({
   matchTarget,
   liveConversation,
   onOpenTerminal,
+  terminalDisabled,
 }: {
   events: AppEvent[];
   sessionCwd: string;
@@ -82,6 +85,7 @@ function DesktopTimelineForSession({
     onNeedsAttention?: () => void;
   }>;
   onOpenTerminal?: () => void;
+  terminalDisabled?: boolean;
 }) {
   const [filterPreferences, setFilterPreferences] = useState<TimelineFilterPreferences>(() =>
     loadTimelineFilterPreferences(sessionKey)
@@ -179,6 +183,7 @@ function DesktopTimelineForSession({
           onToggleTokenUsage={toggleTokenUsage}
           onCollapseAll={() => setExpandedEvents(new Set())}
           onOpenTerminal={onOpenTerminal}
+          terminalDisabled={terminalDisabled}
           liveChat={liveConversation ? {
             visible: chatVisible,
             pinned: chatPinned,
