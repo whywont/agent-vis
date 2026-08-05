@@ -21,7 +21,9 @@ use sessions::{delete_session, list_sessions, read_session_records};
 use settings::{get_desktop_appearance, get_desktop_settings, save_desktop_settings};
 use tauri::Manager;
 use terminal::{resize_terminal, start_terminal, stop_terminal, write_terminal, TerminalState};
-use workspace::{get_git_branch, read_workspace_file, save_workspace_file};
+use workspace::{
+    get_git_branch, read_workspace_file, resolve_workspace_filepaths, save_workspace_file,
+};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -45,6 +47,7 @@ pub fn run() {
             save_desktop_settings,
             explain_diff,
             get_git_branch,
+            resolve_workspace_filepaths,
             read_workspace_file,
             save_workspace_file,
             start_terminal,

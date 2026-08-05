@@ -1,11 +1,12 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { AppEvent, FileChangeEvent } from "@/lib/types";
 import { timelineEventIdentity } from "@/lib/timeline-events";
 import { formatTime } from "@/utils/format";
 import DesktopDiffView from "./DesktopDiffView";
 import { precedingUserRequest } from "./explain-context";
 import { workspaceRelativePath } from "./workspace-path";
-import { desktopFileEntries, type DesktopFileEntry } from "./file-tree-events";
+import { desktopFileEntries, remapDesktopFileEntries, type DesktopFileEntry } from "./file-tree-events";
+import { resolveWorkspaceFilepaths } from "./desktop-api";
 
 type FileEntry = DesktopFileEntry;
 
@@ -91,8 +92,37 @@ export default function DesktopFileTree({
   onJumpToPatch: (event: FileChangeEvent) => void;
 }) {
   const [historyFile, setHistoryFile] = useState<FileEntry | null>(null);
+  const [resolvedPaths, setResolvedPaths] = useState<Map<string, string | null> | null>(null);
   const jumpIndexes = useRef(new Map<string, number>());
-  const files = useMemo(() => desktopFileEntries(events, sessionCwd), [events, sessionCwd]);
+  const recordedFiles = useMemo(() => desktopFileEntries(events, sessionCwd), [events, sessionCwd]);
+  const filepaths = useMemo(() => [...recordedFiles.keys()], [recordedFiles]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function resolvePaths() {
+      if (!sessionCwd || filepaths.length === 0) {
+        await Promise.resolve();
+        if (!cancelled) setResolvedPaths(new Map());
+        return;
+      }
+      try {
+        const resolved = await resolveWorkspaceFilepaths(sessionCwd, filepaths);
+        if (!cancelled) {
+          setResolvedPaths(new Map(filepaths.map((path, index) => [path, resolved[index] || null])));
+        }
+      } catch {
+        // Keep the timeline-derived list if a workspace is no longer accessible.
+        if (!cancelled) setResolvedPaths(new Map(filepaths.map((path) => [path, path])));
+      }
+    }
+    void resolvePaths();
+    return () => { cancelled = true; };
+  }, [filepaths, sessionCwd]);
+
+  const files = useMemo(() => resolvedPaths
+    ? remapDesktopFileEntries(recordedFiles, resolvedPaths)
+    : recordedFiles,
+  [recordedFiles, resolvedPaths]);
 
   const tree = useMemo(() => {
     const output: TreeNode = {};

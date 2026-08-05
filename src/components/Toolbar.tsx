@@ -11,6 +11,7 @@ interface ToolbarProps {
   onToggleFilter: (key: string) => void;
   onToggleTokenUsage: () => void;
   onCollapseAll: () => void;
+  onOpenTerminal?: () => void;
   liveChat?: {
     visible: boolean;
     pinned: boolean;
@@ -35,6 +36,7 @@ export default function Toolbar({
   onToggleFilter,
   onToggleTokenUsage,
   onCollapseAll,
+  onOpenTerminal,
   liveChat,
 }: ToolbarProps) {
   const toolbarRef = useRef<HTMLDivElement>(null);
@@ -45,11 +47,21 @@ export default function Toolbar({
   const fileChanges = events.filter((e) => e.kind === "file_change").length;
   const shellCmds = events.filter((e) => e.kind === "shell_command").length;
   const userMsgs = events.filter((e) => e.kind === "user_message").length;
+  const compactions = events.filter((e) => e.kind === "context_compaction").length;
   const tokenEvents = events.filter((e) => e.kind === "token_usage");
   const lastToken =
     tokenEvents.length > 0
-      ? (tokenEvents[tokenEvents.length - 1] as { kind: "token_usage"; total_tokens: number })
+      ? (tokenEvents[tokenEvents.length - 1] as {
+        kind: "token_usage";
+        total_tokens: number;
+        cached_input: number;
+      })
       : null;
+  // Codex's cumulative total includes cache reads. Match the live status
+  // command by showing tokens actually used outside of the cache.
+  const displayedTokens = lastToken
+    ? Math.max(0, lastToken.total_tokens - lastToken.cached_input)
+    : null;
 
   useEffect(() => {
     const toolbar = toolbarRef.current;
@@ -100,12 +112,18 @@ export default function Toolbar({
           <span className="stat-val">{userMsgs}</span>
           <span className="stat-lbl"> msgs</span>
         </span>
-        {lastToken && (
+        {displayedTokens !== null && (
           <span>
             <span className="stat-val">
-              {formatTokens(lastToken.total_tokens)}
+              {formatTokens(displayedTokens)}
             </span>
             <span className="stat-lbl"> tokens</span>
+          </span>
+        )}
+        {compactions > 0 && (
+          <span>
+            <span className="stat-val">{compactions}</span>
+            <span className="stat-lbl"> compacts</span>
           </span>
         )}
       </div>
@@ -213,6 +231,19 @@ export default function Toolbar({
             <span className="toolbar-filter-check">{liveChat.visible ? "−" : "+"}</span>
             <span>{liveChat.visible ? "Hide chat" : "Show chat"}</span>
           </button>
+          {onOpenTerminal && <>
+            <div className="toolbar-filter-dropdown-sep" />
+            <button
+              className="toolbar-filter-option"
+              onClick={() => {
+                onOpenTerminal();
+                setChatMenuOpen(false);
+              }}
+            >
+              <span className="toolbar-filter-check">&gt;_</span>
+              <span>Terminal</span>
+            </button>
+          </>}
         </div>}
       </div>}
     </div>

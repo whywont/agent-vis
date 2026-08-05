@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AppEvent } from "@/lib/types";
-import { desktopFileEntries } from "./file-tree-events";
+import { desktopFileEntries, remapDesktopFileEntries } from "./file-tree-events";
 
 describe("desktopFileEntries", () => {
   it("keeps multiple patches for one file and removes exact duplicates", () => {
@@ -20,5 +20,30 @@ describe("desktopFileEntries", () => {
     };
 
     expect(desktopFileEntries([first, { ...first }, second], "/repo").get("src/app.ts")?.changes).toHaveLength(2);
+  });
+
+  it("prunes a renamed path that no longer exists in the workspace", () => {
+    const rename: AppEvent = {
+      kind: "file_change",
+      ts: "2026-08-03T12:00:00Z",
+      callId: "rename-1",
+      patch: "*** Update File: /repo/desktop/src/DesktopLiveConversation.tsx",
+      files: [
+        { action: "delete", path: "/repo/desktop/src/DesktopCodexConversation.tsx" },
+        { action: "add", path: "/repo/desktop/src/DesktopLiveConversation.tsx" },
+      ],
+    };
+
+    const entries = desktopFileEntries([rename], "/repo");
+    const visible = remapDesktopFileEntries(
+      entries,
+      new Map([
+        ["desktop/src/DesktopCodexConversation.tsx", "desktop/src/DesktopLiveConversation.tsx"],
+        ["desktop/src/DesktopLiveConversation.tsx", "desktop/src/DesktopLiveConversation.tsx"],
+      ]),
+    );
+
+    expect([...visible.keys()]).toEqual(["desktop/src/DesktopLiveConversation.tsx"]);
+    expect(visible.get("desktop/src/DesktopLiveConversation.tsx")?.changes).toHaveLength(2);
   });
 });
