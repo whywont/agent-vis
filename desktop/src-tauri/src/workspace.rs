@@ -1,6 +1,6 @@
 use crate::sessions::trusted_workspace_roots;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
@@ -22,6 +22,13 @@ pub(crate) struct SaveWorkspaceFileRequest {
     filepath: String,
     expected_content: String,
     content: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ResolveWorkspaceFilepathsRequest {
+    workspace_root: String,
+    filepaths: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -73,6 +80,90 @@ fn git_branch_for_workspace(
 pub(crate) fn get_git_branch(workspace_root: String) -> Result<Option<String>, String> {
     let roots = trusted_workspace_roots()?;
     git_branch_for_workspace(&workspace_root, &roots)
+}
+
+#[tauri::command]
+pub(crate) fn resolve_workspace_filepaths(
+    request: ResolveWorkspaceFilepathsRequest,
+) -> Result<Vec<Option<String>>, String> {
+    const MAX_PATHS: usize = 10_000;
+    if request.filepaths.len() > MAX_PATHS {
+        return Err("Too many workspace files requested.".to_owned());
+    }
+    let roots = trusted_workspace_roots()?;
+    let root = validate_workspace_root(&request.workspace_root, &roots)?;
+    let renames = git_rename_map(&root)?;
+    Ok(request
+        .filepaths
+        .iter()
+        .map(|filepath| resolve_workspace_filepath(&root, filepath, &renames))
+        .collect())
+}
+
+fn git_rename_map(root: &Path) -> Result<HashMap<String, String>, String> {
+    let output = Command::new("git")
+        .args(["log", "--format=", "--name-status", "--find-renames"])
+        .current_dir(root)
+        .output()
+        .map_err(|error| format!("Unable to inspect Git renames: {error}"))?;
+    if !output.status.success() {
+        return Ok(HashMap::new());
+    }
+    let mut renames = HashMap::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let mut fields = line.split('\t');
+        let Some(status) = fields.next() else {
+            continue;
+        };
+        if !status.starts_with('R') && !status.starts_with('C') {
+            continue;
+        }
+        let (Some(from), Some(to)) = (fields.next(), fields.next()) else {
+            continue;
+        };
+        // The newest mapping wins for a source path; later resolution follows
+        // the chain when a file was renamed more than once.
+        renames
+            .entry(from.to_owned())
+            .or_insert_with(|| to.to_owned());
+    }
+    Ok(renames)
+}
+
+fn resolve_workspace_filepath(
+    root: &Path,
+    filepath: &str,
+    renames: &HashMap<String, String>,
+) -> Option<String> {
+    let requested = validate_workspace_filepath(filepath).ok()?;
+    if requested.is_absolute() {
+        return workspace_file_exists(root, filepath).then(|| filepath.to_owned());
+    }
+    let mut path = filepath.to_owned();
+    let mut visited = HashSet::new();
+    while visited.insert(path.clone()) {
+        if workspace_file_exists(root, &path) {
+            return Some(path);
+        }
+        let next = renames.get(&path)?;
+        path = next.clone();
+    }
+    None
+}
+
+fn workspace_file_exists(root: &Path, filepath: &str) -> bool {
+    let Ok(requested) = validate_workspace_filepath(filepath) else {
+        return false;
+    };
+    let candidate = if requested.is_absolute() {
+        requested.to_path_buf()
+    } else {
+        root.join(requested)
+    };
+    let Ok(canonical) = candidate.canonicalize() else {
+        return false;
+    };
+    canonical.starts_with(root) && canonical.is_file()
 }
 
 fn validate_workspace_filepath(value: &str) -> Result<&Path, String> {

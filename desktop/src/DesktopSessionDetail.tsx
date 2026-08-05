@@ -37,6 +37,7 @@ export default function DesktopSessionDetail({
   const [error, setError] = useState("");
   const [loadedBatches, setLoadedBatches] = useState(0);
   const [branch, setBranch] = useState<string | null>(null);
+  const [branchCopied, setBranchCopied] = useState(false);
   const [filePanelOpen, setFilePanelOpen] = useState(true);
   // Match the resize floor so opening a terminal never takes more room than
   // the user can immediately reclaim.
@@ -414,12 +415,24 @@ export default function DesktopSessionDetail({
                   </button>
                 </div>
                 {branch && (
-                  <div className="desktop-file-branch-row">
+                  <button
+                    type="button"
+                    className="desktop-file-branch-row"
+                    title={`Copy branch name: ${branch}`}
+                    aria-label={`Copy branch name: ${branch}`}
+                    onClick={() => {
+                      navigator.clipboard.writeText(branch).then(() => {
+                        setBranchCopied(true);
+                        window.setTimeout(() => setBranchCopied(false), 1400);
+                      }).catch(() => {});
+                    }}
+                  >
                     <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
                       <path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25Z" />
                     </svg>
                     <span>{branch}</span>
-                  </div>
+                    {branchCopied && <small role="status">Branch copied</small>}
+                  </button>
                 )}
                 <DesktopFileTree events={events} sessionCwd={cwd} onJumpToPatch={jumpToPatch} />
               </div>

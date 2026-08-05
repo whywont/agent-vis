@@ -26,3 +26,28 @@ export function desktopFileEntries(events: AppEvent[], sessionCwd: string): Map<
   }
   return output;
 }
+
+export function existingDesktopFileEntries(
+  entries: Map<string, DesktopFileEntry>,
+  existingPaths: Set<string>,
+): Map<string, DesktopFileEntry> {
+  return new Map([...entries].filter(([path]) => existingPaths.has(path)));
+}
+
+export function remapDesktopFileEntries(
+  entries: Map<string, DesktopFileEntry>,
+  resolvedPaths: Map<string, string | null>,
+): Map<string, DesktopFileEntry> {
+  const output = new Map<string, DesktopFileEntry>();
+  for (const [path, entry] of entries) {
+    const displayPath = resolvedPaths.get(path);
+    if (!displayPath) continue;
+    const existing = output.get(displayPath);
+    output.set(displayPath, {
+      ...entry,
+      displayPath,
+      changes: [...(existing?.changes || []), ...entry.changes],
+    });
+  }
+  return output;
+}

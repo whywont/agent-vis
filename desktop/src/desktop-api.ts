@@ -96,6 +96,10 @@ export function getGitBranch(workspaceRoot: string): Promise<string | null> {
   return invoke<string | null>("get_git_branch", { workspaceRoot });
 }
 
+export function resolveWorkspaceFilepaths(workspaceRoot: string, filepaths: string[]): Promise<(string | null)[]> {
+  return invoke<(string | null)[]>("resolve_workspace_filepaths", { request: { workspaceRoot, filepaths } });
+}
+
 export function startTerminal(terminalId: string, workspaceRoot: string): Promise<boolean> {
   return invoke<boolean>("start_terminal", { request: { terminalId, workspaceRoot } });
 }

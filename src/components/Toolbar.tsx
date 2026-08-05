@@ -50,8 +50,17 @@ export default function Toolbar({
   const tokenEvents = events.filter((e) => e.kind === "token_usage");
   const lastToken =
     tokenEvents.length > 0
-      ? (tokenEvents[tokenEvents.length - 1] as { kind: "token_usage"; total_tokens: number })
+      ? (tokenEvents[tokenEvents.length - 1] as {
+        kind: "token_usage";
+        total_tokens: number;
+        cached_input: number;
+      })
       : null;
+  // Codex's cumulative total includes cache reads. Match the live status
+  // command by showing tokens actually used outside of the cache.
+  const displayedTokens = lastToken
+    ? Math.max(0, lastToken.total_tokens - lastToken.cached_input)
+    : null;
 
   useEffect(() => {
     const toolbar = toolbarRef.current;
@@ -102,10 +111,10 @@ export default function Toolbar({
           <span className="stat-val">{userMsgs}</span>
           <span className="stat-lbl"> msgs</span>
         </span>
-        {lastToken && (
+        {displayedTokens !== null && (
           <span>
             <span className="stat-val">
-              {formatTokens(lastToken.total_tokens)}
+              {formatTokens(displayedTokens)}
             </span>
             <span className="stat-lbl"> tokens</span>
           </span>
