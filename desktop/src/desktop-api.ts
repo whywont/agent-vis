@@ -127,6 +127,53 @@ export function sendCodexTurn(
   });
 }
 
+export function compactCodexThread(sessionKey: string, threadId: string, cwd: string): Promise<void> {
+  return invoke<void>("compact_codex_thread", { requestData: { sessionKey, threadId, cwd } });
+}
+
+export interface CodexModel {
+  id: string;
+  model?: string;
+  displayName?: string;
+  description?: string;
+  isDefault?: boolean;
+}
+
+export async function listCodexModels(sessionKey: string, threadId: string, cwd: string): Promise<CodexModel[]> {
+  const result = await invoke<{ data?: CodexModel[] }>("list_codex_models", {
+    requestData: { sessionKey, threadId, cwd },
+  });
+  return Array.isArray(result.data) ? result.data : [];
+}
+
+export function setCodexThreadModel(sessionKey: string, threadId: string, cwd: string, model: string): Promise<void> {
+  return invoke<void>("set_codex_thread_model", {
+    requestData: { sessionKey, threadId, cwd, model },
+  });
+}
+
+type CodexThreadRequest = { sessionKey: string; threadId: string; cwd: string };
+
+export function readCodexThreadStatus(requestData: CodexThreadRequest): Promise<Record<string, unknown>> {
+  return invoke<Record<string, unknown>>("read_codex_thread_status", { requestData });
+}
+
+export function listCodexSkills(requestData: CodexThreadRequest): Promise<Record<string, unknown>> {
+  return invoke<Record<string, unknown>>("list_codex_skills", { requestData });
+}
+
+export function listCodexMcpServers(requestData: CodexThreadRequest): Promise<Record<string, unknown>> {
+  return invoke<Record<string, unknown>>("list_codex_mcp_servers", { requestData });
+}
+
+export function startCodexReview(requestData: CodexThreadRequest): Promise<void> {
+  return invoke<void>("start_codex_review", { requestData });
+}
+
+export function interruptCodexTurn(sessionKey: string, threadId: string, turnId: string): Promise<void> {
+  return invoke<void>("interrupt_codex_turn", { requestData: { sessionKey, threadId, turnId } });
+}
+
 export function respondToCodexApproval(sessionKey: string, requestId: unknown, result: unknown): Promise<void> {
   return invoke<void>("respond_to_codex_approval", { response: { sessionKey, requestId, result } });
 }

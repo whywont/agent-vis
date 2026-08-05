@@ -66,6 +66,39 @@ describe("parseClaudeEvent — user string content", () => {
     expect(parseClaudeEvent(obj, makeAccum())).toHaveLength(0);
   });
 
+  it("converts local command envelopes into shell command events", () => {
+    expect(parseClaudeEvent({
+      timestamp: TS,
+      type: "user",
+      uuid: "command-id",
+      cwd: "/workspace",
+      message: { content: "<command-name>/model</command-name>\n<command-args>opus</command-args>" },
+    }, makeAccum())).toEqual([{
+      kind: "shell_command",
+      ts: TS,
+      cmd: "/model opus",
+      workdir: "/workspace",
+      callId: "command-id",
+      toolName: "local_command",
+      description: "Claude session command",
+    }]);
+  });
+
+  it("converts local command output into a linked timeline result", () => {
+    expect(parseClaudeEvent({
+      timestamp: TS,
+      type: "system",
+      subtype: "local_command",
+      parentUuid: "command-id",
+      content: "<local-command-stdout>Current model: Opus</local-command-stdout>",
+    }, makeAccum())).toEqual([{
+      kind: "tool_output",
+      ts: TS,
+      output: "Current model: Opus",
+      callId: "command-id",
+    }]);
+  });
+
   it("filters out tool_result user messages (userType)", () => {
     const obj = {
       timestamp: TS,

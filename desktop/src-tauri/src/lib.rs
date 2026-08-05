@@ -11,7 +11,9 @@ mod workspace;
 
 use claude_stream::{connect_claude_thread, send_claude_turn, ClaudeStreamState};
 use codex_app_server::{
-    connect_codex_thread, respond_to_codex_approval, send_codex_turn, CodexAppServerState,
+    compact_codex_thread, connect_codex_thread, interrupt_codex_turn, list_codex_mcp_servers,
+    list_codex_models, list_codex_skills, read_codex_thread_status, respond_to_codex_approval,
+    send_codex_turn, set_codex_thread_model, start_codex_review, CodexAppServerState,
 };
 use explain::explain_diff;
 use search::{search_sessions, SearchIndexState};
@@ -51,6 +53,14 @@ pub fn run() {
             stop_terminal,
             connect_codex_thread,
             send_codex_turn,
+            compact_codex_thread,
+            list_codex_models,
+            set_codex_thread_model,
+            read_codex_thread_status,
+            list_codex_skills,
+            list_codex_mcp_servers,
+            start_codex_review,
+            interrupt_codex_turn,
             respond_to_codex_approval,
             connect_claude_thread,
             send_claude_turn,

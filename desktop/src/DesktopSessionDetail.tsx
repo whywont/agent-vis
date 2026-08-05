@@ -223,6 +223,25 @@ export default function DesktopSessionDetail({
   const handleApprovalChange = useCallback((command: string | null) => {
     setApprovalCommand(command);
   }, []);
+  const handleContextCompaction = useCallback(() => {
+    setEvents((current) => [
+      ...current,
+      {
+        kind: "context_compaction",
+        ts: new Date().toISOString(),
+        text: `${session.source === "codex" ? "Codex" : "Claude"} compacted the conversation context.`,
+      },
+    ]);
+  }, [session.source]);
+  const handleLiveTimelineEvent = useCallback((event: AppEvent) => {
+    setEvents((current) => [...current, event]);
+  }, []);
+  const tokenUsage = useMemo(() => {
+    const latest = [...events].reverse().find((event) => event.kind === "token_usage");
+    return latest?.kind === "token_usage"
+      ? { total: latest.total_tokens, input: latest.total_input, output: latest.total_output }
+      : undefined;
+  }, [events]);
   const visibleTerminals = terminals.filter((terminal) => terminal.sessionKey === currentSessionKey);
   const activeTerminalKey = activeTerminalBySession[currentSessionKey];
   const visibleTerminal = visibleTerminals.find((terminal) => terminal.key === activeTerminalKey) || visibleTerminals[0] || null;
@@ -430,6 +449,9 @@ export default function DesktopSessionDetail({
                 threadId={session.id}
                 cwd={cwd}
                 onApprovalChange={handleApprovalChange}
+                onContextCompaction={handleContextCompaction}
+                onTimelineEvent={handleLiveTimelineEvent}
+                tokenUsage={tokenUsage}
               />
             ) : undefined}
           />

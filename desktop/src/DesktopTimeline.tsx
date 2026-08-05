@@ -52,7 +52,19 @@ export default function DesktopTimeline({
   const visibleEvents = useMemo(() => {
     const effectiveFilters = new Set(activeFilters);
     if (matchTarget) effectiveFilters.add(matchTarget.eventKind);
-    return visibleTimelineEvents(displayEvents, effectiveFilters, showTokenUsage);
+    const normallyVisible = new Set(visibleTimelineEvents(displayEvents, effectiveFilters, showTokenUsage));
+    const localCommandIds = new Set(displayEvents.flatMap((event) =>
+      event.kind === "shell_command" && event.toolName === "local_command" && event.callId
+        ? [event.callId]
+        : [],
+    ));
+    // Session-command results are part of the command interaction, not the
+    // noisy general tool-output stream controlled by the output filter.
+    return displayEvents.filter((event) => {
+      if (normallyVisible.has(event)) return true;
+      if (event.kind !== "tool_output" || !event.callId) return false;
+      return localCommandIds.has(event.callId);
+    });
   }, [activeFilters, displayEvents, matchTarget, showTokenUsage]);
   const latestConversationEvent = useMemo(
     () => displayEvents.find((event) => event.kind === "agent_message" || event.kind === "user_message"),
@@ -197,6 +209,22 @@ function DesktopTimelineEntry({
           <span className="token-stat"><span className="token-label">out</span> {formatTokens(event.total_output)}</span>
           <span className="token-stat total"><span className="token-label">total</span> {formatTokens(event.total_tokens)}</span>
         </div>
+      </div>
+    );
+  }
+
+  if (event.kind === "context_compaction") {
+    return (
+      <div
+        className="desktop-context-compaction"
+        data-event-key={eventKey(event)}
+        data-event-search-key={eventSearchKey(event)}
+        role="status"
+      >
+        <span className="desktop-context-compaction-mark" aria-hidden="true">...</span>
+        <span>Context compacted</span>
+        <small>agent continuing with a handoff</small>
+        <time>{formatTime(event.ts)}</time>
       </div>
     );
   }

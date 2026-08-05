@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
+use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -34,6 +36,7 @@ struct CodexAppServerConnection {
 struct CodexConnectionLifecycle {
     initialized: bool,
     resumed_thread_id: Option<String>,
+    instruction_sources: HashMap<String, Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -59,6 +62,23 @@ pub(crate) struct CodexApprovalResponse {
     session_key: String,
     request_id: Value,
     result: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CodexModelRequest {
+    session_key: String,
+    thread_id: String,
+    cwd: String,
+    model: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CodexInterruptRequest {
+    session_key: String,
+    thread_id: String,
+    turn_id: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -208,6 +228,75 @@ fn connection_for(
     Ok(connection)
 }
 
+fn rollout_status_in_dir(dir: &Path, thread_id: &str) -> Option<Value> {
+    let entries = fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_symlink() {
+            continue;
+        }
+        let path = entry.path();
+        if file_type.is_dir() {
+            if let Some(status) = rollout_status_in_dir(&path, thread_id) {
+                return Some(status);
+            }
+            continue;
+        }
+        if !file_type.is_file()
+            || path.extension().and_then(|value| value.to_str()) != Some("jsonl")
+            || !path.to_string_lossy().contains(thread_id)
+        {
+            continue;
+        }
+        let Ok(file) = File::open(&path) else {
+            continue;
+        };
+        let mut session = Value::Null;
+        let mut turn_context = Value::Null;
+        let mut token_info = Value::Null;
+        let mut matches_thread = false;
+        for line in BufReader::new(file).lines() {
+            let Ok(line) = line else { continue };
+            let Ok(value) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
+            let payload = value.get("payload").cloned().unwrap_or(Value::Null);
+            match value.get("type").and_then(Value::as_str) {
+                Some("session_meta") => {
+                    matches_thread = payload.get("id").and_then(Value::as_str) == Some(thread_id)
+                        || payload.get("session_id").and_then(Value::as_str) == Some(thread_id);
+                    if matches_thread {
+                        session = payload;
+                    }
+                }
+                Some("turn_context") if matches_thread => turn_context = payload,
+                Some("event_msg")
+                    if matches_thread
+                        && payload.get("type").and_then(Value::as_str) == Some("token_count") =>
+                {
+                    token_info = payload.get("info").cloned().unwrap_or(Value::Null);
+                }
+                _ => {}
+            }
+        }
+        if matches_thread {
+            return Some(json!({
+                "session": session,
+                "turnContext": turn_context,
+                "tokenInfo": token_info,
+            }));
+        }
+    }
+    None
+}
+
+fn read_rollout_status(thread_id: &str) -> Option<Value> {
+    let home = dirs::home_dir()?;
+    rollout_status_in_dir(&home.join(".codex/sessions"), thread_id)
+}
+
 #[tauri::command]
 pub(crate) fn connect_codex_thread(
     app: AppHandle,
@@ -236,13 +325,27 @@ pub(crate) fn connect_codex_thread(
         )?;
         lifecycle.initialized = true;
     }
-    request(
+    let resumed = request(
         &connection,
         "thread/resume",
         // `excludeTurns` is experimental and older Codex app-servers reject it
         // unless the client explicitly enables the experimental API capability.
         json!({ "threadId": request_data.thread_id, "cwd": request_data.cwd }),
     )?;
+    let instruction_sources = resumed
+        .get("instructionSources")
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    lifecycle
+        .instruction_sources
+        .insert(request_data.thread_id.clone(), instruction_sources);
     lifecycle.resumed_thread_id = Some(request_data.thread_id);
     Ok(())
 }
@@ -276,6 +379,149 @@ pub(crate) fn send_codex_turn(
         &connection,
         "turn/start",
         json!({ "threadId": request_data.thread_id, "input": input }),
+    )?;
+    Ok(())
+}
+
+#[tauri::command]
+pub(crate) fn compact_codex_thread(
+    app: AppHandle,
+    state: State<'_, CodexAppServerState>,
+    request_data: CodexThreadRequest,
+) -> Result<(), String> {
+    let connection = connection_for(&app, &state, &request_data.session_key)?;
+    request(
+        &connection,
+        "thread/compact/start",
+        json!({ "threadId": request_data.thread_id }),
+    )?;
+    Ok(())
+}
+
+#[tauri::command]
+pub(crate) fn list_codex_models(
+    app: AppHandle,
+    state: State<'_, CodexAppServerState>,
+    request_data: CodexThreadRequest,
+) -> Result<Value, String> {
+    let connection = connection_for(&app, &state, &request_data.session_key)?;
+    request(
+        &connection,
+        "model/list",
+        json!({ "limit": 50, "includeHidden": false }),
+    )
+}
+
+#[tauri::command]
+pub(crate) fn set_codex_thread_model(
+    app: AppHandle,
+    state: State<'_, CodexAppServerState>,
+    request_data: CodexModelRequest,
+) -> Result<(), String> {
+    let connection = connection_for(&app, &state, &request_data.session_key)?;
+    request(
+        &connection,
+        "thread/resume",
+        json!({
+            "threadId": request_data.thread_id,
+            "cwd": request_data.cwd,
+            "model": request_data.model,
+        }),
+    )?;
+    Ok(())
+}
+
+#[tauri::command]
+pub(crate) fn read_codex_thread_status(
+    app: AppHandle,
+    state: State<'_, CodexAppServerState>,
+    request_data: CodexThreadRequest,
+) -> Result<Value, String> {
+    let connection = connection_for(&app, &state, &request_data.session_key)?;
+    let thread = request(
+        &connection,
+        "thread/read",
+        json!({ "threadId": request_data.thread_id, "includeTurns": false }),
+    )?;
+    let config = request(
+        &connection,
+        "config/read",
+        json!({ "includeLayers": false }),
+    )?;
+    let instruction_sources = connection
+        .lifecycle
+        .lock()
+        .map_err(|_| "Codex app-server lifecycle state is unavailable.".to_owned())?
+        .instruction_sources
+        .get(&request_data.thread_id)
+        .cloned()
+        .unwrap_or_default();
+    Ok(json!({
+        "thread": thread.get("thread").cloned().unwrap_or(thread),
+        "config": config.get("config").cloned().unwrap_or(config),
+        "rollout": read_rollout_status(&request_data.thread_id),
+        "instructionSources": instruction_sources,
+    }))
+}
+
+#[tauri::command]
+pub(crate) fn list_codex_skills(
+    app: AppHandle,
+    state: State<'_, CodexAppServerState>,
+    request_data: CodexThreadRequest,
+) -> Result<Value, String> {
+    let connection = connection_for(&app, &state, &request_data.session_key)?;
+    request(
+        &connection,
+        "skills/list",
+        json!({ "cwds": [request_data.cwd], "forceReload": false }),
+    )
+}
+
+#[tauri::command]
+pub(crate) fn list_codex_mcp_servers(
+    app: AppHandle,
+    state: State<'_, CodexAppServerState>,
+    request_data: CodexThreadRequest,
+) -> Result<Value, String> {
+    let connection = connection_for(&app, &state, &request_data.session_key)?;
+    request(
+        &connection,
+        "mcpServerStatus/list",
+        json!({ "limit": 100, "detail": "toolsAndAuthOnly" }),
+    )
+}
+
+#[tauri::command]
+pub(crate) fn start_codex_review(
+    app: AppHandle,
+    state: State<'_, CodexAppServerState>,
+    request_data: CodexThreadRequest,
+) -> Result<(), String> {
+    let connection = connection_for(&app, &state, &request_data.session_key)?;
+    request(
+        &connection,
+        "review/start",
+        json!({
+            "threadId": request_data.thread_id,
+            "delivery": "inline",
+            "target": { "type": "uncommittedChanges" },
+        }),
+    )?;
+    Ok(())
+}
+
+#[tauri::command]
+pub(crate) fn interrupt_codex_turn(
+    app: AppHandle,
+    state: State<'_, CodexAppServerState>,
+    request_data: CodexInterruptRequest,
+) -> Result<(), String> {
+    let connection = connection_for(&app, &state, &request_data.session_key)?;
+    request(
+        &connection,
+        "turn/interrupt",
+        json!({ "threadId": request_data.thread_id, "turnId": request_data.turn_id }),
     )?;
     Ok(())
 }
