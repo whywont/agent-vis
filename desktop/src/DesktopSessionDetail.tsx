@@ -18,6 +18,7 @@ export default function DesktopSessionDetail({
   sessionName,
   activeTab,
   terminalOpen,
+  splitView = false,
   onActiveTabChange,
   onTerminalOpen,
   onTerminalClose,
@@ -27,6 +28,7 @@ export default function DesktopSessionDetail({
   sessionName: string | null;
   activeTab: "session" | "files";
   terminalOpen: boolean;
+  splitView?: boolean;
   onActiveTabChange: (tab: "session" | "files") => void;
   onTerminalOpen: () => void;
   onTerminalClose: () => void;
@@ -262,7 +264,7 @@ export default function DesktopSessionDetail({
   useEffect(() => {
     function openTerminal(event: Event) {
       const requested = (event as CustomEvent<SessionMeta>).detail;
-      if (!requested) return;
+      if (!requested || terminalSessionKey(requested, requested.id) !== currentSessionKey) return;
       const terminal = firstTerminalSession(requested, requested.id, requested.cwd);
       setTerminals((current) => {
         if (current.some((item) => item.sessionKey === terminal.sessionKey)) return current;
@@ -272,7 +274,7 @@ export default function DesktopSessionDetail({
     }
     window.addEventListener("open-session-terminal", openTerminal);
     return () => window.removeEventListener("open-session-terminal", openTerminal);
-  }, []);
+  }, [currentSessionKey]);
 
   function closeActiveTerminal() {
     if (!visibleTerminal) return;
@@ -387,6 +389,8 @@ export default function DesktopSessionDetail({
           <button
             className={`session-tab-btn${activeTab === "files" ? " active" : ""}`}
             onClick={() => onActiveTabChange("files")}
+            disabled={splitView}
+            title={splitView ? "Files is unavailable while sessions are split" : undefined}
           >
             Files
           </button>
@@ -396,11 +400,11 @@ export default function DesktopSessionDetail({
         <SessionLoadingShell loadedBatches={loadedBatches} />
       ) : error ? (
         <div className="desktop-detail-state error">{error}</div>
-      ) : activeTab === "files" ? (
+      ) : activeTab === "files" && !splitView ? (
         <DesktopFilesCanvas events={events} sessionCwd={cwd} />
       ) : (
         <div className="detail-body">
-          {filePanelOpen ? (
+          {!splitView && filePanelOpen ? (
             <>
               <div className="file-tree-panel" ref={fileTreeRef}>
                 <div className="file-tree-header">
@@ -438,7 +442,7 @@ export default function DesktopSessionDetail({
               </div>
               <div className="file-tree-resize-handle" ref={resizeHandleRef} />
             </>
-          ) : (
+          ) : !splitView ? (
             <button
               className="desktop-panel-reopen desktop-files-reopen"
               onClick={() => setFilePanelOpen(true)}
@@ -448,7 +452,7 @@ export default function DesktopSessionDetail({
               <span>files</span>
               <b>&#8250;</b>
             </button>
-          )}
+          ) : null}
           <DesktopTimeline
             events={events}
             sessionCwd={cwd}
@@ -469,7 +473,8 @@ export default function DesktopSessionDetail({
                 tokenUsage={tokenUsage}
               />
             ) : undefined}
-            onOpenTerminal={onTerminalOpen}
+            onOpenTerminal={splitView ? undefined : onTerminalOpen}
+            terminalDisabled={splitView}
           />
         </div>
       )}

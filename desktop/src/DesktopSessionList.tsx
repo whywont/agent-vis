@@ -22,6 +22,9 @@ interface DesktopSessionListProps {
   onOpenSettings: () => void;
   onHideSessions: () => void;
   onSelectSession: (files: string, target: SessionMatchTarget | null) => void;
+  onDragSession: (session: SessionMeta | null) => void;
+  onDropSession: (session: SessionMeta) => void;
+  onSplitSession: (session: SessionMeta) => void;
   onDeleteSession: (files: string) => Promise<void>;
   onRenameSession: (session: SessionMeta, name: string) => void;
 }
@@ -66,6 +69,9 @@ export default function DesktopSessionList({
   onOpenSettings,
   onHideSessions,
   onSelectSession,
+  onDragSession,
+  onDropSession,
+  onSplitSession,
   onDeleteSession,
   onRenameSession,
 }: DesktopSessionListProps) {
@@ -81,6 +87,7 @@ export default function DesktopSessionList({
   const [sessionActionError, setSessionActionError] = useState("");
   const [sessionActionNotice, setSessionActionNotice] = useState("");
   const [searchState, setSearchState] = useState<{ query: string; response: SessionSearchResponse } | null>(null);
+  const [ignoreNextClick, setIgnoreNextClick] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const activeQuery = search.trim();
   const searchResponse = searchState?.query === activeQuery ? searchState.response : null;
@@ -208,6 +215,52 @@ export default function DesktopSessionList({
     });
   }
 
+  function startSessionDrag(event: React.MouseEvent<HTMLDivElement>, session: SessionMeta) {
+    if (event.button !== 0 || (event.target as HTMLElement).closest("button")) return;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    let dragging = false;
+    let proxy: HTMLDivElement | null = null;
+    function moveProxy(moveEvent: MouseEvent) {
+      if (proxy) proxy.style.transform = `translate(${moveEvent.clientX + 14}px, ${moveEvent.clientY + 14}px)`;
+    }
+    function overWorkspace(moveEvent: MouseEvent) {
+      const workspace = document.getElementById("main-content")?.getBoundingClientRect();
+      return Boolean(workspace
+        && moveEvent.clientX >= workspace.left
+        && moveEvent.clientX <= workspace.right
+        && moveEvent.clientY >= workspace.top
+        && moveEvent.clientY <= workspace.bottom);
+    }
+    function onMove(moveEvent: MouseEvent) {
+      if (!dragging && Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY) > 5) {
+        dragging = true;
+        onDragSession(session);
+        document.body.classList.add("session-dragging");
+        proxy = document.createElement("div");
+        proxy.className = "desktop-session-drag-proxy";
+        proxy.textContent = sessionAlias(sessionAliases, session) || session.id.slice(0, 12);
+        document.body.append(proxy);
+      }
+      if (dragging) moveProxy(moveEvent);
+      document.body.classList.toggle("session-over-workspace", dragging && overWorkspace(moveEvent));
+    }
+    function onUp(upEvent: MouseEvent) {
+      if (dragging && overWorkspace(upEvent)) onDropSession(session);
+      if (dragging) {
+        setIgnoreNextClick(true);
+        window.setTimeout(() => setIgnoreNextClick(false), 100);
+      }
+      onDragSession(null);
+      document.body.classList.remove("session-dragging", "session-over-workspace");
+      proxy?.remove();
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    }
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }
+
   async function exportSession(session: SessionMeta, format: "json" | "compact") {
     setSessionActionError("");
     setSessionActionNotice("");
@@ -294,7 +347,9 @@ export default function DesktopSessionList({
                   className={`session-item desktop-session${active ? " active" : ""}${menuOpen ? " menu-open" : ""}`}
                   role="button"
                   tabIndex={0}
+                  onMouseDown={(event) => startSessionDrag(event, session)}
                   onClick={() => {
+                    if (ignoreNextClick) return;
                     if (!menuOpen) onSelectSession(files, result && result.eventKind !== "metadata" ? {
                       eventTs: result.eventTs,
                       eventKind: result.eventKind,
@@ -358,6 +413,17 @@ export default function DesktopSessionList({
                         }}
                       >
                         Rename chat
+                      </button>
+                      <button
+                        type="button"
+                        className="session-item-dropdown-btn"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setMenuOpenFor(null);
+                          onSplitSession(session);
+                        }}
+                      >
+                        Split session
                       </button>
                       <button
                         type="button"

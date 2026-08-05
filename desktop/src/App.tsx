@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { SessionMeta } from "@/lib/types";
 import { formatTime } from "@/utils/format";
 import { deleteSession, getDesktopAppearance, listSessions } from "./desktop-api";
-import DesktopSessionDetail from "./DesktopSessionDetail";
 import DesktopSessionList from "./DesktopSessionList";
 import DesktopSettingsPage from "./DesktopSettingsPage";
+import DesktopSessionWorkspace from "./DesktopSessionWorkspace";
 import { loadSessionAliases, saveSessionAlias, sessionAlias } from "./session-aliases";
 import { refreshSelectedSession, sessionListsEqual } from "./session-refresh";
 import { startWindowDrag } from "./window-drag";
@@ -19,9 +19,16 @@ export interface SessionMatchTarget {
   requestId?: number;
 }
 
+function sessionFiles(session: SessionMeta): string {
+  return session.files?.join(",") || session.file;
+}
+
 export default function App() {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [selected, setSelected] = useState<SessionMeta | null>(null);
+  const [splitSession, setSplitSession] = useState<SessionMeta | null>(null);
+  const [draggedSession, setDraggedSession] = useState<SessionMeta | null>(null);
+  const [splitCenter, setSplitCenter] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
@@ -31,6 +38,7 @@ export default function App() {
   const [matchTarget, setMatchTarget] = useState<SessionMatchTarget | null>(null);
   const [sessionAliases, setSessionAliases] = useState(() => loadSessionAliases());
   const sidebarRef = useRef<HTMLElement>(null);
+  const mainRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     void getDesktopAppearance().then((settings) => {
@@ -39,6 +47,22 @@ export default function App() {
       // Appearance is cosmetic; leave the default theme in place on a settings error.
     });
   }, []);
+
+  useLayoutEffect(() => {
+    const main = mainRef.current;
+    if (!main || !splitSession) {
+      setSplitCenter(null);
+      return;
+    }
+    function updateSplitCenter() {
+      const bounds = main!.getBoundingClientRect();
+      setSplitCenter(bounds.left + bounds.width / 2);
+    }
+    updateSplitCenter();
+    const observer = new ResizeObserver(updateSplitCenter);
+    observer.observe(main);
+    return () => observer.disconnect();
+  }, [splitSession]);
 
   useEffect(() => {
     let cancelled = false;
@@ -55,6 +79,7 @@ export default function App() {
         setError("");
         setSessions((current) => sessionListsEqual(current, nextSessions) ? current : nextSessions);
         setSelected((current) => refreshSelectedSession(current, nextSessions));
+        setSplitSession((current) => refreshSelectedSession(current, nextSessions));
       } catch (reason: unknown) {
         if (!cancelled && !loadedOnce) {
           setError(reason instanceof Error ? reason.message : String(reason));
@@ -97,15 +122,43 @@ export default function App() {
     return () => handle.removeEventListener("mousedown", onMouseDown);
   }, []);
 
-  const selectedFiles = selected ? selected.files?.join(",") || selected.file : null;
+  const selectedFiles = selected ? sessionFiles(selected) : null;
+  const splitActive = Boolean(selected && splitSession);
+
+  function selectSession(files: string, target: SessionMatchTarget | null) {
+    setShowSettings(false);
+    setActiveTab("session");
+    setMatchTarget(target);
+    setSplitSession(null);
+    setSelected(sessions.find((session) => sessionFiles(session) === files) || null);
+  }
+
+  function addSplitSession(files: string) {
+    const next = sessions.find((session) => sessionFiles(session) === files) || null;
+    if (!next) return;
+    if (!selected) {
+      setSelected(next);
+      return;
+    }
+    if (sessionFiles(next) === sessionFiles(selected)) return;
+    setShowSettings(false);
+    setActiveTab("session");
+    setMatchTarget(null);
+    setSplitSession(next);
+  }
+
 
   return (
     <div id="app" className={selected ? "has-session" : "no-session"}>
       <DesktopMacTitlebar
         session={showSettings ? null : selected}
         sessionName={selected ? sessionAlias(sessionAliases, selected) : null}
+        splitSession={splitSession}
+        splitSessionName={splitSession ? sessionAlias(sessionAliases, splitSession) : null}
         activeTab={activeTab}
         terminalOpen={terminalOpen}
+        splitView={splitActive}
+        splitCenter={splitCenter}
         onActiveTabChange={(tab) => {
           if (tab === "files") setMatchTarget(null);
           setActiveTab(tab);
@@ -114,6 +167,7 @@ export default function App() {
           setTerminalOpen(true);
           if (selected) window.dispatchEvent(new CustomEvent("open-session-terminal", { detail: selected }));
         }}
+        onCloseSplit={() => setSplitSession(null)}
       />
       <div className="desktop-app-body">
         <nav id="sidebar" ref={sidebarRef} className={sessionSidebarOpen ? "" : "desktop-sidebar-collapsed"}>
@@ -128,12 +182,13 @@ export default function App() {
                 sessionAliases={sessionAliases}
                 onOpenSettings={() => { setShowSettings(true); setMatchTarget(null); setSelected(null); }}
                 onHideSessions={() => setSessionSidebarOpen(false)}
-                onSelectSession={(files, target) => {
-                  setShowSettings(false);
-                  setActiveTab("session");
-                  setMatchTarget(target);
-                  setSelected(sessions.find((session) => (session.files?.join(",") || session.file) === files) || null);
+                onSelectSession={selectSession}
+                onDragSession={setDraggedSession}
+                onDropSession={(session) => {
+                  addSplitSession(sessionFiles(session));
+                  setDraggedSession(null);
                 }}
+                onSplitSession={(session) => addSplitSession(sessionFiles(session))}
                 onDeleteSession={async (files) => {
                   await deleteSession(files);
                   setSessions((current) => current.filter(
@@ -141,9 +196,11 @@ export default function App() {
                   ));
                   if (selectedFiles === files) {
                     setSelected(null);
+                    setSplitSession(null);
                     setMatchTarget(null);
                     setTerminalOpen(false);
                   }
+                  if (splitSession && sessionFiles(splitSession) === files) setSplitSession(null);
                 }}
                 onRenameSession={(session, name) => {
                   setSessionAliases((current) => saveSessionAlias(current, session, name));
@@ -163,7 +220,12 @@ export default function App() {
             </button>
           )}
         </nav>
-        <main id="main-content">
+        <main
+          id="main-content"
+          ref={mainRef}
+          className=""
+          onDragOver={(event) => event.preventDefault()}
+        >
           {showSettings ? (
             <DesktopSettingsPage onBack={() => setShowSettings(false)} />
           ) : !selected ? (
@@ -176,21 +238,23 @@ export default function App() {
               </div>
             </div>
           ) : (
-            <DesktopSessionDetail
-              session={selected}
-              sessionName={sessionAlias(sessionAliases, selected)}
+            <DesktopSessionWorkspace
+              primary={selected}
+              secondary={splitSession}
+              primaryName={sessionAlias(sessionAliases, selected)}
+              secondaryName={splitSession ? sessionAlias(sessionAliases, splitSession) : null}
               activeTab={activeTab}
               terminalOpen={terminalOpen}
+              matchTarget={matchTarget}
               onActiveTabChange={(tab) => {
                 if (tab === "files") setMatchTarget(null);
                 setActiveTab(tab);
               }}
-              onTerminalOpen={() => {
+              onTerminalOpen={(session) => {
                 setTerminalOpen(true);
-                if (selected) window.dispatchEvent(new CustomEvent("open-session-terminal", { detail: selected }));
+                window.dispatchEvent(new CustomEvent("open-session-terminal", { detail: session }));
               }}
               onTerminalClose={() => setTerminalOpen(false)}
-              matchTarget={matchTarget}
             />
           )}
         </main>
@@ -202,17 +266,27 @@ export default function App() {
 function DesktopMacTitlebar({
   session,
   sessionName,
+  splitSession,
+  splitSessionName,
   activeTab,
   terminalOpen,
+  splitView,
+  splitCenter,
   onActiveTabChange,
   onTerminalOpen,
+  onCloseSplit,
 }: {
   session: SessionMeta | null;
   sessionName: string | null;
+  splitSession: SessionMeta | null;
+  splitSessionName: string | null;
   activeTab: "session" | "files";
   terminalOpen: boolean;
+  splitView: boolean;
+  splitCenter: number | null;
   onActiveTabChange: (tab: "session" | "files") => void;
   onTerminalOpen: () => void;
+  onCloseSplit: () => void;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -248,6 +322,17 @@ function DesktopMacTitlebar({
           <span className="meta-tag">{formatTime(session.timestamp)}</span>
         </div>
       )}
+      {session && splitSession && (
+        <div
+          className="desktop-titlebar-split-sessions"
+          data-window-no-drag
+          style={splitCenter === null ? undefined : { left: splitCenter }}
+        >
+          <TitlebarSession session={session} name={sessionName} />
+          <span aria-hidden="true">/</span>
+          <TitlebarSession session={splitSession} name={splitSessionName} onClose={onCloseSplit} />
+        </div>
+      )}
       {session && (
         <div className="desktop-titlebar-tabs" data-window-no-drag>
           <button
@@ -259,11 +344,23 @@ function DesktopMacTitlebar({
           <button
             className={activeTab === "files" ? "active" : ""}
             onClick={() => onActiveTabChange("files")}
+            disabled={splitView}
+            title={splitView ? "Files is unavailable while sessions are split" : undefined}
           >
             Files
           </button>
         </div>
       )}
     </header>
+  );
+}
+
+function TitlebarSession({ session, name, onClose }: { session: SessionMeta; name: string | null; onClose?: () => void }) {
+  return (
+    <span className="desktop-titlebar-split-session" title={session.id}>
+      <i className={session.source === "codex" ? "source-codex" : "source-claude"}>{session.source === "codex" ? "codex" : "claude"}</i>
+      <b>{name || session.id}</b>
+      {onClose && <button type="button" onClick={onClose} title="Close split session" aria-label="Close split session">x</button>}
+    </span>
   );
 }
