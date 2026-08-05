@@ -1,12 +1,19 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { SessionMeta } from "@/lib/types";
 import { formatTime } from "@/utils/format";
-import { deleteSession, getDesktopAppearance, listSessions } from "./desktop-api";
+import { deleteSession, getDesktopAppearance, listSessions, startClaudeSession, startCodexSession } from "./desktop-api";
+import type { LiveProvider } from "./harness-adapters";
 import DesktopSessionList from "./DesktopSessionList";
 import DesktopSettingsPage from "./DesktopSettingsPage";
 import DesktopSessionWorkspace from "./DesktopSessionWorkspace";
 import { loadSessionAliases, saveSessionAlias, sessionAlias } from "./session-aliases";
-import { refreshSelectedSession, sessionListsEqual } from "./session-refresh";
+import {
+  mergeRefreshedSessions,
+  refreshSelectedSession,
+  refreshSelectedSessionWithLive,
+  sessionIdentity,
+  sessionListsEqual,
+} from "./session-refresh";
 import { startWindowDrag } from "./window-drag";
 import { applyDesktopAppearance } from "./desktop-theme";
 
@@ -37,6 +44,7 @@ export default function App() {
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [matchTarget, setMatchTarget] = useState<SessionMatchTarget | null>(null);
   const [sessionAliases, setSessionAliases] = useState(() => loadSessionAliases());
+  const [liveSessionKeys, setLiveSessionKeys] = useState<Record<string, string>>({});
   const sidebarRef = useRef<HTMLElement>(null);
   const mainRef = useRef<HTMLElement>(null);
 
@@ -77,8 +85,11 @@ export default function App() {
         if (cancelled) return;
         loadedOnce = true;
         setError("");
-        setSessions((current) => sessionListsEqual(current, nextSessions) ? current : nextSessions);
-        setSelected((current) => refreshSelectedSession(current, nextSessions));
+        setSessions((current) => {
+          const merged = mergeRefreshedSessions(current, nextSessions);
+          return sessionListsEqual(current, merged) ? current : merged;
+        });
+        setSelected((current) => refreshSelectedSessionWithLive(current, nextSessions));
         setSplitSession((current) => refreshSelectedSession(current, nextSessions));
       } catch (reason: unknown) {
         if (!cancelled && !loadedOnce) {
@@ -147,6 +158,34 @@ export default function App() {
     setSplitSession(next);
   }
 
+  async function startSession(provider: LiveProvider, model: string, cwd: string) {
+    const requestedId = crypto.randomUUID();
+    const sessionKey = `${provider}:${requestedId}`;
+    const id = provider === "codex"
+      ? (await startCodexSession(sessionKey, cwd, model)).id
+      : await startClaudeSession(sessionKey, requestedId, cwd, model);
+    const now = new Date().toISOString();
+    const next: SessionMeta = {
+      file: `live:${provider}:${id}`,
+      files: [`live:${provider}:${id}`],
+      id,
+      cwd,
+      model: provider === "codex" ? model : `claude:${model}`,
+      timestamp: now,
+      modified: now,
+      cli_version: "",
+      source: provider,
+    };
+    const identity = sessionIdentity(next);
+    setLiveSessionKeys((current) => ({ ...current, [identity]: sessionKey }));
+    setSessions((current) => [next, ...current.filter((session) => sessionIdentity(session) !== sessionIdentity(next))]);
+    setShowSettings(false);
+    setActiveTab("session");
+    setMatchTarget(null);
+    setSplitSession(null);
+    setSelected(next);
+  }
+
 
   return (
     <div id="app" className={selected ? "has-session" : "no-session"}>
@@ -180,7 +219,9 @@ export default function App() {
                 error={error}
                 settingsActive={showSettings}
                 sessionAliases={sessionAliases}
+                currentSessionCwd={selected?.cwd || null}
                 onOpenSettings={() => { setShowSettings(true); setMatchTarget(null); setSelected(null); }}
+                onStartSession={startSession}
                 onHideSessions={() => setSessionSidebarOpen(false)}
                 onSelectSession={selectSession}
                 onDragSession={setDraggedSession}
@@ -190,7 +231,9 @@ export default function App() {
                 }}
                 onSplitSession={(session) => addSplitSession(sessionFiles(session))}
                 onDeleteSession={async (files) => {
-                  await deleteSession(files);
+                  // A new live harness session can appear before its JSONL
+                  // record reaches disk. It has no deletable file reference yet.
+                  if (!files.startsWith("live:")) await deleteSession(files);
                   setSessions((current) => current.filter(
                     (session) => (session.files?.join(",") || session.file) !== files,
                   ));
@@ -255,6 +298,7 @@ export default function App() {
                 window.dispatchEvent(new CustomEvent("open-session-terminal", { detail: session }));
               }}
               onTerminalClose={() => setTerminalOpen(false)}
+              liveSessionKey={liveSessionKeys[sessionIdentity(selected)]}
             />
           )}
         </main>

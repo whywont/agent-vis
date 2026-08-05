@@ -81,6 +81,20 @@ pub(crate) struct CodexInterruptRequest {
     turn_id: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct NewCodexSessionRequest {
+    session_key: String,
+    cwd: String,
+    model: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct NewCodexSession {
+    id: String,
+}
+
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct CodexAppServerEvent {
@@ -228,6 +242,27 @@ fn connection_for(
     Ok(connection)
 }
 
+fn initialize_connection(connection: &CodexAppServerConnection) -> Result<(), String> {
+    let mut lifecycle = connection
+        .lifecycle
+        .lock()
+        .map_err(|_| "Codex app-server lifecycle state is unavailable.".to_owned())?;
+    if lifecycle.initialized {
+        return Ok(());
+    }
+    request(
+        connection,
+        "initialize",
+        json!({ "clientInfo": { "name": "agent_vis", "title": "Agent Vis", "version": env!("CARGO_PKG_VERSION") } }),
+    )?;
+    write_message(
+        connection,
+        &json!({ "method": "initialized", "params": {} }),
+    )?;
+    lifecycle.initialized = true;
+    Ok(())
+}
+
 fn rollout_status_in_dir(dir: &Path, thread_id: &str) -> Option<Value> {
     let entries = fs::read_dir(dir).ok()?;
     for entry in entries.flatten() {
@@ -306,25 +341,19 @@ pub(crate) fn connect_codex_thread(
     let connection = connection_for(&app, &state, &request_data.session_key)?;
     // The Tauri backend survives a frontend HMR reload. Initialize exactly
     // once, and do not resume a thread that this connection already owns.
-    let mut lifecycle = connection
+    let lifecycle = connection
         .lifecycle
         .lock()
         .map_err(|_| "Codex app-server lifecycle state is unavailable.".to_owned())?;
     if lifecycle.resumed_thread_id.as_deref() == Some(request_data.thread_id.as_str()) {
         return Ok(());
     }
-    if !lifecycle.initialized {
-        request(
-            &connection,
-            "initialize",
-            json!({ "clientInfo": { "name": "agent_vis", "title": "Agent Vis", "version": env!("CARGO_PKG_VERSION") } }),
-        )?;
-        write_message(
-            &connection,
-            &json!({ "method": "initialized", "params": {} }),
-        )?;
-        lifecycle.initialized = true;
-    }
+    drop(lifecycle);
+    initialize_connection(&connection)?;
+    let mut lifecycle = connection
+        .lifecycle
+        .lock()
+        .map_err(|_| "Codex app-server lifecycle state is unavailable.".to_owned())?;
     let resumed = request(
         &connection,
         "thread/resume",
@@ -348,6 +377,34 @@ pub(crate) fn connect_codex_thread(
         .insert(request_data.thread_id.clone(), instruction_sources);
     lifecycle.resumed_thread_id = Some(request_data.thread_id);
     Ok(())
+}
+
+#[tauri::command]
+pub(crate) fn start_codex_session(
+    app: AppHandle,
+    state: State<'_, CodexAppServerState>,
+    request_data: NewCodexSessionRequest,
+) -> Result<NewCodexSession, String> {
+    let connection = connection_for(&app, &state, &request_data.session_key)?;
+    initialize_connection(&connection)?;
+    let mut params = json!({ "cwd": request_data.cwd });
+    if let Some(model) = request_data.model.filter(|model| !model.is_empty()) {
+        params["model"] = Value::String(model);
+    }
+    let thread = request(&connection, "thread/start", params)?;
+    let id = thread
+        .get("thread")
+        .and_then(|value| value.get("id"))
+        .or_else(|| thread.get("id"))
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| "Codex did not return a new session ID.".to_owned())?;
+    let mut lifecycle = connection
+        .lifecycle
+        .lock()
+        .map_err(|_| "Codex app-server lifecycle state is unavailable.".to_owned())?;
+    lifecycle.resumed_thread_id = Some(id.to_owned());
+    Ok(NewCodexSession { id: id.to_owned() })
 }
 
 #[tauri::command]
@@ -405,6 +462,7 @@ pub(crate) fn list_codex_models(
     request_data: CodexThreadRequest,
 ) -> Result<Value, String> {
     let connection = connection_for(&app, &state, &request_data.session_key)?;
+    initialize_connection(&connection)?;
     request(
         &connection,
         "model/list",

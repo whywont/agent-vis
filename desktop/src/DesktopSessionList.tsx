@@ -3,7 +3,9 @@ import type { SessionMeta } from "@/lib/types";
 import { toCompactMarkdown } from "@/lib/compact-utils";
 import { formatDate, formatTime } from "@/utils/format";
 import type { SessionMatchTarget } from "./App";
-import { readSession, searchSessions, type SessionSearchResponse } from "./desktop-api";
+import { chooseWorkspaceDirectory, readSession, searchSessions, type SessionSearchResponse } from "./desktop-api";
+import { listCodexModels } from "./desktop-api";
+import { CLAUDE_MODEL_OPTIONS, type LiveProvider, type ModelOption } from "./harness-adapters";
 import { MAX_SESSION_ALIAS_LENGTH, sessionAlias, type SessionAliases } from "./session-aliases";
 import { loadPinnedSessions, savePinnedSessions } from "./session-pins";
 import { sessionIdentity } from "./session-refresh";
@@ -19,7 +21,9 @@ interface DesktopSessionListProps {
   error: string;
   settingsActive: boolean;
   sessionAliases: SessionAliases;
+  currentSessionCwd: string | null;
   onOpenSettings: () => void;
+  onStartSession: (provider: LiveProvider, model: string, cwd: string) => Promise<void>;
   onHideSessions: () => void;
   onSelectSession: (files: string, target: SessionMatchTarget | null) => void;
   onDragSession: (session: SessionMeta | null) => void;
@@ -66,7 +70,9 @@ export default function DesktopSessionList({
   error,
   settingsActive,
   sessionAliases,
+  currentSessionCwd,
   onOpenSettings,
+  onStartSession,
   onHideSessions,
   onSelectSession,
   onDragSession,
@@ -80,6 +86,12 @@ export default function DesktopSessionList({
   const [groupBy, setGroupBy] = useState<GroupBy>("date");
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
   const [optionsOpen, setOptionsOpen] = useState(false);
+  const [newSessionOpen, setNewSessionOpen] = useState(false);
+  const [newSessionProvider, setNewSessionProvider] = useState<LiveProvider | null>(null);
+  const [newSessionModel, setNewSessionModel] = useState<string | null>(null);
+  const [newSessionModels, setNewSessionModels] = useState<readonly ModelOption[]>([]);
+  const [newSessionLoading, setNewSessionLoading] = useState(false);
+  const [newSessionError, setNewSessionError] = useState("");
   const [menuOpenFor, setMenuOpenFor] = useState<string | null>(null);
   const [renamingFor, setRenamingFor] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -305,6 +317,72 @@ export default function DesktopSessionList({
           />
           <SessionUtilityActions
             settingsActive={settingsActive}
+            newSessionOpen={newSessionOpen}
+            newSessionProvider={newSessionProvider}
+            newSessionModel={newSessionModel}
+            newSessionModels={newSessionModels}
+            newSessionLoading={newSessionLoading}
+            newSessionError={newSessionError}
+            onNewSession={() => {
+              setNewSessionOpen((open) => !open);
+              setNewSessionProvider(null);
+              setNewSessionModel(null);
+              setNewSessionModels([]);
+              setNewSessionError("");
+            }}
+            onChooseHarness={(provider) => {
+              setNewSessionProvider(provider);
+              setNewSessionModel(null);
+              setNewSessionError("");
+              if (provider === "claude-code") {
+                setNewSessionModels(CLAUDE_MODEL_OPTIONS);
+                return;
+              }
+              setNewSessionLoading(true);
+              const sessionKey = `codex:model-picker:${crypto.randomUUID()}`;
+              void listCodexModels(sessionKey, "", "")
+                .then((models) => {
+                  const options = models.map((model): ModelOption => [
+                    model.id || model.model || "",
+                    model.description || model.displayName || (model.isDefault ? "Codex default" : "Codex model"),
+                  ]).filter(([id]) => Boolean(id));
+                  setNewSessionModels(options.length ? options : [["", "Codex default"]]);
+                })
+                .catch((reason: unknown) => {
+                  setNewSessionError(actionError(reason));
+                  setNewSessionModels([["", "Codex default"]]);
+                })
+                .finally(() => setNewSessionLoading(false));
+            }}
+            onChooseModel={(model) => setNewSessionModel(model)}
+            currentSessionCwd={currentSessionCwd}
+            onUseCurrentDirectory={(cwd) => {
+              if (!newSessionProvider || newSessionModel === null) return;
+              setNewSessionLoading(true);
+              setNewSessionError("");
+              void onStartSession(newSessionProvider, newSessionModel, cwd)
+                .then(() => {
+                  setNewSessionOpen(false);
+                  setNewSessionProvider(null);
+                  setNewSessionModel(null);
+                })
+                .catch((reason: unknown) => setNewSessionError(actionError(reason)))
+                .finally(() => setNewSessionLoading(false));
+            }}
+            onChooseDirectory={() => {
+              if (!newSessionProvider || newSessionModel === null) return;
+              setNewSessionLoading(true);
+              setNewSessionError("");
+              void chooseWorkspaceDirectory()
+                .then((cwd) => cwd ? onStartSession(newSessionProvider, newSessionModel, cwd) : undefined)
+                .then(() => {
+                  setNewSessionOpen(false);
+                  setNewSessionProvider(null);
+                  setNewSessionModel(null);
+                })
+                .catch((reason: unknown) => setNewSessionError(actionError(reason)))
+                .finally(() => setNewSessionLoading(false));
+            }}
             onOpenSettings={onOpenSettings}
             onHideSessions={onHideSessions}
           />
@@ -665,10 +743,34 @@ function SessionOptions({
 
 function SessionUtilityActions({
   settingsActive,
+  newSessionOpen,
+  newSessionProvider,
+  newSessionModel,
+  newSessionModels,
+  newSessionLoading,
+  newSessionError,
+  onNewSession,
+  onChooseHarness,
+  onChooseModel,
+  currentSessionCwd,
+  onUseCurrentDirectory,
+  onChooseDirectory,
   onOpenSettings,
   onHideSessions,
 }: {
   settingsActive: boolean;
+  newSessionOpen: boolean;
+  newSessionProvider: LiveProvider | null;
+  newSessionModel: string | null;
+  newSessionModels: readonly ModelOption[];
+  newSessionLoading: boolean;
+  newSessionError: string;
+  onNewSession: () => void;
+  onChooseHarness: (provider: LiveProvider) => void;
+  onChooseModel: (model: string) => void;
+  currentSessionCwd: string | null;
+  onUseCurrentDirectory: (cwd: string) => void;
+  onChooseDirectory: () => void;
   onOpenSettings: () => void;
   onHideSessions: () => void;
 }) {
@@ -682,6 +784,53 @@ function SessionUtilityActions({
       >
         &#9881;
       </button>
+      <div className="desktop-new-session-wrap">
+        <button
+          type="button"
+          className={`desktop-new-session-btn desktop-session-control${newSessionOpen ? " active" : ""}`}
+          onClick={onNewSession}
+          title="Start a new session"
+          aria-label="Start a new session"
+          aria-expanded={newSessionOpen}
+        >
+          +
+        </button>
+        {newSessionOpen && (
+          <div className="desktop-new-session-menu" role="menu">
+            {!newSessionProvider ? (
+              <>
+                <header>Start new session</header>
+                <span>Choose a harness</span>
+                <button type="button" onClick={() => onChooseHarness("codex")}>Codex <small>OpenAI</small></button>
+                <button type="button" onClick={() => onChooseHarness("claude-code")}>Claude Code <small>Anthropic</small></button>
+              </>
+            ) : newSessionModel === null ? (
+              <>
+                <header>Choose {newSessionProvider === "codex" ? "Codex" : "Claude"} model</header>
+                {newSessionLoading ? <span>Loading models...</span> : newSessionModels.map(([model, description]) => (
+                  <button type="button" key={model || "default"} onClick={() => onChooseModel(model)}>
+                    <code>{model || "default"}</code><small>{description}</small>
+                  </button>
+                ))}
+                {newSessionError && <em>{newSessionError}</em>}
+              </>
+            ) : (
+              <>
+                <header>Choose workspace</header>
+                {currentSessionCwd && (
+                  <button type="button" onClick={() => onUseCurrentDirectory(currentSessionCwd)}>
+                    <span>Current session directory</span><small title={currentSessionCwd}>{currentSessionCwd}</small>
+                  </button>
+                )}
+                <button type="button" onClick={onChooseDirectory}>
+                  <span>Choose directory...</span><small>Finder</small>
+                </button>
+                {newSessionError && <em>{newSessionError}</em>}
+              </>
+            )}
+          </div>
+        )}
+      </div>
       <button
         className="desktop-panel-toggle desktop-session-control"
         onClick={onHideSessions}

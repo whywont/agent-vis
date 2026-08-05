@@ -83,6 +83,38 @@ pub(crate) fn get_git_branch(workspace_root: String) -> Result<Option<String>, S
 }
 
 #[tauri::command]
+pub(crate) fn choose_workspace_directory() -> Result<Option<String>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let output = Command::new("osascript")
+            .args([
+                "-e",
+                "POSIX path of (choose folder with prompt \"Choose a workspace for the new session\")",
+            ])
+            .output()
+            .map_err(|error| format!("Could not open the folder picker: {error}"))?;
+        if !output.status.success() {
+            return Ok(None);
+        }
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        if path.is_empty() {
+            return Ok(None);
+        }
+        let canonical = Path::new(&path)
+            .canonicalize()
+            .map_err(|_| "The selected workspace is unavailable.".to_owned())?;
+        canonical
+            .is_dir()
+            .then(|| Some(canonical.to_string_lossy().into_owned()))
+            .ok_or_else(|| "The selected workspace is not a directory.".to_owned())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("Choosing a workspace directory is currently supported on macOS only.".to_owned())
+    }
+}
+
+#[tauri::command]
 pub(crate) fn resolve_workspace_filepaths(
     request: ResolveWorkspaceFilepathsRequest,
 ) -> Result<Vec<Option<String>>, String> {

@@ -96,6 +96,10 @@ export function getGitBranch(workspaceRoot: string): Promise<string | null> {
   return invoke<string | null>("get_git_branch", { workspaceRoot });
 }
 
+export function chooseWorkspaceDirectory(): Promise<string | null> {
+  return invoke<string | null>("choose_workspace_directory");
+}
+
 export function resolveWorkspaceFilepaths(workspaceRoot: string, filepaths: string[]): Promise<(string | null)[]> {
   return invoke<(string | null)[]>("resolve_workspace_filepaths", { request: { workspaceRoot, filepaths } });
 }
@@ -118,6 +122,14 @@ export function stopTerminal(terminalId: string): Promise<void> {
 
 export function connectCodexThread(sessionKey: string, threadId: string, cwd: string): Promise<void> {
   return invoke<void>("connect_codex_thread", { requestData: { sessionKey, threadId, cwd } });
+}
+
+export interface NewCodexSession {
+  id: string;
+}
+
+export function startCodexSession(sessionKey: string, cwd: string, model: string): Promise<NewCodexSession> {
+  return invoke<NewCodexSession>("start_codex_session", { requestData: { sessionKey, cwd, model } });
 }
 
 export function sendCodexTurn(
@@ -184,6 +196,10 @@ export function respondToCodexApproval(sessionKey: string, requestId: unknown, r
 
 export function connectClaudeThread(sessionKey: string, threadId: string, cwd: string): Promise<void> {
   return invoke<void>("connect_claude_thread", { requestData: { sessionKey, threadId, cwd } });
+}
+
+export function startClaudeSession(sessionKey: string, threadId: string, cwd: string, model: string): Promise<string> {
+  return invoke<string>("start_claude_session", { requestData: { sessionKey, threadId, cwd, model } });
 }
 
 export function sendClaudeTurn(sessionKey: string, text: string, imageUrls: string[]): Promise<void> {

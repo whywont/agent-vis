@@ -13,6 +13,7 @@ export default function DesktopSessionWorkspace({
   onActiveTabChange,
   onTerminalOpen,
   onTerminalClose,
+  liveSessionKey,
 }: {
   primary: SessionMeta;
   secondary: SessionMeta | null;
@@ -24,26 +25,30 @@ export default function DesktopSessionWorkspace({
   onActiveTabChange: (tab: "session" | "files") => void;
   onTerminalOpen: (session: SessionMeta) => void;
   onTerminalClose: () => void;
+  liveSessionKey?: string;
 }) {
   const split = Boolean(secondary);
   return (
     <div className={`desktop-session-workspace${split ? " split" : ""}`}>
       <div className="desktop-split-pane desktop-split-primary">
         <DesktopSessionDetail
-        session={primary}
-        sessionName={primaryName}
-        activeTab={activeTab}
-        terminalOpen={terminalOpen}
-        splitView={split}
-        onActiveTabChange={onActiveTabChange}
-        onTerminalOpen={() => onTerminalOpen(primary)}
-        onTerminalClose={onTerminalClose}
-        matchTarget={matchTarget}
-      />
+          key={`${primary.source}:${primary.id}:${primary.file}`}
+          session={primary}
+          sessionName={primaryName}
+          activeTab={activeTab}
+          terminalOpen={terminalOpen}
+          splitView={split}
+          onActiveTabChange={onActiveTabChange}
+          onTerminalOpen={() => onTerminalOpen(primary)}
+          onTerminalClose={onTerminalClose}
+          matchTarget={matchTarget}
+          liveSessionKey={liveSessionKey}
+        />
       </div>
       {secondary && (
         <div className="desktop-split-pane">
           <DesktopSessionDetail
+            key={`${secondary.source}:${secondary.id}:${secondary.file}`}
             session={secondary}
             sessionName={secondaryName}
             activeTab="session"

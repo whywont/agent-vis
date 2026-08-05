@@ -42,7 +42,8 @@ export default function Toolbar({
   liveChat,
 }: ToolbarProps) {
   const toolbarRef = useRef<HTMLDivElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
+  const filterMenuRef = useRef<HTMLDivElement>(null);
+  const chatMenuRef = useRef<HTMLDivElement>(null);
   const [compact, setCompact] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [chatMenuOpen, setChatMenuOpen] = useState(false);
@@ -78,7 +79,8 @@ export default function Toolbar({
   useEffect(() => {
     if (!menuOpen && !chatMenuOpen) return;
     function onPointerDown(event: PointerEvent) {
-      if (!menuRef.current?.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (!filterMenuRef.current?.contains(target) && !chatMenuRef.current?.contains(target)) {
         setMenuOpen(false);
         setChatMenuOpen(false);
       }
@@ -131,10 +133,13 @@ export default function Toolbar({
       </div>
       <div className="toolbar-sep" style={{ flexShrink: 0 }} />
       {compact ? (
-        <div className="toolbar-filter-menu" ref={menuRef}>
+        <div className="toolbar-filter-menu" ref={filterMenuRef}>
           <button
             className={`filter-btn toolbar-filter-trigger${menuOpen ? " active" : ""}`}
-            onClick={() => setMenuOpen((open) => !open)}
+            onClick={() => {
+              setChatMenuOpen(false);
+              setMenuOpen((open) => !open);
+            }}
             aria-haspopup="menu"
             aria-expanded={menuOpen}
           >
@@ -199,10 +204,13 @@ export default function Toolbar({
           </button>
         </div>
       )}
-      {liveChat && <div className="toolbar-chat-menu" ref={menuRef}>
+      {liveChat && <div className="toolbar-chat-menu" ref={chatMenuRef}>
         <button
           className={`filter-btn toolbar-chat-trigger${chatMenuOpen ? " active" : ""}${liveChat.pinned ? " pinned" : ""}`}
-          onClick={() => setChatMenuOpen((open) => !open)}
+          onClick={() => {
+            setMenuOpen(false);
+            setChatMenuOpen((open) => !open);
+          }}
           aria-label="Chat options"
           aria-haspopup="menu"
           aria-expanded={chatMenuOpen}
@@ -240,8 +248,8 @@ export default function Toolbar({
               disabled={terminalDisabled}
               onClick={() => {
                 if (terminalDisabled) return;
-                onOpenTerminal?.();
                 setChatMenuOpen(false);
+                onOpenTerminal?.();
               }}
             >
               <span className="toolbar-filter-check">&gt;_</span>
