@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import "@xterm/xterm/css/xterm.css";
-import { resizeTerminal, startTerminal, stopTerminal, writeTerminal } from "./desktop-api";
+import { resizeTerminal, startTerminal, writeTerminal } from "./desktop-api";
 
 interface TerminalOutput {
   terminalId: string;
@@ -12,6 +12,7 @@ export default function DesktopTerminal({
   sessionCwd,
   sessionId,
   sessionSource,
+  terminalId,
   panelHeight,
   active,
   prefillResume,
@@ -20,6 +21,7 @@ export default function DesktopTerminal({
   sessionCwd: string;
   sessionId: string;
   sessionSource: "codex" | "claude-code";
+  terminalId: string;
   panelHeight: number;
   active: boolean;
   prefillResume: boolean;
@@ -29,7 +31,7 @@ export default function DesktopTerminal({
   const terminalRef = useRef<import("@xterm/xterm").Terminal | null>(null);
   const fitAddonRef = useRef<import("@xterm/addon-fit").FitAddon | null>(null);
   const [error, setError] = useState("");
-  const terminalIdRef = useRef(`terminal-${crypto.randomUUID()}`);
+  const terminalIdRef = useRef(terminalId);
 
   useEffect(() => {
     const terminalId = terminalIdRef.current;
@@ -98,7 +100,8 @@ export default function DesktopTerminal({
       terminalRef.current = terminal;
 
       unlisten = await listen<TerminalOutput>("terminal-output", (event) => {
-        if (event.payload.terminalId === terminalId) terminal?.write(event.payload.data);
+        if (event.payload.terminalId !== terminalId) return;
+        terminal?.write(event.payload.data);
       });
       if (disposed) return;
       terminal.onData((data) => {
@@ -106,11 +109,11 @@ export default function DesktopTerminal({
           terminal?.write("\r\n\x1b[31m[terminal disconnected]\x1b[0m\r\n");
         });
       });
-      await startTerminal(terminalId, sessionCwd);
+      const terminalStarted = await startTerminal(terminalId, sessionCwd);
       started = true;
       lastSize = "";
       fitToContainer();
-      if (prefillResume) {
+      if (prefillResume && terminalStarted) {
         // zsh emits its first prompt after startup. Send the draft to its line
         // editor without a newline, so it remains editable and Enter executes it.
         draftTimer = window.setTimeout(() => {
@@ -124,9 +127,6 @@ export default function DesktopTerminal({
           }
         }, 300);
       }
-      if (disposed) {
-        await stopTerminal(terminalId);
-      }
     }
 
     void open().catch((reason: unknown) => {
@@ -139,9 +139,10 @@ export default function DesktopTerminal({
       terminal?.dispose();
       terminalRef.current = null;
       fitAddonRef.current = null;
-      void stopTerminal(terminalId);
+      // The session owner stops this terminal on an explicit close. This
+      // cleanup also runs during Vite HMR, where killing Codex would be wrong.
     };
-  }, [prefillResume, sessionCwd, sessionId, sessionSource]);
+  }, [prefillResume, sessionCwd, sessionId, sessionSource, terminalId]);
 
   useLayoutEffect(() => {
     if (!active) return;

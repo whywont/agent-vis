@@ -9,7 +9,7 @@ import DesktopFileTree from "./DesktopFileTree";
 import DesktopFilesCanvas from "./DesktopFilesCanvas";
 import DesktopTimeline from "./DesktopTimeline";
 import DesktopTerminal from "./DesktopTerminal";
-import { getGitBranch, readSession } from "./desktop-api";
+import { getGitBranch, readSession, stopTerminal } from "./desktop-api";
 import { startWindowDrag } from "./window-drag";
 
 export default function DesktopSessionDetail({
@@ -231,6 +231,7 @@ export default function DesktopSessionDetail({
 
   function closeActiveTerminal() {
     if (!visibleTerminal) return;
+    void stopTerminal(nativeTerminalId(visibleTerminal));
     setTerminals((current) => {
       const next = current.filter((terminal) => terminal.key !== visibleTerminal.key);
       const remaining = next.filter((terminal) => terminal.sessionKey === currentSessionKey);
@@ -495,6 +496,7 @@ export default function DesktopSessionDetail({
                   sessionCwd={terminal.cwd}
                   sessionId={terminal.id}
                   sessionSource={terminal.source}
+                  terminalId={nativeTerminalId(terminal)}
                   panelHeight={snapped ? -1 : terminalHeight}
                   prefillResume={terminal.prefillResume}
                   paneCount={isSplit ? panes.length : 1}
@@ -532,6 +534,10 @@ function groupTerminalPanes(terminals: TerminalSession[]): [string, TerminalSess
     groups.set(terminal.sessionKey, [...(groups.get(terminal.sessionKey) || []), terminal]);
   }
   return [...groups.entries()];
+}
+
+function nativeTerminalId(terminal: TerminalSession): string {
+  return `terminal-${terminal.key}`;
 }
 
 function TerminalGlyph() {

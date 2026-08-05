@@ -92,8 +92,8 @@ export function getGitBranch(workspaceRoot: string): Promise<string | null> {
   return invoke<string | null>("get_git_branch", { workspaceRoot });
 }
 
-export function startTerminal(terminalId: string, workspaceRoot: string): Promise<void> {
-  return invoke<void>("start_terminal", { request: { terminalId, workspaceRoot } });
+export function startTerminal(terminalId: string, workspaceRoot: string): Promise<boolean> {
+  return invoke<boolean>("start_terminal", { request: { terminalId, workspaceRoot } });
 }
 
 export function writeTerminal(terminalId: string, data: string): Promise<void> {
