@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   getDesktopSettings,
   getMeshStatus,
+  regenerateMeshIdentity,
   connectMeshPeer,
   saveDesktopSettings,
   type DesktopSettings,
@@ -40,6 +41,9 @@ export default function DesktopSettingsPage({ onBack }: { onBack: () => void }) 
   const [meshStatus, setMeshStatus] = useState<MeshStatus | null>(null);
   const [syncingDeviceId, setSyncingDeviceId] = useState<string | null>(null);
   const [deviceSyncResults, setDeviceSyncResults] = useState<Record<string, { connected: boolean; detail: string }>>({});
+  const [identityCopied, setIdentityCopied] = useState(false);
+  const [confirmIdentityReset, setConfirmIdentityReset] = useState(false);
+  const [regeneratingIdentity, setRegeneratingIdentity] = useState(false);
 
   useEffect(() => {
     getDesktopSettings()
@@ -176,6 +180,26 @@ export default function DesktopSettingsPage({ onBack }: { onBack: () => void }) 
       setStatus("Device saved.");
     } catch (reason: unknown) {
       setStatus(reason instanceof Error ? reason.message : String(reason));
+    }
+  }
+
+  async function regenerateIdentity() {
+    if (!confirmIdentityReset) {
+      setConfirmIdentityReset(true);
+      setStatus("Confirm regeneration. Existing devices must save the new public identity.");
+      return;
+    }
+    setRegeneratingIdentity(true);
+    try {
+      const next = await regenerateMeshIdentity();
+      setMeshStatus(next);
+      setDeviceSyncResults({});
+      setConfirmIdentityReset(false);
+      setStatus("Mesh identity regenerated. Copy the new public ID to every paired Mac.");
+    } catch (reason: unknown) {
+      setStatus(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setRegeneratingIdentity(false);
     }
   }
 
@@ -318,7 +342,27 @@ export default function DesktopSettingsPage({ onBack }: { onBack: () => void }) 
         <section className="settings-card desktop-settings-info-card">
           <h3>Configured devices</h3>
           <p>Pair a Tailscale or private-network address with the other app&apos;s identity key. Sync sends policy-authorized transcript snapshots in both directions over the authenticated encrypted connection.</p>
-          <div className="desktop-settings-fact"><span>This device identity key</span><strong className="desktop-mesh-public-key">{meshStatus?.publicKey || "loading..."}</strong></div>
+          <div className="desktop-mesh-identity">
+            <span>This device public ID</span>
+            <code className="desktop-mesh-public-key">{meshStatus?.publicKey || "loading..."}</code>
+            <div className="desktop-mesh-identity-actions">
+              <button type="button" disabled={!meshStatus?.publicKey} onClick={() => {
+                navigator.clipboard.writeText(meshStatus?.publicKey || "").then(() => {
+                  setIdentityCopied(true);
+                  window.setTimeout(() => setIdentityCopied(false), 1400);
+                }).catch(() => setStatus("Could not copy the public identity."));
+              }}>{identityCopied ? "copied" : "copy public ID"}</button>
+              <button
+                type="button"
+                className={confirmIdentityReset ? "confirm" : ""}
+                disabled={regeneratingIdentity}
+                onClick={() => void regenerateIdentity()}
+              >
+                {regeneratingIdentity ? "regenerating..." : confirmIdentityReset ? "confirm regenerate" : "regenerate identity"}
+              </button>
+            </div>
+            <small>The private identity stays in macOS Keychain. Regenerating invalidates this Mac&apos;s existing pairings.</small>
+          </div>
           {settings.pairedDevices.length ? (
             <div className="desktop-paired-devices">
               {settings.pairedDevices.map((device) => (

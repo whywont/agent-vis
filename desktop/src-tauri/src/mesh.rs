@@ -32,6 +32,7 @@ const MAX_SYNCED_SESSIONS: usize = 256;
 const MAX_SYNCED_FILES: usize = 32;
 const MAX_SYNCED_SESSION_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_SYNCED_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
+const TRANSCRIPT_SYNC_CAPABILITY: &str = "transcript-snapshots-v1";
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -124,9 +125,17 @@ impl MeshSessionMeta {
 enum MeshMessage {
     Hello {
         protocol: u8,
+        #[serde(default)]
+        capabilities: Vec<String>,
     },
     Ack {
         protocol: u8,
+        #[serde(default)]
+        capabilities: Vec<String>,
+    },
+    Reject {
+        protocol: u8,
+        reason: MeshRejectReason,
     },
     SessionStart {
         protocol: u8,
@@ -152,8 +161,9 @@ enum MeshMessage {
 impl MeshMessage {
     fn protocol(&self) -> u8 {
         match self {
-            Self::Hello { protocol }
-            | Self::Ack { protocol }
+            Self::Hello { protocol, .. }
+            | Self::Ack { protocol, .. }
+            | Self::Reject { protocol, .. }
             | Self::SessionStart { protocol, .. }
             | Self::SessionChunk { protocol, .. }
             | Self::SessionEnd { protocol }
@@ -162,12 +172,22 @@ impl MeshMessage {
     }
 }
 
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum MeshRejectReason {
+    DeviceNotAuthorized,
+}
+
 pub(crate) struct MeshState {
     app: tauri::AppHandle,
-    private_key: Vec<u8>,
-    public_key: String,
+    identity: Mutex<MeshIdentity>,
     statuses: Arc<Mutex<Vec<MeshPeerStatus>>>,
     listener: Mutex<Option<MeshListener>>,
+}
+
+struct MeshIdentity {
+    private_key: Vec<u8>,
+    public_key: String,
 }
 
 struct MeshListener {
@@ -181,8 +201,10 @@ impl MeshState {
         let public_key = public_key_for(&private_key)?;
         let state = Self {
             app,
-            private_key,
-            public_key,
+            identity: Mutex::new(MeshIdentity {
+                private_key,
+                public_key,
+            }),
             statuses: Arc::new(Mutex::new(Vec::new())),
             listener: Mutex::new(None),
         };
@@ -215,9 +237,13 @@ impl MeshState {
             return;
         }
         let shutdown = Arc::new(AtomicBool::new(false));
+        let private_key = match self.identity.lock() {
+            Ok(identity) => identity.private_key.clone(),
+            Err(_) => return,
+        };
         let state = ListenerState {
             app: self.app.clone(),
-            private_key: self.private_key.clone(),
+            private_key,
             statuses: Arc::clone(&self.statuses),
             pending_handshakes: Arc::new(Mutex::new(0)),
         };
@@ -229,7 +255,11 @@ impl MeshState {
 
     fn status(&self) -> MeshStatus {
         MeshStatus {
-            public_key: self.public_key.clone(),
+            public_key: self
+                .identity
+                .lock()
+                .map(|identity| identity.public_key.clone())
+                .unwrap_or_default(),
             listening: self
                 .listener
                 .lock()
@@ -241,6 +271,34 @@ impl MeshState {
                 .map(|statuses| statuses.clone())
                 .unwrap_or_default(),
         }
+    }
+
+    fn regenerate_identity(&self) -> Result<MeshStatus, String> {
+        let private_key = generate_identity()?;
+        SystemSecretStore.set(
+            MESH_IDENTITY_KEY_ACCOUNT,
+            &STANDARD_NO_PAD.encode(&private_key),
+        )?;
+        let public_key = public_key_for(&private_key)?;
+        self.set_enabled(false);
+        {
+            let mut identity = self
+                .identity
+                .lock()
+                .map_err(|_| "Mesh identity state is unavailable.".to_owned())?;
+            *identity = MeshIdentity {
+                private_key,
+                public_key,
+            };
+        }
+        if let Ok(mut statuses) = self.statuses.lock() {
+            statuses.clear();
+        }
+        let enabled = read_validated_desktop_settings(&desktop_settings_path(&self.app)?)
+            .map(|settings| crate::settings::has_authenticated_device(&settings))
+            .unwrap_or(false);
+        self.set_enabled(enabled);
+        Ok(self.status())
     }
 }
 
@@ -268,15 +326,19 @@ fn load_or_create_identity() -> Result<Vec<u8>, String> {
         }
         return Ok(key);
     }
-    let keypair =
-        Builder::new(NoiseParams::from_str(NOISE_PATTERN).map_err(|error| error.to_string())?)
-            .generate_keypair()
-            .map_err(|error| error.to_string())?;
+    let private_key = generate_identity()?;
     SystemSecretStore.set(
         MESH_IDENTITY_KEY_ACCOUNT,
-        &STANDARD_NO_PAD.encode(&keypair.private),
+        &STANDARD_NO_PAD.encode(&private_key),
     )?;
-    Ok(keypair.private)
+    Ok(private_key)
+}
+
+fn generate_identity() -> Result<Vec<u8>, String> {
+    Builder::new(NoiseParams::from_str(NOISE_PATTERN).map_err(|error| error.to_string())?)
+        .generate_keypair()
+        .map(|keypair| keypair.private)
+        .map_err(|error| error.to_string())
 }
 
 fn public_key_for(private_key: &[u8]) -> Result<String, String> {
@@ -334,24 +396,33 @@ fn write_frame(stream: &mut TcpStream, data: &[u8]) -> Result<(), String> {
     }
     stream
         .write_all(&(data.len() as u32).to_be_bytes())
-        .map_err(|error| error.to_string())?;
-    stream.write_all(data).map_err(|error| error.to_string())
+        .map_err(mesh_io_error)?;
+    stream.write_all(data).map_err(mesh_io_error)
 }
 
 fn read_frame(stream: &mut TcpStream) -> Result<Vec<u8>, String> {
     let mut length = [0; 4];
-    stream
-        .read_exact(&mut length)
-        .map_err(|error| error.to_string())?;
+    stream.read_exact(&mut length).map_err(mesh_io_error)?;
     let length = u32::from_be_bytes(length) as usize;
     if length == 0 || length > MAX_FRAME_BYTES {
         return Err("Mesh frame has an invalid size.".to_owned());
     }
     let mut frame = vec![0; length];
-    stream
-        .read_exact(&mut frame)
-        .map_err(|error| error.to_string())?;
+    stream.read_exact(&mut frame).map_err(mesh_io_error)?;
     Ok(frame)
+}
+
+fn mesh_io_error(error: std::io::Error) -> String {
+    match error.kind() {
+        std::io::ErrorKind::UnexpectedEof
+        | std::io::ErrorKind::ConnectionAborted
+        | std::io::ErrorKind::ConnectionReset
+        | std::io::ErrorKind::BrokenPipe => "Peer closed the connection. Confirm Agent Vis is open on the other Mac, both Macs run the same build, and this device's identity key is saved there.".to_owned(),
+        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => {
+            "Timed out waiting for the peer device. Confirm Agent Vis is open there and Tailscale can reach port 4242.".to_owned()
+        }
+        _ => error.to_string(),
+    }
 }
 
 fn validate_ephemeral_key(frame: &[u8]) -> Result<(), String> {
@@ -721,7 +792,7 @@ fn receive_snapshots(
                 prune_synced_sessions(synced_root, device_id, &received_keys)?;
                 return Ok(received_sessions);
             }
-            MeshMessage::Hello { .. } | MeshMessage::Ack { .. } => {
+            MeshMessage::Hello { .. } | MeshMessage::Ack { .. } | MeshMessage::Reject { .. } => {
                 return Err("Mesh message is not valid during transcript transfer.".to_owned());
             }
         }
@@ -776,25 +847,38 @@ fn accept_connections(listener: TcpListener, state: ListenerState, shutdown: Arc
 
 fn receive_connection(stream: &mut TcpStream, state: &ListenerState) -> Result<(), String> {
     let (mut transport, remote_key) = handshake_responder(stream, &state.private_key)?;
-    let settings = read_validated_desktop_settings(&desktop_settings_path(&state.app)?)?;
-    let device = settings
-        .paired_devices
-        .iter()
-        .find(|device| {
-            decode_public_key(&device.public_key).ok().as_deref() == Some(remote_key.as_slice())
-        })
-        .ok_or("Unrecognized mesh peer.")?;
     let hello = receive_message(stream, &mut transport)?;
-    if !matches!(hello, MeshMessage::Hello { .. }) {
+    let MeshMessage::Hello { capabilities, .. } = hello else {
         return Err("Mesh peer did not send a hello message.".to_owned());
-    }
+    };
+    let settings = read_validated_desktop_settings(&desktop_settings_path(&state.app)?)?;
+    let Some(device) = settings.paired_devices.iter().find(|device| {
+        decode_public_key(&device.public_key).ok().as_deref() == Some(remote_key.as_slice())
+    }) else {
+        send_message(
+            stream,
+            &mut transport,
+            &MeshMessage::Reject {
+                protocol: PROTOCOL_VERSION,
+                reason: MeshRejectReason::DeviceNotAuthorized,
+            },
+        )?;
+        return Err("Unrecognized mesh peer.".to_owned());
+    };
     send_message(
         stream,
         &mut transport,
         &MeshMessage::Ack {
             protocol: PROTOCOL_VERSION,
+            capabilities: vec![TRANSCRIPT_SYNC_CAPABILITY.to_owned()],
         },
     )?;
+    if !capabilities
+        .iter()
+        .any(|capability| capability == TRANSCRIPT_SYNC_CAPABILITY)
+    {
+        return Err("Peer is running an older Agent Vis build without transcript sync.".to_owned());
+    }
     stream
         .set_read_timeout(Some(TRANSFER_TIMEOUT))
         .map_err(|error| error.to_string())?;
@@ -847,6 +931,13 @@ pub(crate) fn get_mesh_status(state: tauri::State<'_, MeshState>) -> MeshStatus 
 }
 
 #[tauri::command]
+pub(crate) fn regenerate_mesh_identity(
+    state: tauri::State<'_, MeshState>,
+) -> Result<MeshStatus, String> {
+    state.regenerate_identity()
+}
+
+#[tauri::command]
 pub(crate) fn connect_mesh_peer(
     app: tauri::AppHandle,
     state: tauri::State<'_, MeshState>,
@@ -874,17 +965,37 @@ pub(crate) fn connect_mesh_peer(
         .set_write_timeout(Some(HANDSHAKE_TIMEOUT))
         .map_err(|error| error.to_string())?;
     let result = (|| {
-        let mut transport = handshake_initiator(&mut stream, &state.private_key, &peer_key)?;
+        let private_key = state
+            .identity
+            .lock()
+            .map_err(|_| "Mesh identity state is unavailable.".to_owned())?
+            .private_key
+            .clone();
+        let mut transport = handshake_initiator(&mut stream, &private_key, &peer_key)?;
         send_message(
             &mut stream,
             &mut transport,
             &MeshMessage::Hello {
                 protocol: PROTOCOL_VERSION,
+                capabilities: vec![TRANSCRIPT_SYNC_CAPABILITY.to_owned()],
             },
         )?;
         let reply = receive_message(&mut stream, &mut transport)?;
-        if !matches!(reply, MeshMessage::Ack { .. }) {
-            return Err("Mesh peer did not acknowledge the connection.".to_owned());
+        match reply {
+            MeshMessage::Ack { capabilities, .. }
+                if capabilities
+                    .iter()
+                    .any(|capability| capability == TRANSCRIPT_SYNC_CAPABILITY) => {}
+            MeshMessage::Ack { .. } => {
+                return Err("The other Mac is running an older Agent Vis build without transcript sync. Update and reopen Agent Vis there, then try again.".to_owned());
+            }
+            MeshMessage::Reject {
+                reason: MeshRejectReason::DeviceNotAuthorized,
+                ..
+            } => {
+                return Err("Peer has not authorized this Mac. Save this Mac's identity key in Agent Vis on the other device, then try again.".to_owned());
+            }
+            _ => return Err("Mesh peer did not acknowledge the connection.".to_owned()),
         }
         stream
             .set_read_timeout(Some(TRANSFER_TIMEOUT))
@@ -956,8 +1067,21 @@ mod tests {
 
     #[test]
     fn encrypted_messages_reject_an_unsupported_protocol() {
-        let message = MeshMessage::Hello { protocol: 99 };
+        let message = MeshMessage::Hello {
+            protocol: 99,
+            capabilities: Vec::new(),
+        };
         assert_ne!(message.protocol(), PROTOCOL_VERSION);
+    }
+
+    #[test]
+    fn older_hello_messages_have_no_transcript_sync_capability() {
+        let message: MeshMessage =
+            serde_json::from_str(r#"{"kind":"hello","protocol":1}"#).unwrap();
+        let MeshMessage::Hello { capabilities, .. } = message else {
+            unreachable!();
+        };
+        assert!(capabilities.is_empty());
     }
 
     #[test]

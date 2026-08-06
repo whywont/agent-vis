@@ -1034,6 +1034,51 @@ body.terminal-over-sessions #sidebar {
   text-align: right;
 }
 
+.desktop-mesh-identity {
+  display: grid;
+  gap: 8px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+}
+
+.desktop-mesh-identity > span {
+  color: var(--text-muted);
+  font: 11px var(--font-mono);
+}
+
+.desktop-mesh-identity > code {
+  overflow-wrap: anywhere;
+  color: var(--green);
+  font: 11px/1.45 var(--font-mono);
+}
+
+.desktop-mesh-identity > small {
+  color: var(--text-dim);
+  font: 10px/1.45 var(--font-mono);
+}
+
+.desktop-mesh-identity-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.desktop-mesh-identity-actions button {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font: 10px var(--font-mono);
+}
+
+.desktop-mesh-identity-actions button.confirm {
+  border-color: rgba(224, 91, 91, 0.55);
+  background: rgba(224, 91, 91, 0.1);
+  color: var(--red);
+}
+
 .desktop-paired-devices {
   display: grid;
   gap: 10px;

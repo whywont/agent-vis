@@ -253,6 +253,10 @@ export function getMeshStatus(): Promise<MeshStatus> {
   return invoke<MeshStatus>("get_mesh_status");
 }
 
+export function regenerateMeshIdentity(): Promise<MeshStatus> {
+  return invoke<MeshStatus>("regenerate_mesh_identity");
+}
+
 export function connectMeshPeer(deviceId: string): Promise<ConnectMeshPeerResponse> {
   return invoke<ConnectMeshPeerResponse>("connect_mesh_peer", { request: { deviceId } });
 }
