@@ -6,9 +6,11 @@ import type { SessionMatchTarget } from "./App";
 import { chooseWorkspaceDirectory, readSession, searchSessions, type SessionSearchResponse } from "./desktop-api";
 import { listCodexModels } from "./desktop-api";
 import { CLAUDE_MODEL_OPTIONS, type LiveProvider, type ModelOption } from "./harness-adapters";
+import type { SessionSharingMode } from "./desktop-api";
 import { MAX_SESSION_ALIAS_LENGTH, sessionAlias, type SessionAliases } from "./session-aliases";
 import { loadPinnedSessions, savePinnedSessions } from "./session-pins";
 import { sessionIdentity } from "./session-refresh";
+import { hasCurrentMeshSyncReceipt, type MeshSyncReceipts } from "./mesh-sync-receipts";
 
 type SortBy = "newest" | "oldest" | "project";
 type GroupBy = "date" | "project" | "none";
@@ -22,6 +24,10 @@ interface DesktopSessionListProps {
   settingsActive: boolean;
   sessionAliases: SessionAliases;
   currentSessionCwd: string | null;
+  sessionSharingMode: SessionSharingMode;
+  sharedSessionKeys: Set<string>;
+  meshSyncReceipts: MeshSyncReceipts;
+  hasConfiguredSharingDevice: boolean;
   onOpenSettings: () => void;
   onStartSession: (provider: LiveProvider, model: string, cwd: string) => Promise<void>;
   onHideSessions: () => void;
@@ -31,6 +37,7 @@ interface DesktopSessionListProps {
   onSplitSession: (session: SessionMeta) => void;
   onDeleteSession: (files: string) => Promise<void>;
   onRenameSession: (session: SessionMeta, name: string) => void;
+  onToggleSessionShare: (session: SessionMeta, shared: boolean) => Promise<void>;
 }
 
 function fileKey(session: SessionMeta): string {
@@ -71,6 +78,10 @@ export default function DesktopSessionList({
   settingsActive,
   sessionAliases,
   currentSessionCwd,
+  sessionSharingMode,
+  sharedSessionKeys,
+  meshSyncReceipts,
+  hasConfiguredSharingDevice,
   onOpenSettings,
   onStartSession,
   onHideSessions,
@@ -80,6 +91,7 @@ export default function DesktopSessionList({
   onSplitSession,
   onDeleteSession,
   onRenameSession,
+  onToggleSessionShare,
 }: DesktopSessionListProps) {
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState<SortBy>("newest");
@@ -228,6 +240,7 @@ export default function DesktopSessionList({
   }
 
   function startSessionDrag(event: React.MouseEvent<HTMLDivElement>, session: SessionMeta) {
+    if (session.synced) return;
     if (event.button !== 0 || (event.target as HTMLElement).closest("button")) return;
     const startX = event.clientX;
     const startY = event.clientY;
@@ -419,6 +432,9 @@ export default function DesktopSessionList({
               const menuOpen = menuOpenFor === files;
               const isPinned = pinned.has(files);
               const alias = sessionAlias(sessionAliases, session);
+              const sessionKey = sessionIdentity(session);
+              const shared = sessionSharingMode === "all" || sharedSessionKeys.has(sessionKey);
+              const outboundSynced = shared && hasCurrentMeshSyncReceipt(session, meshSyncReceipts);
               return (
                 <div
                   key={files}
@@ -443,6 +459,21 @@ export default function DesktopSessionList({
                   <span className={`session-id${alias ? " desktop-session-alias" : ""}`} title={alias || session.id}>
                     {alias || session.id.slice(0, 12)}
                   </span>
+                  {session.synced ? (
+                    <span
+                      className="desktop-session-json-only"
+                      title="Received read-only JSON transcript"
+                    >
+                      json-only
+                    </span>
+                  ) : outboundSynced ? (
+                    <span
+                      className="desktop-session-synced"
+                      title="This revision was synced to a paired device"
+                    >
+                      <span aria-hidden="true">✓</span> synced
+                    </span>
+                  ) : null}
                   {project && <span className="session-project">{project}</span>}
                   <span className="session-cwd">{session.cwd.replace(/^\/(?:Users|home)\/[^/]+/, "~")}</span>
                   {result && (
@@ -492,17 +523,64 @@ export default function DesktopSessionList({
                       >
                         Rename chat
                       </button>
-                      <button
-                        type="button"
-                        className="session-item-dropdown-btn"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          setMenuOpenFor(null);
-                          onSplitSession(session);
-                        }}
-                      >
-                        Split session
-                      </button>
+                      {!session.synced && (
+                        <button
+                          type="button"
+                          className="session-item-dropdown-btn"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setMenuOpenFor(null);
+                            onSplitSession(session);
+                          }}
+                        >
+                          Split session
+                        </button>
+                      )}
+                      {session.synced ? (
+                        <span className="session-item-dropdown-note">Read-only synced transcript</span>
+                      ) : sessionSharingMode === "selected" && hasConfiguredSharingDevice ? (
+                        <button
+                          type="button"
+                          className="session-item-dropdown-btn"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setMenuOpenFor(null);
+                            void onToggleSessionShare(session, !shared).catch((reason: unknown) => {
+                              setSessionActionError(actionError(reason));
+                            });
+                          }}
+                        >
+                          {shared ? "Stop sharing transcript" : "Share transcript"}
+                        </button>
+                      ) : sessionSharingMode === "selected" ? (
+                        <button
+                          type="button"
+                          className="session-item-dropdown-btn"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setMenuOpenFor(null);
+                            onOpenSettings();
+                          }}
+                        >
+                          Configure a device to share
+                        </button>
+                      ) : sessionSharingMode === "all" && hasConfiguredSharingDevice ? (
+                        <span className="session-item-dropdown-note">Transcript shared automatically</span>
+                      ) : sessionSharingMode === "all" ? (
+                        <button
+                          type="button"
+                          className="session-item-dropdown-btn"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setMenuOpenFor(null);
+                            onOpenSettings();
+                          }}
+                        >
+                          Configure a device to start sharing
+                        </button>
+                      ) : (
+                        <span className="session-item-dropdown-note">Sharing is off in Settings</span>
+                      )}
                       <button
                         type="button"
                         className="session-item-dropdown-btn"

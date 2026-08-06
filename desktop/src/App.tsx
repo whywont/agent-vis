@@ -1,7 +1,17 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { SessionMeta } from "@/lib/types";
 import { formatTime } from "@/utils/format";
-import { deleteSession, getDesktopAppearance, listSessions, startClaudeSession, startCodexSession } from "./desktop-api";
+import {
+  deleteSession,
+  getDesktopAppearance,
+  getSessionSharingSettings,
+  listSessions,
+  startClaudeSession,
+  startCodexSession,
+  updateSessionShare,
+  type SessionSharingMode,
+  type SessionSharingSettings,
+} from "./desktop-api";
 import type { LiveProvider } from "./harness-adapters";
 import DesktopSessionList from "./DesktopSessionList";
 import DesktopSettingsPage from "./DesktopSettingsPage";
@@ -16,6 +26,11 @@ import {
 } from "./session-refresh";
 import { startWindowDrag } from "./window-drag";
 import { applyDesktopAppearance } from "./desktop-theme";
+import {
+  loadMeshSyncReceipts,
+  recordSuccessfulMeshSync,
+  saveMeshSyncReceipts,
+} from "./mesh-sync-receipts";
 
 const SESSION_POLL_INTERVAL_MS = 5000;
 
@@ -45,8 +60,17 @@ export default function App() {
   const [matchTarget, setMatchTarget] = useState<SessionMatchTarget | null>(null);
   const [sessionAliases, setSessionAliases] = useState(() => loadSessionAliases());
   const [liveSessionKeys, setLiveSessionKeys] = useState<Record<string, string>>({});
+  const [sessionSharingMode, setSessionSharingMode] = useState<SessionSharingMode>("off");
+  const [sharedSessionKeys, setSharedSessionKeys] = useState<Set<string>>(() => new Set());
+  const [hasConfiguredSharingDevice, setHasConfiguredSharingDevice] = useState(false);
+  const [meshSyncReceipts, setMeshSyncReceipts] = useState(() => loadMeshSyncReceipts());
   const sidebarRef = useRef<HTMLElement>(null);
   const mainRef = useRef<HTMLElement>(null);
+  const sessionsRef = useRef<SessionMeta[]>([]);
+
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
 
   useEffect(() => {
     void getDesktopAppearance().then((settings) => {
@@ -54,6 +78,30 @@ export default function App() {
     }).catch(() => {
       // Appearance is cosmetic; leave the default theme in place on a settings error.
     });
+  }, []);
+
+  useEffect(() => {
+    void getSessionSharingSettings().then((settings) => {
+      setSessionSharingMode(settings.mode);
+      setSharedSessionKeys(new Set(settings.sharedSessionKeys));
+      setHasConfiguredSharingDevice(settings.hasConfiguredDevice);
+    }).catch(() => {
+      // Sharing remains unavailable when local settings cannot be read.
+    });
+  }, []);
+
+  useEffect(() => {
+    function refreshSharing() {
+      void getSessionSharingSettings().then((settings) => {
+        setSessionSharingMode(settings.mode);
+        setSharedSessionKeys(new Set(settings.sharedSessionKeys));
+        setHasConfiguredSharingDevice(settings.hasConfiguredDevice);
+      }).catch(() => {
+        // Keep the last known sharing state when settings cannot be refreshed.
+      });
+    }
+    window.addEventListener("session-sharing-settings-changed", refreshSharing);
+    return () => window.removeEventListener("session-sharing-settings-changed", refreshSharing);
   }, []);
 
   useLayoutEffect(() => {
@@ -103,9 +151,22 @@ export default function App() {
 
     void refreshSessions();
     const timer = window.setInterval(() => void refreshSessions(), SESSION_POLL_INTERVAL_MS);
+    const refreshAfterSync = (event: Event) => {
+      const sharing = (event as CustomEvent<SessionSharingSettings>).detail;
+      if (sharing) {
+        setMeshSyncReceipts((current) => {
+          const next = recordSuccessfulMeshSync(sessionsRef.current, sharing, current);
+          saveMeshSyncReceipts(next);
+          return next;
+        });
+      }
+      void refreshSessions();
+    };
+    window.addEventListener("mesh-sessions-synced", refreshAfterSync);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
+      window.removeEventListener("mesh-sessions-synced", refreshAfterSync);
     };
   }, []);
 
@@ -141,7 +202,9 @@ export default function App() {
     setActiveTab("session");
     setMatchTarget(target);
     setSplitSession(null);
-    setSelected(sessions.find((session) => sessionFiles(session) === files) || null);
+    const next = sessions.find((session) => sessionFiles(session) === files) || null;
+    if (next?.synced) setTerminalOpen(false);
+    setSelected(next);
   }
 
   function addSplitSession(files: string) {
@@ -199,10 +262,12 @@ export default function App() {
         splitView={splitActive}
         splitCenter={splitCenter}
         onActiveTabChange={(tab) => {
+          if (selected?.synced && tab === "files") return;
           if (tab === "files") setMatchTarget(null);
           setActiveTab(tab);
         }}
         onTerminalOpen={() => {
+          if (selected?.synced) return;
           setTerminalOpen(true);
           if (selected) window.dispatchEvent(new CustomEvent("open-session-terminal", { detail: selected }));
         }}
@@ -220,6 +285,10 @@ export default function App() {
                 settingsActive={showSettings}
                 sessionAliases={sessionAliases}
                 currentSessionCwd={selected?.cwd || null}
+                sessionSharingMode={sessionSharingMode}
+                sharedSessionKeys={sharedSessionKeys}
+                meshSyncReceipts={meshSyncReceipts}
+                hasConfiguredSharingDevice={hasConfiguredSharingDevice}
                 onOpenSettings={() => { setShowSettings(true); setMatchTarget(null); setSelected(null); }}
                 onStartSession={startSession}
                 onHideSessions={() => setSessionSidebarOpen(false)}
@@ -247,6 +316,12 @@ export default function App() {
                 }}
                 onRenameSession={(session, name) => {
                   setSessionAliases((current) => saveSessionAlias(current, session, name));
+                }}
+                onToggleSessionShare={async (session, shared) => {
+                  const settings = await updateSessionShare(sessionIdentity(session), shared);
+                  setSessionSharingMode(settings.mode);
+                  setSharedSessionKeys(new Set(settings.sharedSessionKeys));
+                  setHasConfiguredSharingDevice(settings.hasConfiguredDevice);
                 }}
               />
               <div className="resize-handle right" />
@@ -290,10 +365,12 @@ export default function App() {
               terminalOpen={terminalOpen}
               matchTarget={matchTarget}
               onActiveTabChange={(tab) => {
+                if (selected.synced && tab === "files") return;
                 if (tab === "files") setMatchTarget(null);
                 setActiveTab(tab);
               }}
               onTerminalOpen={(session) => {
+                if (session.synced) return;
                 setTerminalOpen(true);
                 window.dispatchEvent(new CustomEvent("open-session-terminal", { detail: session }));
               }}
@@ -388,8 +465,8 @@ function DesktopMacTitlebar({
           <button
             className={activeTab === "files" ? "active" : ""}
             onClick={() => onActiveTabChange("files")}
-            disabled={splitView}
-            title={splitView ? "Files is unavailable while sessions are split" : undefined}
+            disabled={splitView || Boolean(session.synced)}
+            title={session.synced ? "Files are unavailable for synced transcripts" : splitView ? "Files is unavailable while sessions are split" : undefined}
           >
             Files
           </button>

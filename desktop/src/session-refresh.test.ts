@@ -4,6 +4,7 @@ import {
   mergeRefreshedSessions,
   refreshSelectedSession,
   refreshSelectedSessionWithLive,
+  sessionIdentity,
   sessionListsEqual,
 } from "./session-refresh";
 
@@ -23,6 +24,13 @@ function session(overrides: Partial<SessionMeta> = {}): SessionMeta {
 }
 
 describe("desktop session refresh", () => {
+  it("keeps local and synced copies of the same transcript distinct", () => {
+    const local = session({ id: "same", file: "local.jsonl" });
+    const synced = session({ id: "same", file: "synced:peer/session/0.jsonl", synced: true });
+
+    expect(sessionIdentity(local)).not.toBe(sessionIdentity(synced));
+  });
+
   it("detects when a session has new data", () => {
     const current = [session()];
     const next = [session({ modified: "2026-08-02T00:00:06Z" })];

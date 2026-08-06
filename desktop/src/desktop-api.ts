@@ -17,6 +17,31 @@ interface SessionRecordBatch {
 }
 
 export type ExplainProvider = "anthropic" | "openai-compatible" | "openrouter";
+export type SessionSharingMode = "off" | "selected" | "all";
+
+export interface PairedDevice {
+  id: string;
+  name: string;
+  endpoint: string;
+  publicKey: string;
+}
+
+export interface MeshPeerStatus {
+  id: string;
+  connected: boolean;
+  detail: string;
+}
+
+export interface MeshStatus {
+  publicKey: string;
+  listening: boolean;
+  peers: MeshPeerStatus[];
+}
+
+export interface ConnectMeshPeerResponse {
+  connected: boolean;
+  detail: string;
+}
 
 export interface DesktopSettings {
   appearance: DesktopAppearance;
@@ -27,6 +52,8 @@ export interface DesktopSettings {
   anthropicKeyConfigured: boolean;
   localKeyConfigured: boolean;
   openRouterKeyConfigured: boolean;
+  sessionSharingMode: SessionSharingMode;
+  pairedDevices: PairedDevice[];
 }
 
 export interface DesktopAppearanceSettings {
@@ -45,6 +72,14 @@ export interface SaveDesktopSettingsRequest {
   clearAnthropicApiKey: boolean;
   clearLocalApiKey: boolean;
   clearOpenRouterApiKey: boolean;
+  sessionSharingMode: SessionSharingMode;
+  pairedDevices: PairedDevice[];
+}
+
+export interface SessionSharingSettings {
+  mode: SessionSharingMode;
+  sharedSessionKeys: string[];
+  hasConfiguredDevice: boolean;
 }
 
 export interface ExplainDiffRequest {
@@ -214,8 +249,28 @@ export function getDesktopAppearance(): Promise<DesktopAppearanceSettings> {
   return invoke<DesktopAppearanceSettings>("get_desktop_appearance");
 }
 
+export function getMeshStatus(): Promise<MeshStatus> {
+  return invoke<MeshStatus>("get_mesh_status");
+}
+
+export function regenerateMeshIdentity(): Promise<MeshStatus> {
+  return invoke<MeshStatus>("regenerate_mesh_identity");
+}
+
+export function connectMeshPeer(deviceId: string): Promise<ConnectMeshPeerResponse> {
+  return invoke<ConnectMeshPeerResponse>("connect_mesh_peer", { request: { deviceId } });
+}
+
 export function saveDesktopSettings(request: SaveDesktopSettingsRequest): Promise<DesktopSettings> {
   return invoke<DesktopSettings>("save_desktop_settings", { request });
+}
+
+export function getSessionSharingSettings(): Promise<SessionSharingSettings> {
+  return invoke<SessionSharingSettings>("get_session_sharing_settings");
+}
+
+export function updateSessionShare(sessionKey: string, shared: boolean): Promise<SessionSharingSettings> {
+  return invoke<SessionSharingSettings>("update_session_share", { request: { sessionKey, shared } });
 }
 
 export function explainDiff(request: ExplainDiffRequest): Promise<string> {

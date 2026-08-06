@@ -9,6 +9,8 @@ export interface SessionMeta {
   cli_version: string;
   source: "codex" | "claude-code";
   project?: string;
+  /** A remote transcript replica with no local harness or terminal. */
+  synced?: boolean;
 }
 
 export interface FileInfo {
