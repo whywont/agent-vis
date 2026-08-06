@@ -18,13 +18,13 @@
 #app:has(.desktop-terminal-sessions:not(.desktop-terminal-parked)) .desktop-app-body > #sidebar,
 #app:has(.desktop-terminal-sessions:not(.desktop-terminal-parked)) .file-tree-panel,
 #app:has(.desktop-terminal-sessions:not(.desktop-terminal-parked)) .file-tree-resize-handle {
-  margin-bottom: calc(var(--terminal-sessions-height) + 6px);
+  margin-bottom: var(--terminal-sessions-height);
 }
 
 /* The persistent dock is portaled to the app body for both placements. Reserve
    the bottom lane only while it is below the detail view. */
 #app:has(.desktop-terminal-bottom:not(.desktop-terminal-parked)) .desktop-app-body > #main-content {
-  margin-bottom: calc(var(--terminal-sessions-height) + 6px);
+  margin-bottom: var(--terminal-sessions-height);
 }
 
 .desktop-session-workspace {
@@ -1756,6 +1756,10 @@ body.terminal-over-sessions #sidebar {
   border-radius: 6px;
 }
 
+/* Desktop timeline controls share one tight horizontal lane. */
+.toolbar-stats { gap: 10px; margin-right: 7px; }
+.toolbar-sep { margin: 0 4px; }
+
 .file-tree-header {
   margin: 5px 5px 0;
   height: 34px;
@@ -1798,11 +1802,18 @@ body.terminal-over-sessions #sidebar {
 .desktop-live-stream {
   min-height: 0;
   flex: 1;
+  margin-top: 6px;
   overflow: auto;
   padding: 7px 8px 10px;
   background: #171717;
   color: #d3d3d3;
   font: 10px/1.48 var(--font-mono);
+}
+
+/* Keep live output near the timeline's reading line; use the lower lane for
+   session facts instead of leaving it visually dead. */
+.file-tree-panel:has(.desktop-live-stream) .desktop-live-stream {
+  flex: 0 0 calc(60% - 28px);
 }
 
 .desktop-live-stream-line {
@@ -1823,6 +1834,24 @@ body.terminal-over-sessions #sidebar {
 .desktop-live-stream-line.kind-system b { color: #7f9a85; }
 .desktop-live-stream-line.kind-system pre { color: #839487; font-style: italic; }
 .desktop-live-stream-empty { padding: 5px 2px; color: #747a74; }
+
+.desktop-current-session { min-height: 0; flex: 1; padding: 11px 12px; overflow: auto; border-top: 1px solid var(--border); background: var(--bg); color: var(--text-muted); font: 10px/1.45 var(--font-mono); }
+.desktop-current-session header { margin-bottom: 9px; color: var(--text-dim); font-size: 9px; letter-spacing: 0.09em; text-transform: uppercase; }
+.desktop-current-session-state { display: flex; align-items: center; gap: 6px; margin-bottom: 12px; color: #91b99e; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
+.desktop-current-session-state i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.desktop-current-session-state.is-working { color: #d3ad62; }
+.desktop-current-session-state.is-stopped { color: #cc887e; }
+.desktop-current-session-row { margin-top: 10px; }
+.desktop-current-session-row > span { display: block; margin-bottom: 3px; color: var(--text-dim); font-size: 8px; letter-spacing: 0.07em; text-transform: uppercase; }
+.desktop-current-session-row code, .desktop-current-session-row em { display: block; overflow-wrap: anywhere; color: var(--text-muted); font: inherit; }
+.desktop-current-session-row em { color: var(--text-dim); font-style: italic; }
+.desktop-current-session-row ul { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.desktop-current-session-row li { overflow: hidden; color: var(--text-muted); text-overflow: ellipsis; white-space: nowrap; }
+.desktop-current-session-row li::before { margin-right: 5px; color: var(--accent); content: "-"; }
+.desktop-current-session-usage > div { height: 3px; margin: 4px 0 5px; overflow: hidden; border-radius: 99px; background: var(--bg-card); }
+.desktop-current-session-usage b { display: block; height: 100%; min-width: 2px; border-radius: inherit; background: var(--accent); }
+.desktop-current-session-branch.desktop-file-branch-row { height: auto; min-height: 30px; margin-top: 12px; padding: 0; background: transparent; }
+.desktop-current-session-branch.desktop-file-branch-row code { overflow: hidden; color: inherit; font: inherit; text-overflow: ellipsis; white-space: nowrap; }
 
 .desktop-file-tree-file {
   cursor: pointer;

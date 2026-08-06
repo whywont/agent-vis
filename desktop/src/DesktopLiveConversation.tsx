@@ -210,11 +210,11 @@ export default function DesktopLiveConversation({
         const turn = params.turn as { id?: string } | undefined;
         setActiveTurnId(turn?.id || null);
         setInterrupted(false);
-        onStreamEvent?.(streamEntry("system", "Codex is working."));
+        onStreamEvent?.(streamEntry("system", "Codex is working.", `codex:turn:${turn?.id || "current"}:started`));
       }
       if (message.method === "turn/completed") {
         setActiveTurnId(null);
-        const turn = params.turn as { status?: string; error?: { message?: string } | string } | undefined;
+        const turn = params.turn as { id?: string; status?: string; error?: { message?: string } | string } | undefined;
         const error = typeof turn?.error === "string"
           ? turn.error
           : turn?.error?.message;
@@ -222,7 +222,11 @@ export default function DesktopLiveConversation({
           setState("error");
           setError(error || "Codex could not complete this turn.");
         }
-        onStreamEvent?.(streamEntry("system", turn?.status === "completed" ? "Codex finished." : "Codex stopped."));
+        onStreamEvent?.(streamEntry(
+          "system",
+          turn?.status === "completed" ? "Codex finished." : "Codex stopped.",
+          `codex:turn:${turn?.id || "current"}:completed`,
+        ));
         onTurnCompleted?.();
       }
       if (message.method === "thread/status/changed") {
@@ -340,6 +344,13 @@ export default function DesktopLiveConversation({
         }
       } else {
         await adapter.sendTurn({ sessionKey, threadId, cwd, activeTurnId, tokenUsage }, text, imageUrls);
+        if (provider === "codex" && !activeTurnId) {
+          // The app-server's turn/started notification normally replaces this
+          // immediately. It keeps Steer visibly ready if that notification is
+          // delayed; it is deliberately not passed back as a real turn ID.
+          setActiveTurnId("pending-turn");
+          setInterrupted(false);
+        }
         // A continuation handoff is a one-time composer seed. Users often
         // edit it before sending, so consume it after the first normal turn.
         if (initialDraft) onInitialDraftSent?.();
@@ -360,7 +371,7 @@ export default function DesktopLiveConversation({
   }
 
   async function interruptActiveTurn() {
-    if (provider !== "codex" || !activeTurnId) return;
+    if (provider !== "codex" || !activeTurnId || activeTurnId === "pending-turn") return;
     try {
       await interruptCodexTurn(sessionKey, threadId, activeTurnId);
       setInterrupted(true);

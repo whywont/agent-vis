@@ -179,11 +179,12 @@ export function startCodexSession(sessionKey: string, cwd: string, model: string
 export function sendCodexTurn(
   sessionKey: string,
   threadId: string,
+  turnId: string | null,
   text: string,
   imageUrls: string[],
 ): Promise<void> {
   return invoke<void>("send_codex_turn", {
-    requestData: { sessionKey, threadId, text, imageUrls },
+    requestData: { sessionKey, threadId, turnId, text, imageUrls },
   });
 }
 

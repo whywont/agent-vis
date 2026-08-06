@@ -52,6 +52,7 @@ pub(crate) struct CodexThreadRequest {
 pub(crate) struct CodexTurnRequest {
     session_key: String,
     thread_id: String,
+    turn_id: Option<String>,
     text: String,
     image_urls: Vec<String>,
 }
@@ -429,14 +430,19 @@ pub(crate) fn send_codex_turn(
             .into_iter()
             .map(|url| json!({ "type": "image", "url": url, "detail": "high" })),
     );
-    // A page remount can miss a historical `turn/started` notification. Until
-    // the backend tracks active turns itself, always start a normal new turn
-    // rather than sending a stale client-side steer request.
-    request(
-        &connection,
-        "turn/start",
-        json!({ "threadId": request_data.thread_id, "input": input }),
-    )?;
+    if let Some(turn_id) = request_data.turn_id.filter(|turn_id| !turn_id.is_empty()) {
+        request(
+            &connection,
+            "turn/steer",
+            json!({ "threadId": request_data.thread_id, "turnId": turn_id, "input": input }),
+        )?;
+    } else {
+        request(
+            &connection,
+            "turn/start",
+            json!({ "threadId": request_data.thread_id, "input": input }),
+        )?;
+    }
     Ok(())
 }
 

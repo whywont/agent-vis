@@ -270,13 +270,22 @@ export default function DesktopSessionDetail({
   const handleLiveStreamEvent = useCallback((event: LiveStreamEntry) => {
     setLiveStream((current) => {
       const index = current.findIndex((entry) => entry.id === event.id);
-      if (index < 0) return [...current, { ...event, append: undefined }];
+      if (index < 0) {
+        const previous = current.at(-1);
+        // Lifecycle frames are sometimes repeated by a harness. Treat adjacent
+        // identical status as one portable stream entry, regardless of source.
+        if (event.kind === "system" && previous?.kind === "system" && previous.text === event.text) return current;
+        return [...current, { ...event, append: undefined }];
+      }
       const next = [...current];
       next[index] = event.append
         ? { ...next[index], text: `${next[index].text}${event.text}` }
         : { ...next[index], ...event, append: undefined };
       return next;
     });
+  }, []);
+  const handleLiveTurnCompleted = useCallback(() => {
+    window.dispatchEvent(new Event("live-session-turn-completed"));
   }, []);
   const tokenUsage = useMemo(() => {
     const latest = [...events].reverse().find((event) => event.kind === "token_usage");
@@ -362,6 +371,14 @@ export default function DesktopSessionDetail({
         requestId: jumpRequestId.current,
       },
     });
+  }
+
+  function copyBranch() {
+    if (!branch) return;
+    navigator.clipboard.writeText(branch).then(() => {
+      setBranchCopied(true);
+      window.setTimeout(() => setBranchCopied(false), 1400);
+    }).catch(() => {});
   }
 
   useEffect(() => {
@@ -472,12 +489,7 @@ export default function DesktopSessionDetail({
                     className="desktop-file-branch-row"
                     title={`Copy branch name: ${branch}`}
                     aria-label={`Copy branch name: ${branch}`}
-                    onClick={() => {
-                      navigator.clipboard.writeText(branch).then(() => {
-                        setBranchCopied(true);
-                        window.setTimeout(() => setBranchCopied(false), 1400);
-                      }).catch(() => {});
-                    }}
+                    onClick={copyBranch}
                   >
                     <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
                       <path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25Z" />
@@ -489,7 +501,14 @@ export default function DesktopSessionDetail({
                 {filePanelView === "patches" ? (
                   <DesktopFileTree events={events} sessionCwd={cwd} onJumpToPatch={jumpToPatch} />
                 ) : (
-                  <DesktopLiveStream entries={liveStream} />
+                  <DesktopLiveStream
+                    entries={liveStream}
+                    events={events}
+                    sessionCwd={cwd}
+                    branch={branch}
+                    branchCopied={branchCopied}
+                    onCopyBranch={copyBranch}
+                  />
                 )}
               </div>
               <div className="file-tree-resize-handle" ref={resizeHandleRef} />
@@ -527,7 +546,7 @@ export default function DesktopSessionDetail({
                 tokenUsage={tokenUsage}
                 initialDraft={initialDraft}
                 onInitialDraftSent={onContinuationDraftSent}
-                onTurnCompleted={() => window.dispatchEvent(new Event("live-session-turn-completed"))}
+                onTurnCompleted={handleLiveTurnCompleted}
               />
             ) : undefined}
             onOpenTerminal={splitView || transcriptOnly ? undefined : onTerminalOpen}
