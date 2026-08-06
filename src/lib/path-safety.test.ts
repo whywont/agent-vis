@@ -1,6 +1,8 @@
+import fs from "fs";
+import os from "os";
 import path from "path";
 import { describe, expect, it } from "vitest";
-import { isInsideDir } from "./path-safety";
+import { isInsideDir, resolveExistingPathInsideDirs } from "./path-safety";
 import {
   CLAUDE_PROJECTS_DIR,
   CODEX_SESSIONS_DIR,
@@ -18,6 +20,29 @@ describe("isInsideDir", () => {
   it("blocks traversal and similarly prefixed sibling directories", () => {
     expect(isInsideDir(path.join(root, "..", "secret.txt"), root)).toBe(false);
     expect(isInsideDir(`${root}-private/secret.txt`, root)).toBe(false);
+  });
+});
+
+describe("resolveExistingPathInsideDirs", () => {
+  it("rejects a symlink that escapes an allowed root", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "agent-vis-path-safety-"));
+    const allowed = path.join(directory, "allowed");
+    const outside = path.join(directory, "outside.txt");
+    fs.mkdirSync(allowed);
+    fs.writeFileSync(outside, "secret");
+    fs.symlinkSync(outside, path.join(allowed, "link.txt"));
+
+    expect(resolveExistingPathInsideDirs(path.join(allowed, "link.txt"), [allowed])).toBeNull();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+
+  it("returns the canonical path for an allowed existing file", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "agent-vis-path-safety-"));
+    const file = path.join(directory, "file.txt");
+    fs.writeFileSync(file, "safe");
+
+    expect(resolveExistingPathInsideDirs(file, [directory])).toBe(fs.realpathSync.native(file));
+    fs.rmSync(directory, { recursive: true, force: true });
   });
 });
 

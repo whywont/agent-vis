@@ -1,10 +1,13 @@
 import { useEffect, useState } from "react";
 import {
   getDesktopSettings,
+  getMeshStatus,
+  connectMeshPeer,
   saveDesktopSettings,
   type DesktopSettings,
   type ExplainProvider,
   type PairedDevice,
+  type MeshStatus,
   type SessionSharingMode,
 } from "./desktop-api";
 import { applyDesktopAppearance, type DesktopAppearance } from "./desktop-theme";
@@ -33,6 +36,8 @@ export default function DesktopSettingsPage({ onBack }: { onBack: () => void }) 
   const [status, setStatus] = useState("loading...");
   const [deviceName, setDeviceName] = useState("");
   const [deviceEndpoint, setDeviceEndpoint] = useState("");
+  const [devicePublicKey, setDevicePublicKey] = useState("");
+  const [meshStatus, setMeshStatus] = useState<MeshStatus | null>(null);
 
   useEffect(() => {
     getDesktopSettings()
@@ -43,6 +48,9 @@ export default function DesktopSettingsPage({ onBack }: { onBack: () => void }) 
       .catch((reason: unknown) => {
         setStatus(reason instanceof Error ? reason.message : "Could not load settings.");
       });
+    getMeshStatus().then(setMeshStatus).catch(() => {
+      // The remainder of Settings still works when the mesh listener is unavailable.
+    });
   }, []);
 
   function set<K extends keyof DesktopSettings>(key: K, value: DesktopSettings[K]) {
@@ -68,6 +76,7 @@ export default function DesktopSettingsPage({ onBack }: { onBack: () => void }) 
         pairedDevices: settings.pairedDevices,
       });
       setSettings(saved);
+      setMeshStatus(await getMeshStatus());
       // The sidebar reloads its complete sharing state from persisted settings.
       window.dispatchEvent(new CustomEvent("session-sharing-settings-changed"));
       setAnthropicApiKey("");
@@ -89,25 +98,27 @@ export default function DesktopSettingsPage({ onBack }: { onBack: () => void }) 
   function addDevice() {
     const name = deviceName.trim();
     const endpoint = deviceEndpoint.trim();
-    if (!name || !endpoint) {
-      setStatus("Enter a device name and Tailscale or manual address.");
+    const publicKey = devicePublicKey.trim();
+    if (!name || !endpoint || !publicKey) {
+      setStatus("Enter a device name, address, and identity key.");
       return;
     }
     const device: PairedDevice = {
       id: crypto.randomUUID(),
       name,
       endpoint,
+      publicKey,
     };
     set("pairedDevices", [...settings.pairedDevices, device]);
     setDeviceName("");
     setDeviceEndpoint("");
+    setDevicePublicKey("");
     setStatus("Device added. Save settings to keep it.");
   }
 
   return (
     <section className="settings-page desktop-settings-page">
       <div className="settings-header">
-        <button className="settings-back" onClick={onBack}>&larr; sessions</button>
         <h2>Settings</h2>
         <span className="desktop-settings-badge">native</span>
       </div>
@@ -228,7 +239,7 @@ export default function DesktopSettingsPage({ onBack }: { onBack: () => void }) 
 
         <section className="settings-card desktop-settings-info-card">
           <h3>Session sharing</h3>
-          <p>Share encrypted transcript data between explicitly connected devices. Shared remote sessions are <em>json-only</em>: they do not include a live agent, terminal, files, or credentials.</p>
+          <p>Pair devices by their identity key, then share encrypted transcript data. Shared remote sessions are <em>json-only</em>: they do not include a live agent, terminal, files, or credentials.</p>
           <label>
             Sharing policy
             <select value={settings.sessionSharingMode} onChange={(event) => set("sessionSharingMode", event.target.value as SessionSharingMode)}>
@@ -237,18 +248,25 @@ export default function DesktopSettingsPage({ onBack }: { onBack: () => void }) 
               <option value="all">Automatically share all sessions</option>
             </select>
           </label>
-          <div className="desktop-settings-fact"><span>Transport</span><strong>not connected yet</strong></div>
+          <div className="desktop-settings-fact"><span>Transport</span><strong>{meshStatus?.listening ? "ready for authenticated pairing" : settings.pairedDevices.some((device) => device.publicKey) ? "listener unavailable" : "off until a peer is saved"}</strong></div>
           <div className="desktop-settings-fact"><span>Remote terminal</span><strong>not shared</strong></div>
         </section>
 
         <section className="settings-card desktop-settings-info-card">
           <h3>Configured devices</h3>
-          <p>Save a Tailscale address or another private-network endpoint here. It is only stored configuration for now: connection and encrypted replication are not implemented yet.</p>
+          <p>Pair a Tailscale or private-network address with the other app&apos;s identity key. The address routes traffic; the key is what authenticates the encrypted connection. Transcript replication is not enabled yet.</p>
+          <div className="desktop-settings-fact"><span>This device identity key</span><strong className="desktop-mesh-public-key">{meshStatus?.publicKey || "loading..."}</strong></div>
           {settings.pairedDevices.length ? (
             <div className="desktop-paired-devices">
               {settings.pairedDevices.map((device) => (
                 <div key={device.id} className="desktop-paired-device">
-                  <span><strong>{device.name}</strong><small>{device.endpoint}</small></span>
+                  <span><strong>{device.name}</strong><small>{device.endpoint}</small><small>{device.publicKey ? "identity key pinned" : "missing identity key"}</small></span>
+                  <button type="button" disabled={!device.publicKey} onClick={() => {
+                    connectMeshPeer(device.id).then((result) => {
+                      setStatus(result.detail);
+                      return getMeshStatus();
+                    }).then(setMeshStatus).catch((reason: unknown) => setStatus(reason instanceof Error ? reason.message : String(reason)));
+                  }}>verify</button>
                   <button type="button" onClick={() => set("pairedDevices", settings.pairedDevices.filter((item) => item.id !== device.id))}>remove</button>
                 </div>
               ))}
@@ -261,6 +279,10 @@ export default function DesktopSettingsPage({ onBack }: { onBack: () => void }) 
           <label>
             Tailscale or manual address
             <input value={deviceEndpoint} onChange={(event) => setDeviceEndpoint(event.target.value)} placeholder="100.64.0.12:4242" spellCheck={false} />
+          </label>
+          <label>
+            Device identity key
+            <input value={devicePublicKey} onChange={(event) => setDevicePublicKey(event.target.value)} placeholder="Paste the other device's identity key" spellCheck={false} />
           </label>
           <button type="button" className="settings-remove" onClick={addDevice}>add device</button>
         </section>

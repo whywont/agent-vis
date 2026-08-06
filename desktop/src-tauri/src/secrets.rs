@@ -4,6 +4,7 @@ const KEYCHAIN_SERVICE: &str = "dev.agentvis.desktop";
 pub(crate) const ANTHROPIC_KEY_ACCOUNT: &str = "anthropic-api-key";
 pub(crate) const LOCAL_KEY_ACCOUNT: &str = "local-api-key";
 pub(crate) const OPENROUTER_KEY_ACCOUNT: &str = "openrouter-api-key";
+pub(crate) const MESH_IDENTITY_KEY_ACCOUNT: &str = "mesh-identity-private-key";
 
 pub(crate) trait SecretStore {
     fn get(&self, account: &str) -> Result<Option<String>, String>;

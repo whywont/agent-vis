@@ -1,6 +1,7 @@
 mod claude_stream;
 mod codex_app_server;
 mod explain;
+mod mesh;
 mod search;
 mod secrets;
 mod semantic;
@@ -19,6 +20,7 @@ use codex_app_server::{
     CodexAppServerState,
 };
 use explain::explain_diff;
+use mesh::{connect_mesh_peer, get_mesh_status, MeshState};
 use search::{search_sessions, SearchIndexState};
 use sessions::{delete_session, list_sessions, read_session_records};
 use settings::{
@@ -42,6 +44,7 @@ pub fn run() {
             app.manage(TerminalState::new());
             app.manage(CodexAppServerState::new());
             app.manage(ClaudeStreamState::new());
+            app.manage(MeshState::new(app.handle().clone())?);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -54,6 +57,8 @@ pub fn run() {
             get_desktop_appearance,
             save_desktop_settings,
             update_session_share,
+            get_mesh_status,
+            connect_mesh_peer,
             explain_diff,
             get_git_branch,
             choose_workspace_directory,

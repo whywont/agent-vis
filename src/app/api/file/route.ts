@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
 import os from "os";
-import { isInsideDir } from "@/lib/path-safety";
+import { resolveExistingPathInsideDirs } from "@/lib/path-safety";
 
 export async function POST(req: NextRequest) {
   const body = await req.json() as { path?: unknown; content?: unknown };
@@ -12,15 +12,23 @@ export async function POST(req: NextRequest) {
   if (!filepath || !path.isAbsolute(filepath)) {
     return NextResponse.json({ error: "absolute path required" }, { status: 400 });
   }
-  const home = os.homedir();
-  if (!isInsideDir(filepath, home)) {
+  const safePath = resolveExistingPathInsideDirs(filepath, [os.homedir()]);
+  if (!safePath) {
     return NextResponse.json({ error: "path outside home" }, { status: 403 });
   }
   if (content === null) {
     return NextResponse.json({ error: "content required" }, { status: 400 });
   }
   try {
-    fs.writeFileSync(filepath, content, "utf8");
+    const descriptor = fs.openSync(
+      safePath,
+      fs.constants.O_WRONLY | fs.constants.O_TRUNC | fs.constants.O_NOFOLLOW,
+    );
+    try {
+      fs.writeFileSync(descriptor, content, "utf8");
+    } finally {
+      fs.closeSync(descriptor);
+    }
     return NextResponse.json({ ok: true });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -33,15 +41,12 @@ export function GET(req: NextRequest) {
   if (!filepath || !path.isAbsolute(filepath)) {
     return NextResponse.json({ error: "absolute path required" }, { status: 400 });
   }
-  const home = os.homedir();
-  if (!isInsideDir(filepath, home)) {
+  const safePath = resolveExistingPathInsideDirs(filepath, [os.homedir()]);
+  if (!safePath) {
     return NextResponse.json({ error: "path outside home" }, { status: 403 });
   }
-  if (!fs.existsSync(filepath)) {
-    return NextResponse.json({ error: "not found", content: null }, { status: 404 });
-  }
   try {
-    const content = fs.readFileSync(filepath, "utf8");
+    const content = fs.readFileSync(safePath, "utf8");
     return NextResponse.json({ content });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

@@ -23,6 +23,24 @@ export interface PairedDevice {
   id: string;
   name: string;
   endpoint: string;
+  publicKey: string;
+}
+
+export interface MeshPeerStatus {
+  id: string;
+  connected: boolean;
+  detail: string;
+}
+
+export interface MeshStatus {
+  publicKey: string;
+  listening: boolean;
+  peers: MeshPeerStatus[];
+}
+
+export interface ConnectMeshPeerResponse {
+  connected: boolean;
+  detail: string;
 }
 
 export interface DesktopSettings {
@@ -229,6 +247,14 @@ export function getDesktopSettings(): Promise<DesktopSettings> {
 
 export function getDesktopAppearance(): Promise<DesktopAppearanceSettings> {
   return invoke<DesktopAppearanceSettings>("get_desktop_appearance");
+}
+
+export function getMeshStatus(): Promise<MeshStatus> {
+  return invoke<MeshStatus>("get_mesh_status");
+}
+
+export function connectMeshPeer(deviceId: string): Promise<ConnectMeshPeerResponse> {
+  return invoke<ConnectMeshPeerResponse>("connect_mesh_peer", { request: { deviceId } });
 }
 
 export function saveDesktopSettings(request: SaveDesktopSettingsRequest): Promise<DesktopSettings> {
