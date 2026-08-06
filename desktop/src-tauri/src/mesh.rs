@@ -137,6 +137,10 @@ enum MeshMessage {
         protocol: u8,
         reason: MeshRejectReason,
     },
+    SyncError {
+        protocol: u8,
+        detail: String,
+    },
     SessionStart {
         protocol: u8,
         session_key: String,
@@ -164,6 +168,7 @@ impl MeshMessage {
             Self::Hello { protocol, .. }
             | Self::Ack { protocol, .. }
             | Self::Reject { protocol, .. }
+            | Self::SyncError { protocol, .. }
             | Self::SessionStart { protocol, .. }
             | Self::SessionChunk { protocol, .. }
             | Self::SessionEnd { protocol }
@@ -792,11 +797,26 @@ fn receive_snapshots(
                 prune_synced_sessions(synced_root, device_id, &received_keys)?;
                 return Ok(received_sessions);
             }
+            MeshMessage::SyncError { detail, .. } => {
+                return Err(format!("Peer could not complete sync: {detail}"));
+            }
             MeshMessage::Hello { .. } | MeshMessage::Ack { .. } | MeshMessage::Reject { .. } => {
                 return Err("Mesh message is not valid during transcript transfer.".to_owned());
             }
         }
     }
+}
+
+fn report_sync_error(stream: &mut TcpStream, transport: &mut TransportState, detail: &str) {
+    let detail = detail.chars().take(512).collect::<String>();
+    let _ = send_message(
+        stream,
+        transport,
+        &MeshMessage::SyncError {
+            protocol: PROTOCOL_VERSION,
+            detail,
+        },
+    );
 }
 
 fn accept_connections(listener: TcpListener, state: ListenerState, shutdown: Arc<AtomicBool>) {
@@ -885,13 +905,25 @@ fn receive_connection(stream: &mut TcpStream, state: &ListenerState) -> Result<(
     stream
         .set_write_timeout(Some(TRANSFER_TIMEOUT))
         .map_err(|error| error.to_string())?;
-    let received = receive_snapshots(
+    let received = match receive_snapshots(
         stream,
         &mut transport,
         &synced_sessions_root(&state.app)?,
         &device.id,
-    )?;
-    let sent = send_snapshots(stream, &mut transport, &settings)?;
+    ) {
+        Ok(received) => received,
+        Err(detail) => {
+            report_sync_error(stream, &mut transport, &detail);
+            return Err(detail);
+        }
+    };
+    let sent = match send_snapshots(stream, &mut transport, &settings) {
+        Ok(sent) => sent,
+        Err(detail) => {
+            report_sync_error(stream, &mut transport, &detail);
+            return Err(detail);
+        }
+    };
     set_status(
         &state.statuses,
         &device.id,
@@ -995,6 +1027,9 @@ pub(crate) fn connect_mesh_peer(
             } => {
                 return Err("Peer has not authorized this Mac. Save this Mac's identity key in Agent Vis on the other device, then try again.".to_owned());
             }
+            MeshMessage::SyncError { detail, .. } => {
+                return Err(format!("Peer could not start sync: {detail}"));
+            }
             _ => return Err("Mesh peer did not acknowledge the connection.".to_owned()),
         }
         stream
@@ -1003,13 +1038,25 @@ pub(crate) fn connect_mesh_peer(
         stream
             .set_write_timeout(Some(TRANSFER_TIMEOUT))
             .map_err(|error| error.to_string())?;
-        let sent = send_snapshots(&mut stream, &mut transport, &settings)?;
-        let received = receive_snapshots(
+        let sent = match send_snapshots(&mut stream, &mut transport, &settings) {
+            Ok(sent) => sent,
+            Err(detail) => {
+                report_sync_error(&mut stream, &mut transport, &detail);
+                return Err(detail);
+            }
+        };
+        let received = match receive_snapshots(
             &mut stream,
             &mut transport,
             &synced_sessions_root(&app)?,
             &device.id,
-        )?;
+        ) {
+            Ok(received) => received,
+            Err(detail) => {
+                report_sync_error(&mut stream, &mut transport, &detail);
+                return Err(detail);
+            }
+        };
         Ok((sent, received))
     })();
     match result {
@@ -1034,6 +1081,7 @@ pub(crate) fn connect_mesh_peer(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::TcpListener;
 
     fn settings_with_mode(mode: SessionSharingMode) -> DesktopSettingsFile {
         DesktopSettingsFile {
@@ -1082,6 +1130,82 @@ mod tests {
             unreachable!();
         };
         assert!(capabilities.is_empty());
+    }
+
+    #[test]
+    fn two_mesh_identities_complete_the_sync_protocol() {
+        let initiator_private = generate_identity().unwrap();
+        let responder_private = generate_identity().unwrap();
+        let responder_public = STANDARD_NO_PAD
+            .decode(public_key_for(&responder_private).unwrap())
+            .unwrap();
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+
+        let responder = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let (mut transport, _) = handshake_responder(&mut stream, &responder_private).unwrap();
+            let hello = receive_message(&mut stream, &mut transport).unwrap();
+            assert!(matches!(
+                hello,
+                MeshMessage::Hello { capabilities, .. }
+                    if capabilities.contains(&TRANSCRIPT_SYNC_CAPABILITY.to_owned())
+            ));
+            send_message(
+                &mut stream,
+                &mut transport,
+                &MeshMessage::Ack {
+                    protocol: PROTOCOL_VERSION,
+                    capabilities: vec![TRANSCRIPT_SYNC_CAPABILITY.to_owned()],
+                },
+            )
+            .unwrap();
+            assert!(matches!(
+                receive_message(&mut stream, &mut transport).unwrap(),
+                MeshMessage::Complete { sessions: 0, .. }
+            ));
+            send_message(
+                &mut stream,
+                &mut transport,
+                &MeshMessage::Complete {
+                    protocol: PROTOCOL_VERSION,
+                    sessions: 0,
+                },
+            )
+            .unwrap();
+        });
+
+        let mut stream = TcpStream::connect(address).unwrap();
+        let mut transport =
+            handshake_initiator(&mut stream, &initiator_private, &responder_public).unwrap();
+        send_message(
+            &mut stream,
+            &mut transport,
+            &MeshMessage::Hello {
+                protocol: PROTOCOL_VERSION,
+                capabilities: vec![TRANSCRIPT_SYNC_CAPABILITY.to_owned()],
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            receive_message(&mut stream, &mut transport).unwrap(),
+            MeshMessage::Ack { capabilities, .. }
+                if capabilities.contains(&TRANSCRIPT_SYNC_CAPABILITY.to_owned())
+        ));
+        send_message(
+            &mut stream,
+            &mut transport,
+            &MeshMessage::Complete {
+                protocol: PROTOCOL_VERSION,
+                sessions: 0,
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            receive_message(&mut stream, &mut transport).unwrap(),
+            MeshMessage::Complete { sessions: 0, .. }
+        ));
+        responder.join().unwrap();
     }
 
     #[test]
