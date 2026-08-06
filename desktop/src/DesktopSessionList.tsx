@@ -237,6 +237,7 @@ export default function DesktopSessionList({
   }
 
   function startSessionDrag(event: React.MouseEvent<HTMLDivElement>, session: SessionMeta) {
+    if (session.synced) return;
     if (event.button !== 0 || (event.target as HTMLElement).closest("button")) return;
     const startX = event.clientX;
     const startY = event.clientY;
@@ -504,18 +505,22 @@ export default function DesktopSessionList({
                       >
                         Rename chat
                       </button>
-                      <button
-                        type="button"
-                        className="session-item-dropdown-btn"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          setMenuOpenFor(null);
-                          onSplitSession(session);
-                        }}
-                      >
-                        Split session
-                      </button>
-                      {sessionSharingMode === "selected" && hasConfiguredSharingDevice ? (
+                      {!session.synced && (
+                        <button
+                          type="button"
+                          className="session-item-dropdown-btn"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setMenuOpenFor(null);
+                            onSplitSession(session);
+                          }}
+                        >
+                          Split session
+                        </button>
+                      )}
+                      {session.synced ? (
+                        <span className="session-item-dropdown-note">Read-only synced transcript</span>
+                      ) : sessionSharingMode === "selected" && hasConfiguredSharingDevice ? (
                         <button
                           type="button"
                           className="session-item-dropdown-btn"

@@ -1,7 +1,9 @@
 import type { SessionMeta } from "@/lib/types";
 
 export function sessionIdentity(session: SessionMeta): string {
-  return `${session.source}:${session.id || session.file}`;
+  return session.synced
+    ? `synced:${session.file}`
+    : `${session.source}:${session.id || session.file}`;
 }
 
 export function sessionListsEqual(current: SessionMeta[], next: SessionMeta[]): boolean {

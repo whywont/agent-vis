@@ -1511,6 +1511,7 @@ mod tests {
             cli_version: String::new(),
             source: "codex",
             project: Some("vision-claw".to_owned()),
+            synced: false,
         }
     }
 

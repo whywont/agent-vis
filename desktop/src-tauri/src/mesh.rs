@@ -1,10 +1,19 @@
 use crate::secrets::{SecretStore, SystemSecretStore, MESH_IDENTITY_KEY_ACCOUNT};
-use crate::settings::{desktop_settings_path, read_validated_desktop_settings};
+use crate::sessions::{
+    discover_sessions, persist_synced_session, prune_synced_sessions, resolve_session_ref,
+    synced_sessions_root, SessionMeta,
+};
+use crate::settings::{
+    desktop_settings_path, read_validated_desktop_settings, DesktopSettingsFile, SessionSharingMode,
+};
 use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use snow::{params::NoiseParams, Builder, TransportState};
+use std::collections::{HashMap, HashSet};
+use std::fs::File;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
+use std::path::Path;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -14,9 +23,15 @@ use std::time::Duration;
 const MESH_PORT: u16 = 4242;
 const MAX_FRAME_BYTES: usize = 64 * 1024;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(8);
+const TRANSFER_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_PENDING_HANDSHAKES: usize = 16;
 const PROTOCOL_VERSION: u8 = 1;
 const NOISE_PATTERN: &str = "Noise_XX_25519_ChaChaPoly_SHA256";
+const TRANSCRIPT_CHUNK_BYTES: usize = 32 * 1024;
+const MAX_SYNCED_SESSIONS: usize = 256;
+const MAX_SYNCED_FILES: usize = 32;
+const MAX_SYNCED_SESSION_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_SYNCED_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -47,10 +62,104 @@ pub(crate) struct ConnectMeshPeerRequest {
     device_id: String,
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
-struct MeshMessage {
-    protocol: u8,
-    kind: String,
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MeshSessionMeta {
+    id: String,
+    cwd: String,
+    model: String,
+    timestamp: String,
+    modified: String,
+    cli_version: String,
+    source: String,
+    project: Option<String>,
+    file_count: usize,
+}
+
+impl MeshSessionMeta {
+    fn from_session(session: &SessionMeta) -> Self {
+        Self {
+            id: session.id.clone(),
+            cwd: session.cwd.clone(),
+            model: session.model.clone(),
+            timestamp: session.timestamp.clone(),
+            modified: session.modified.clone(),
+            cli_version: session.cli_version.clone(),
+            source: session.source.to_owned(),
+            project: session.project.clone(),
+            file_count: session.files.len(),
+        }
+    }
+
+    fn into_session(self) -> Result<SessionMeta, String> {
+        let source = match self.source.as_str() {
+            "codex" => "codex",
+            "claude-code" => "claude-code",
+            _ => return Err("Mesh session source is invalid.".to_owned()),
+        };
+        if self.id.is_empty() || self.file_count == 0 || self.file_count > MAX_SYNCED_FILES {
+            return Err("Mesh session metadata is invalid.".to_owned());
+        }
+        let files = (0..self.file_count)
+            .map(|index| format!("{index}.jsonl"))
+            .collect::<Vec<_>>();
+        Ok(SessionMeta {
+            file: files[0].clone(),
+            files,
+            id: self.id,
+            cwd: self.cwd,
+            model: self.model,
+            timestamp: self.timestamp,
+            modified: self.modified,
+            cli_version: self.cli_version,
+            source,
+            project: self.project,
+            synced: false,
+        })
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum MeshMessage {
+    Hello {
+        protocol: u8,
+    },
+    Ack {
+        protocol: u8,
+    },
+    SessionStart {
+        protocol: u8,
+        session_key: String,
+        metadata: Box<MeshSessionMeta>,
+        file_sizes: Vec<u64>,
+    },
+    SessionChunk {
+        protocol: u8,
+        file_index: usize,
+        offset: u64,
+        data: String,
+    },
+    SessionEnd {
+        protocol: u8,
+    },
+    Complete {
+        protocol: u8,
+        sessions: usize,
+    },
+}
+
+impl MeshMessage {
+    fn protocol(&self) -> u8 {
+        match self {
+            Self::Hello { protocol }
+            | Self::Ack { protocol }
+            | Self::SessionStart { protocol, .. }
+            | Self::SessionChunk { protocol, .. }
+            | Self::SessionEnd { protocol }
+            | Self::Complete { protocol, .. } => *protocol,
+        }
+    }
 }
 
 pub(crate) struct MeshState {
@@ -350,10 +459,273 @@ fn receive_message(
         .map_err(|error| error.to_string())?;
     let message: MeshMessage = serde_json::from_slice(&plaintext[..size])
         .map_err(|_| "Mesh message schema is invalid.".to_owned())?;
-    if message.protocol != PROTOCOL_VERSION || !matches!(message.kind.as_str(), "hello" | "ack") {
-        return Err("Mesh protocol version or message type is unsupported.".to_owned());
+    if message.protocol() != PROTOCOL_VERSION {
+        return Err("Mesh protocol version is unsupported.".to_owned());
     }
     Ok(message)
+}
+
+fn grouped_local_sessions(home: &Path) -> Vec<SessionMeta> {
+    let mut grouped = Vec::<SessionMeta>::new();
+    let mut indexes = HashMap::<String, usize>::new();
+    for session in discover_sessions(home) {
+        let key = format!("{}:{}", session.source, session.id);
+        if let Some(index) = indexes.get(&key).copied() {
+            grouped[index].files.push(session.file);
+        } else {
+            indexes.insert(key, grouped.len());
+            grouped.push(session);
+        }
+    }
+    grouped
+}
+
+fn authorized_sessions(home: &Path, settings: &DesktopSettingsFile) -> Vec<SessionMeta> {
+    grouped_local_sessions(home)
+        .into_iter()
+        .filter(|session| {
+            let key = format!("{}:{}", session.source, session.id);
+            valid_session_key(&key)
+                && match settings.session_sharing_mode {
+                    SessionSharingMode::Off => false,
+                    SessionSharingMode::Selected => settings.shared_session_keys.contains(&key),
+                    SessionSharingMode::All => true,
+                }
+        })
+        .collect()
+}
+
+fn valid_session_key(value: &str) -> bool {
+    value.len() <= 512
+        && value.split_once(':').is_some_and(|(source, id)| {
+            matches!(source, "codex" | "claude-code")
+                && !id.is_empty()
+                && id
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || character == '-')
+        })
+}
+
+fn send_snapshots(
+    stream: &mut TcpStream,
+    transport: &mut TransportState,
+    settings: &DesktopSettingsFile,
+) -> Result<usize, String> {
+    let home = dirs::home_dir().ok_or("Could not resolve the home directory")?;
+    let sessions = authorized_sessions(&home, settings);
+    if sessions.len() > MAX_SYNCED_SESSIONS {
+        return Err("Too many sessions are authorized for one mesh sync.".to_owned());
+    }
+    let mut total_bytes = 0_u64;
+    for session in &sessions {
+        if session.files.is_empty() || session.files.len() > MAX_SYNCED_FILES {
+            return Err("A shared session contains too many transcript files.".to_owned());
+        }
+        let resolved = session
+            .files
+            .iter()
+            .map(|file_ref| resolve_session_ref(&home, file_ref))
+            .collect::<Result<Vec<_>, _>>()?;
+        let file_sizes = resolved
+            .iter()
+            .map(|(path, _)| path.metadata().map(|metadata| metadata.len()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        let session_bytes = file_sizes.iter().try_fold(0_u64, |total, size| {
+            total
+                .checked_add(*size)
+                .ok_or_else(|| "Shared session size overflowed.".to_owned())
+        })?;
+        if session_bytes == 0 || session_bytes > MAX_SYNCED_SESSION_BYTES {
+            return Err("A shared session exceeds the mesh transcript size limit.".to_owned());
+        }
+        total_bytes = total_bytes
+            .checked_add(session_bytes)
+            .ok_or_else(|| "Shared transcript size overflowed.".to_owned())?;
+        if total_bytes > MAX_SYNCED_TOTAL_BYTES {
+            return Err("Shared transcripts exceed the mesh sync size limit.".to_owned());
+        }
+        let session_key = format!("{}:{}", session.source, session.id);
+        send_message(
+            stream,
+            transport,
+            &MeshMessage::SessionStart {
+                protocol: PROTOCOL_VERSION,
+                session_key,
+                metadata: Box::new(MeshSessionMeta::from_session(session)),
+                file_sizes,
+            },
+        )?;
+        let mut buffer = vec![0_u8; TRANSCRIPT_CHUNK_BYTES];
+        for (file_index, (path, _)) in resolved.iter().enumerate() {
+            let mut file = File::open(path).map_err(|error| error.to_string())?;
+            let mut offset = 0_u64;
+            loop {
+                let size = file.read(&mut buffer).map_err(|error| error.to_string())?;
+                if size == 0 {
+                    break;
+                }
+                send_message(
+                    stream,
+                    transport,
+                    &MeshMessage::SessionChunk {
+                        protocol: PROTOCOL_VERSION,
+                        file_index,
+                        offset,
+                        data: STANDARD_NO_PAD.encode(&buffer[..size]),
+                    },
+                )?;
+                offset += size as u64;
+            }
+        }
+        send_message(
+            stream,
+            transport,
+            &MeshMessage::SessionEnd {
+                protocol: PROTOCOL_VERSION,
+            },
+        )?;
+    }
+    send_message(
+        stream,
+        transport,
+        &MeshMessage::Complete {
+            protocol: PROTOCOL_VERSION,
+            sessions: sessions.len(),
+        },
+    )?;
+    Ok(sessions.len())
+}
+
+struct IncomingSession {
+    key: String,
+    metadata: SessionMeta,
+    expected_sizes: Vec<u64>,
+    files: Vec<Vec<u8>>,
+}
+
+fn receive_snapshots(
+    stream: &mut TcpStream,
+    transport: &mut TransportState,
+    synced_root: &Path,
+    device_id: &str,
+) -> Result<usize, String> {
+    let mut current: Option<IncomingSession> = None;
+    let mut received_sessions = 0_usize;
+    let mut declared_total = 0_u64;
+    let mut received_keys = HashSet::new();
+    loop {
+        match receive_message(stream, transport)? {
+            MeshMessage::SessionStart {
+                session_key,
+                metadata,
+                file_sizes,
+                ..
+            } => {
+                if current.is_some()
+                    || received_sessions >= MAX_SYNCED_SESSIONS
+                    || !valid_session_key(&session_key)
+                    || file_sizes.is_empty()
+                    || file_sizes.len() > MAX_SYNCED_FILES
+                    || file_sizes.contains(&0)
+                    || metadata.file_count != file_sizes.len()
+                {
+                    return Err("Mesh session declaration is invalid.".to_owned());
+                }
+                let session_bytes = file_sizes.iter().try_fold(0_u64, |total, size| {
+                    total
+                        .checked_add(*size)
+                        .ok_or_else(|| "Mesh session size overflowed.".to_owned())
+                })?;
+                if session_bytes > MAX_SYNCED_SESSION_BYTES {
+                    return Err("Mesh session exceeds the transcript size limit.".to_owned());
+                }
+                declared_total = declared_total
+                    .checked_add(session_bytes)
+                    .ok_or_else(|| "Mesh sync size overflowed.".to_owned())?;
+                if declared_total > MAX_SYNCED_TOTAL_BYTES {
+                    return Err("Mesh sync exceeds the total transcript size limit.".to_owned());
+                }
+                let session = metadata.into_session()?;
+                if session_key != format!("{}:{}", session.source, session.id) {
+                    return Err("Mesh session identity does not match its metadata.".to_owned());
+                }
+                let files = file_sizes
+                    .iter()
+                    .map(|size| Vec::with_capacity(*size as usize))
+                    .collect();
+                current = Some(IncomingSession {
+                    key: session_key,
+                    metadata: session,
+                    expected_sizes: file_sizes,
+                    files,
+                });
+            }
+            MeshMessage::SessionChunk {
+                file_index,
+                offset,
+                data,
+                ..
+            } => {
+                let incoming = current
+                    .as_mut()
+                    .ok_or("Mesh sent transcript data before session metadata.")?;
+                let expected = *incoming
+                    .expected_sizes
+                    .get(file_index)
+                    .ok_or("Mesh transcript file index is invalid.")?;
+                let target = incoming
+                    .files
+                    .get_mut(file_index)
+                    .ok_or("Mesh transcript file index is invalid.")?;
+                if offset != target.len() as u64 {
+                    return Err("Mesh transcript chunks are out of order.".to_owned());
+                }
+                let chunk = STANDARD_NO_PAD
+                    .decode(data)
+                    .map_err(|_| "Mesh transcript chunk is invalid.".to_owned())?;
+                if chunk.is_empty()
+                    || chunk.len() > TRANSCRIPT_CHUNK_BYTES
+                    || target.len() as u64 + chunk.len() as u64 > expected
+                {
+                    return Err("Mesh transcript chunk exceeds its declared size.".to_owned());
+                }
+                target.extend_from_slice(&chunk);
+            }
+            MeshMessage::SessionEnd { .. } => {
+                let incoming = current
+                    .take()
+                    .ok_or("Mesh ended a transcript that was not started.")?;
+                if incoming
+                    .files
+                    .iter()
+                    .zip(incoming.expected_sizes.iter())
+                    .any(|(file, expected)| file.len() as u64 != *expected)
+                {
+                    return Err("Mesh transcript did not match its declared size.".to_owned());
+                }
+                persist_synced_session(
+                    synced_root,
+                    device_id,
+                    &incoming.key,
+                    &incoming.metadata,
+                    &incoming.files,
+                )?;
+                received_keys.insert(incoming.key);
+                received_sessions += 1;
+            }
+            MeshMessage::Complete { sessions, .. } => {
+                if current.is_some() || sessions != received_sessions {
+                    return Err("Mesh sync completion count is invalid.".to_owned());
+                }
+                prune_synced_sessions(synced_root, device_id, &received_keys)?;
+                return Ok(received_sessions);
+            }
+            MeshMessage::Hello { .. } | MeshMessage::Ack { .. } => {
+                return Err("Mesh message is not valid during transcript transfer.".to_owned());
+            }
+        }
+    }
 }
 
 fn accept_connections(listener: TcpListener, state: ListenerState, shutdown: Arc<AtomicBool>) {
@@ -413,22 +785,34 @@ fn receive_connection(stream: &mut TcpStream, state: &ListenerState) -> Result<(
         })
         .ok_or("Unrecognized mesh peer.")?;
     let hello = receive_message(stream, &mut transport)?;
-    if hello.kind != "hello" {
+    if !matches!(hello, MeshMessage::Hello { .. }) {
         return Err("Mesh peer did not send a hello message.".to_owned());
     }
     send_message(
         stream,
         &mut transport,
-        &MeshMessage {
+        &MeshMessage::Ack {
             protocol: PROTOCOL_VERSION,
-            kind: "ack".to_owned(),
         },
     )?;
+    stream
+        .set_read_timeout(Some(TRANSFER_TIMEOUT))
+        .map_err(|error| error.to_string())?;
+    stream
+        .set_write_timeout(Some(TRANSFER_TIMEOUT))
+        .map_err(|error| error.to_string())?;
+    let received = receive_snapshots(
+        stream,
+        &mut transport,
+        &synced_sessions_root(&state.app)?,
+        &device.id,
+    )?;
+    let sent = send_snapshots(stream, &mut transport, &settings)?;
     set_status(
         &state.statuses,
         &device.id,
         true,
-        "Authenticated encrypted connection verified.".to_owned(),
+        format!("Synced {received} received and {sent} shared transcripts."),
     );
     Ok(())
 }
@@ -494,28 +878,36 @@ pub(crate) fn connect_mesh_peer(
         send_message(
             &mut stream,
             &mut transport,
-            &MeshMessage {
+            &MeshMessage::Hello {
                 protocol: PROTOCOL_VERSION,
-                kind: "hello".to_owned(),
             },
         )?;
         let reply = receive_message(&mut stream, &mut transport)?;
-        if reply.kind != "ack" {
+        if !matches!(reply, MeshMessage::Ack { .. }) {
             return Err("Mesh peer did not acknowledge the connection.".to_owned());
         }
-        Ok(())
+        stream
+            .set_read_timeout(Some(TRANSFER_TIMEOUT))
+            .map_err(|error| error.to_string())?;
+        stream
+            .set_write_timeout(Some(TRANSFER_TIMEOUT))
+            .map_err(|error| error.to_string())?;
+        let sent = send_snapshots(&mut stream, &mut transport, &settings)?;
+        let received = receive_snapshots(
+            &mut stream,
+            &mut transport,
+            &synced_sessions_root(&app)?,
+            &device.id,
+        )?;
+        Ok((sent, received))
     })();
     match result {
-        Ok(()) => {
-            set_status(
-                &state.statuses,
-                &device.id,
-                true,
-                "Authenticated encrypted connection verified.".to_owned(),
-            );
+        Ok((sent, received)) => {
+            let detail = format!("Synced {received} received and {sent} shared transcripts.");
+            set_status(&state.statuses, &device.id, true, detail.clone());
             Ok(ConnectMeshPeerResponse {
                 connected: true,
-                detail: "Authenticated encrypted connection verified.".to_owned(),
+                detail,
             })
         }
         Err(detail) => {
@@ -531,6 +923,13 @@ pub(crate) fn connect_mesh_peer(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn settings_with_mode(mode: SessionSharingMode) -> DesktopSettingsFile {
+        DesktopSettingsFile {
+            session_sharing_mode: mode,
+            ..DesktopSettingsFile::default()
+        }
+    }
 
     #[test]
     fn accepts_only_a_base64_x25519_public_key() {
@@ -557,10 +956,60 @@ mod tests {
 
     #[test]
     fn encrypted_messages_reject_an_unsupported_protocol() {
-        let message = MeshMessage {
-            protocol: 99,
-            kind: "hello".to_owned(),
+        let message = MeshMessage::Hello { protocol: 99 };
+        assert_ne!(message.protocol(), PROTOCOL_VERSION);
+    }
+
+    #[test]
+    fn sharing_policy_filters_local_sessions() {
+        let home = std::env::temp_dir().join(format!(
+            "agent-vis-mesh-policy-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let session_dir = home.join(".codex/sessions/2026/08/05");
+        std::fs::create_dir_all(&session_dir).unwrap();
+        std::fs::write(
+            session_dir.join("session.jsonl"),
+            concat!(
+                "{\"type\":\"session_meta\",",
+                "\"payload\":{\"id\":\"session-1\",\"cwd\":\"/repo\"}}\n"
+            ),
+        )
+        .unwrap();
+
+        assert!(
+            authorized_sessions(&home, &settings_with_mode(SessionSharingMode::Off)).is_empty()
+        );
+        let mut selected = settings_with_mode(SessionSharingMode::Selected);
+        assert!(authorized_sessions(&home, &selected).is_empty());
+        selected
+            .shared_session_keys
+            .push("codex:session-1".to_owned());
+        assert_eq!(authorized_sessions(&home, &selected).len(), 1);
+        assert_eq!(
+            authorized_sessions(&home, &settings_with_mode(SessionSharingMode::All)).len(),
+            1
+        );
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn rejects_invalid_transfer_declarations_and_chunks() {
+        assert!(!valid_session_key("synced:peer/session"));
+        assert!(!valid_session_key("codex:../../secret"));
+
+        let message = MeshMessage::SessionChunk {
+            protocol: PROTOCOL_VERSION,
+            file_index: 0,
+            offset: 0,
+            data: STANDARD_NO_PAD.encode(vec![0_u8; TRANSCRIPT_CHUNK_BYTES + 1]),
         };
-        assert_ne!(message.protocol, PROTOCOL_VERSION);
+        let MeshMessage::SessionChunk { data, .. } = message else {
+            unreachable!();
+        };
+        assert!(STANDARD_NO_PAD.decode(data).unwrap().len() > TRANSCRIPT_CHUNK_BYTES);
     }
 }

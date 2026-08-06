@@ -254,7 +254,7 @@ export default function DesktopSettingsPage({ onBack }: { onBack: () => void }) 
 
         <section className="settings-card desktop-settings-info-card">
           <h3>Configured devices</h3>
-          <p>Pair a Tailscale or private-network address with the other app&apos;s identity key. The address routes traffic; the key is what authenticates the encrypted connection. Transcript replication is not enabled yet.</p>
+          <p>Pair a Tailscale or private-network address with the other app&apos;s identity key. Sync sends policy-authorized transcript snapshots in both directions over the authenticated encrypted connection.</p>
           <div className="desktop-settings-fact"><span>This device identity key</span><strong className="desktop-mesh-public-key">{meshStatus?.publicKey || "loading..."}</strong></div>
           {settings.pairedDevices.length ? (
             <div className="desktop-paired-devices">
@@ -264,9 +264,10 @@ export default function DesktopSettingsPage({ onBack }: { onBack: () => void }) 
                   <button type="button" disabled={!device.publicKey} onClick={() => {
                     connectMeshPeer(device.id).then((result) => {
                       setStatus(result.detail);
+                      if (result.connected) window.dispatchEvent(new CustomEvent("mesh-sessions-synced"));
                       return getMeshStatus();
                     }).then(setMeshStatus).catch((reason: unknown) => setStatus(reason instanceof Error ? reason.message : String(reason)));
-                  }}>verify</button>
+                  }}>sync now</button>
                   <button type="button" onClick={() => set("pairedDevices", settings.pairedDevices.filter((item) => item.id !== device.id))}>remove</button>
                 </div>
               ))}

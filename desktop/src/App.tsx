@@ -139,9 +139,12 @@ export default function App() {
 
     void refreshSessions();
     const timer = window.setInterval(() => void refreshSessions(), SESSION_POLL_INTERVAL_MS);
+    const refreshAfterSync = () => void refreshSessions();
+    window.addEventListener("mesh-sessions-synced", refreshAfterSync);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
+      window.removeEventListener("mesh-sessions-synced", refreshAfterSync);
     };
   }, []);
 
@@ -177,7 +180,9 @@ export default function App() {
     setActiveTab("session");
     setMatchTarget(target);
     setSplitSession(null);
-    setSelected(sessions.find((session) => sessionFiles(session) === files) || null);
+    const next = sessions.find((session) => sessionFiles(session) === files) || null;
+    if (next?.synced) setTerminalOpen(false);
+    setSelected(next);
   }
 
   function addSplitSession(files: string) {
@@ -235,10 +240,12 @@ export default function App() {
         splitView={splitActive}
         splitCenter={splitCenter}
         onActiveTabChange={(tab) => {
+          if (selected?.synced && tab === "files") return;
           if (tab === "files") setMatchTarget(null);
           setActiveTab(tab);
         }}
         onTerminalOpen={() => {
+          if (selected?.synced) return;
           setTerminalOpen(true);
           if (selected) window.dispatchEvent(new CustomEvent("open-session-terminal", { detail: selected }));
         }}
@@ -335,10 +342,12 @@ export default function App() {
               terminalOpen={terminalOpen}
               matchTarget={matchTarget}
               onActiveTabChange={(tab) => {
+                if (selected.synced && tab === "files") return;
                 if (tab === "files") setMatchTarget(null);
                 setActiveTab(tab);
               }}
               onTerminalOpen={(session) => {
+                if (session.synced) return;
                 setTerminalOpen(true);
                 window.dispatchEvent(new CustomEvent("open-session-terminal", { detail: session }));
               }}
@@ -433,8 +442,8 @@ function DesktopMacTitlebar({
           <button
             className={activeTab === "files" ? "active" : ""}
             onClick={() => onActiveTabChange("files")}
-            disabled={splitView}
-            title={splitView ? "Files is unavailable while sessions are split" : undefined}
+            disabled={splitView || Boolean(session.synced)}
+            title={session.synced ? "Files are unavailable for synced transcripts" : splitView ? "Files is unavailable while sessions are split" : undefined}
           >
             Files
           </button>

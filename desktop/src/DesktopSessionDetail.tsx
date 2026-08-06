@@ -62,6 +62,7 @@ export default function DesktopSessionDetail({
   const resizeHandleRef = useRef<HTMLDivElement>(null);
   const jumpRequestId = useRef(0);
   const files = session.files?.join(",") || session.file;
+  const transcriptOnly = Boolean(session.synced);
 
   useEffect(() => {
     if (isNewSession) return;
@@ -268,7 +269,7 @@ export default function DesktopSessionDetail({
   useEffect(() => {
     function openTerminal(event: Event) {
       const requested = (event as CustomEvent<SessionMeta>).detail;
-      if (!requested || terminalSessionKey(requested, requested.id) !== currentSessionKey) return;
+      if (!requested || requested.synced || terminalSessionKey(requested, requested.id) !== currentSessionKey) return;
       const terminal = firstTerminalSession(requested, requested.id, requested.cwd);
       setTerminals((current) => {
         if (current.some((item) => item.sessionKey === terminal.sessionKey)) return current;
@@ -393,8 +394,8 @@ export default function DesktopSessionDetail({
           <button
             className={`session-tab-btn${activeTab === "files" ? " active" : ""}`}
             onClick={() => onActiveTabChange("files")}
-            disabled={splitView}
-            title={splitView ? "Files is unavailable while sessions are split" : undefined}
+            disabled={splitView || transcriptOnly}
+            title={transcriptOnly ? "Files are unavailable for synced transcripts" : splitView ? "Files is unavailable while sessions are split" : undefined}
           >
             Files
           </button>
@@ -404,11 +405,11 @@ export default function DesktopSessionDetail({
         <SessionLoadingShell loadedBatches={loadedBatches} />
       ) : error ? (
         <div className="desktop-detail-state error">{error}</div>
-      ) : activeTab === "files" && !splitView ? (
+      ) : activeTab === "files" && !splitView && !transcriptOnly ? (
         <DesktopFilesCanvas events={events} sessionCwd={cwd} />
       ) : (
         <div className="detail-body">
-          {!splitView && filePanelOpen ? (
+          {!splitView && !transcriptOnly && filePanelOpen ? (
             <>
               <div className="file-tree-panel" ref={fileTreeRef}>
                 <div className="file-tree-header">
@@ -446,7 +447,7 @@ export default function DesktopSessionDetail({
               </div>
               <div className="file-tree-resize-handle" ref={resizeHandleRef} />
             </>
-          ) : !splitView ? (
+          ) : !splitView && !transcriptOnly ? (
             <button
               className="desktop-panel-reopen desktop-files-reopen"
               onClick={() => setFilePanelOpen(true)}
@@ -464,7 +465,7 @@ export default function DesktopSessionDetail({
             matchTarget={approvalTimelineTarget || (fileTimelineSelection?.baseTarget === matchTarget
               ? fileTimelineSelection.target
               : matchTarget)}
-            liveConversation={session.source === "codex" || session.source === "claude-code" ? (
+            liveConversation={!transcriptOnly && (session.source === "codex" || session.source === "claude-code") ? (
               <DesktopLiveConversation
                 key={`${session.source}:${session.id}`}
                 provider={session.source}
@@ -477,15 +478,15 @@ export default function DesktopSessionDetail({
                 tokenUsage={tokenUsage}
               />
             ) : undefined}
-            onOpenTerminal={splitView ? undefined : onTerminalOpen}
-            terminalDisabled={splitView}
+            onOpenTerminal={splitView || transcriptOnly ? undefined : onTerminalOpen}
+            terminalDisabled={splitView || transcriptOnly}
           />
         </div>
       )}
       {/* Keep terminal renderers mounted while browsing a session without one.
           Unmounting them here used to look like navigation but also sent the
           native stop command, killing the shell and its resumed agent. */}
-      {terminalOpen && terminals.length > 0 && terminalDock()}
+      {!transcriptOnly && terminalOpen && terminals.length > 0 && terminalDock()}
     </div>
   );
 
