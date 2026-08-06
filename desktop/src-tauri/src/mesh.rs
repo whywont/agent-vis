@@ -483,7 +483,8 @@ fn handshake_responder(
         .build_responder()
         .map_err(|error| error.to_string())?;
     let mut output = vec![0; MAX_FRAME_BYTES];
-    let input = read_frame(stream)?;
+    let input = read_frame(stream)
+        .map_err(|error| format!("Responder could not receive Noise message 1: {error}"))?;
     validate_ephemeral_key(&input)?;
     handshake
         .read_message(&input, &mut output)
@@ -491,8 +492,10 @@ fn handshake_responder(
     let size = handshake
         .write_message(&[], &mut output)
         .map_err(|error| error.to_string())?;
-    write_frame(stream, &output[..size])?;
-    let input = read_frame(stream)?;
+    write_frame(stream, &output[..size])
+        .map_err(|error| format!("Responder could not send Noise message 2: {error}"))?;
+    let input = read_frame(stream)
+        .map_err(|error| format!("Responder could not receive Noise message 3: {error}"))?;
     handshake
         .read_message(&input, &mut output)
         .map_err(|error| error.to_string())?;
@@ -819,6 +822,15 @@ fn report_sync_error(stream: &mut TcpStream, transport: &mut TransportState, det
     );
 }
 
+fn prepare_accepted_stream(stream: &TcpStream) -> Result<(), String> {
+    // A nonblocking listener can yield a nonblocking accepted socket on
+    // macOS. Restore blocking I/O so the handshake timeouts wait for the
+    // peer's next framed Noise message instead of failing with WouldBlock.
+    stream
+        .set_nonblocking(false)
+        .map_err(|error| error.to_string())
+}
+
 fn accept_connections(listener: TcpListener, state: ListenerState, shutdown: Arc<AtomicBool>) {
     while !shutdown.load(Ordering::Acquire) {
         let mut stream = match listener.accept() {
@@ -829,6 +841,9 @@ fn accept_connections(listener: TcpListener, state: ListenerState, shutdown: Arc
             }
             Err(_) => continue,
         };
+        if prepare_accepted_stream(&stream).is_err() {
+            continue;
+        }
         let accepted = state
             .pending_handshakes
             .lock()
@@ -856,6 +871,7 @@ fn accept_connections(listener: TcpListener, state: ListenerState, shutdown: Arc
             let _ = stream.set_write_timeout(Some(HANDSHAKE_TIMEOUT));
             let outcome = receive_connection(&mut stream, &state);
             if let Err(detail) = outcome {
+                eprintln!("Agent Vis mesh responder rejected a connection: {detail}");
                 set_status(&state.statuses, "unknown", false, detail);
             }
             if let Ok(mut count) = state.pending_handshakes.lock() {
@@ -867,7 +883,8 @@ fn accept_connections(listener: TcpListener, state: ListenerState, shutdown: Arc
 
 fn receive_connection(stream: &mut TcpStream, state: &ListenerState) -> Result<(), String> {
     let (mut transport, remote_key) = handshake_responder(stream, &state.private_key)?;
-    let hello = receive_message(stream, &mut transport)?;
+    let hello = receive_message(stream, &mut transport)
+        .map_err(|error| format!("Responder could not receive mesh hello: {error}"))?;
     let MeshMessage::Hello { capabilities, .. } = hello else {
         return Err("Mesh peer did not send a hello message.".to_owned());
     };
@@ -1140,10 +1157,20 @@ mod tests {
             .decode(public_key_for(&responder_private).unwrap())
             .unwrap();
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        listener.set_nonblocking(true).unwrap();
         let address = listener.local_addr().unwrap();
 
         let responder = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
+            let (mut stream, _) = loop {
+                match listener.accept() {
+                    Ok(connection) => break connection,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(error) => panic!("could not accept test connection: {error}"),
+                }
+            };
+            prepare_accepted_stream(&stream).unwrap();
             let (mut transport, _) = handshake_responder(&mut stream, &responder_private).unwrap();
             let hello = receive_message(&mut stream, &mut transport).unwrap();
             assert!(matches!(

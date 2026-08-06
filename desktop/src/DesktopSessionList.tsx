@@ -10,6 +10,7 @@ import type { SessionSharingMode } from "./desktop-api";
 import { MAX_SESSION_ALIAS_LENGTH, sessionAlias, type SessionAliases } from "./session-aliases";
 import { loadPinnedSessions, savePinnedSessions } from "./session-pins";
 import { sessionIdentity } from "./session-refresh";
+import { hasCurrentMeshSyncReceipt, type MeshSyncReceipts } from "./mesh-sync-receipts";
 
 type SortBy = "newest" | "oldest" | "project";
 type GroupBy = "date" | "project" | "none";
@@ -25,6 +26,7 @@ interface DesktopSessionListProps {
   currentSessionCwd: string | null;
   sessionSharingMode: SessionSharingMode;
   sharedSessionKeys: Set<string>;
+  meshSyncReceipts: MeshSyncReceipts;
   hasConfiguredSharingDevice: boolean;
   onOpenSettings: () => void;
   onStartSession: (provider: LiveProvider, model: string, cwd: string) => Promise<void>;
@@ -78,6 +80,7 @@ export default function DesktopSessionList({
   currentSessionCwd,
   sessionSharingMode,
   sharedSessionKeys,
+  meshSyncReceipts,
   hasConfiguredSharingDevice,
   onOpenSettings,
   onStartSession,
@@ -431,6 +434,7 @@ export default function DesktopSessionList({
               const alias = sessionAlias(sessionAliases, session);
               const sessionKey = sessionIdentity(session);
               const shared = sessionSharingMode === "all" || sharedSessionKeys.has(sessionKey);
+              const outboundSynced = shared && hasCurrentMeshSyncReceipt(session, meshSyncReceipts);
               return (
                 <div
                   key={files}
@@ -455,7 +459,21 @@ export default function DesktopSessionList({
                   <span className={`session-id${alias ? " desktop-session-alias" : ""}`} title={alias || session.id}>
                     {alias || session.id.slice(0, 12)}
                   </span>
-                  {session.synced && <span className="desktop-session-json-only">json-only</span>}
+                  {session.synced ? (
+                    <span
+                      className="desktop-session-json-only"
+                      title="Received read-only JSON transcript"
+                    >
+                      json-only
+                    </span>
+                  ) : outboundSynced ? (
+                    <span
+                      className="desktop-session-synced"
+                      title="This revision was synced to a paired device"
+                    >
+                      <span aria-hidden="true">✓</span> synced
+                    </span>
+                  ) : null}
                   {project && <span className="session-project">{project}</span>}
                   <span className="session-cwd">{session.cwd.replace(/^\/(?:Users|home)\/[^/]+/, "~")}</span>
                   {result && (

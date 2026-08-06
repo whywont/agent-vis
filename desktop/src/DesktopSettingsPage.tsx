@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   getDesktopSettings,
   getMeshStatus,
+  getSessionSharingSettings,
   regenerateMeshIdentity,
   connectMeshPeer,
   saveDesktopSettings,
@@ -134,7 +135,10 @@ export default function DesktopSettingsPage({ onBack }: { onBack: () => void }) 
       const result = await connectMeshPeer(device.id);
       setStatus(result.detail);
       setDeviceSyncResults((current) => ({ ...current, [device.id]: result }));
-      if (result.connected) window.dispatchEvent(new CustomEvent("mesh-sessions-synced"));
+      if (result.connected) {
+        const sharing = await getSessionSharingSettings();
+        window.dispatchEvent(new CustomEvent("mesh-sessions-synced", { detail: sharing }));
+      }
       setMeshStatus(await getMeshStatus());
     } catch (reason: unknown) {
       const detail = reason instanceof Error ? reason.message : String(reason);

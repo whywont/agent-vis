@@ -10,6 +10,7 @@ import {
   startCodexSession,
   updateSessionShare,
   type SessionSharingMode,
+  type SessionSharingSettings,
 } from "./desktop-api";
 import type { LiveProvider } from "./harness-adapters";
 import DesktopSessionList from "./DesktopSessionList";
@@ -25,6 +26,11 @@ import {
 } from "./session-refresh";
 import { startWindowDrag } from "./window-drag";
 import { applyDesktopAppearance } from "./desktop-theme";
+import {
+  loadMeshSyncReceipts,
+  recordSuccessfulMeshSync,
+  saveMeshSyncReceipts,
+} from "./mesh-sync-receipts";
 
 const SESSION_POLL_INTERVAL_MS = 5000;
 
@@ -57,8 +63,14 @@ export default function App() {
   const [sessionSharingMode, setSessionSharingMode] = useState<SessionSharingMode>("off");
   const [sharedSessionKeys, setSharedSessionKeys] = useState<Set<string>>(() => new Set());
   const [hasConfiguredSharingDevice, setHasConfiguredSharingDevice] = useState(false);
+  const [meshSyncReceipts, setMeshSyncReceipts] = useState(() => loadMeshSyncReceipts());
   const sidebarRef = useRef<HTMLElement>(null);
   const mainRef = useRef<HTMLElement>(null);
+  const sessionsRef = useRef<SessionMeta[]>([]);
+
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
 
   useEffect(() => {
     void getDesktopAppearance().then((settings) => {
@@ -139,7 +151,17 @@ export default function App() {
 
     void refreshSessions();
     const timer = window.setInterval(() => void refreshSessions(), SESSION_POLL_INTERVAL_MS);
-    const refreshAfterSync = () => void refreshSessions();
+    const refreshAfterSync = (event: Event) => {
+      const sharing = (event as CustomEvent<SessionSharingSettings>).detail;
+      if (sharing) {
+        setMeshSyncReceipts((current) => {
+          const next = recordSuccessfulMeshSync(sessionsRef.current, sharing, current);
+          saveMeshSyncReceipts(next);
+          return next;
+        });
+      }
+      void refreshSessions();
+    };
     window.addEventListener("mesh-sessions-synced", refreshAfterSync);
     return () => {
       cancelled = true;
@@ -265,6 +287,7 @@ export default function App() {
                 currentSessionCwd={selected?.cwd || null}
                 sessionSharingMode={sessionSharingMode}
                 sharedSessionKeys={sharedSessionKeys}
+                meshSyncReceipts={meshSyncReceipts}
                 hasConfiguredSharingDevice={hasConfiguredSharingDevice}
                 onOpenSettings={() => { setShowSettings(true); setMatchTarget(null); setSelected(null); }}
                 onStartSession={startSession}
