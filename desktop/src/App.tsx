@@ -1,13 +1,16 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { SessionMeta } from "@/lib/types";
+import type { AppEvent, SessionMeta } from "@/lib/types";
 import { formatTime } from "@/utils/format";
 import {
   deleteSession,
+  chooseWorkspaceDirectory,
   getDesktopAppearance,
   getSessionSharingSettings,
   listSessions,
+  readSession,
   startClaudeSession,
   startCodexSession,
+  syncAllMeshPeers,
   updateSessionShare,
   type SessionSharingMode,
   type SessionSharingSettings,
@@ -31,6 +34,7 @@ import {
   recordSuccessfulMeshSync,
   saveMeshSyncReceipts,
 } from "./mesh-sync-receipts";
+import { buildSessionHandoff, continuationModel } from "./session-handoff";
 
 const SESSION_POLL_INTERVAL_MS = 5000;
 
@@ -64,6 +68,8 @@ export default function App() {
   const [sharedSessionKeys, setSharedSessionKeys] = useState<Set<string>>(() => new Set());
   const [hasConfiguredSharingDevice, setHasConfiguredSharingDevice] = useState(false);
   const [meshSyncReceipts, setMeshSyncReceipts] = useState(() => loadMeshSyncReceipts());
+  const [continuationDrafts, setContinuationDrafts] = useState<Record<string, string>>({});
+  const [continuationEvents, setContinuationEvents] = useState<Record<string, AppEvent[]>>({});
   const sidebarRef = useRef<HTMLElement>(null);
   const mainRef = useRef<HTMLElement>(null);
   const sessionsRef = useRef<SessionMeta[]>([]);
@@ -221,7 +227,12 @@ export default function App() {
     setSplitSession(next);
   }
 
-  async function startSession(provider: LiveProvider, model: string, cwd: string) {
+  async function startSession(
+    provider: LiveProvider,
+    model: string,
+    cwd: string,
+    replacedSession?: SessionMeta,
+  ) {
     const requestedId = crypto.randomUUID();
     const sessionKey = `${provider}:${requestedId}`;
     const id = provider === "codex"
@@ -241,12 +252,37 @@ export default function App() {
     };
     const identity = sessionIdentity(next);
     setLiveSessionKeys((current) => ({ ...current, [identity]: sessionKey }));
-    setSessions((current) => [next, ...current.filter((session) => sessionIdentity(session) !== sessionIdentity(next))]);
+    setSessions((current) => [next, ...current.filter((session) =>
+      sessionIdentity(session) !== sessionIdentity(next)
+      && sessionIdentity(session) !== sessionIdentity(replacedSession || next),
+    )]);
     setShowSettings(false);
     setActiveTab("session");
     setMatchTarget(null);
     setSplitSession(null);
     setSelected(next);
+    return { session: next, sessionKey };
+  }
+
+  async function continueSyncedSession(session: SessionMeta) {
+    const cwd = await chooseWorkspaceDirectory();
+    if (!cwd) return;
+    const events = await readSession(sessionFiles(session), session.modified);
+    const { session: local } = await startSession(
+      session.source,
+      continuationModel(session),
+      cwd,
+      session,
+    );
+    const preservedEvents = continueTimeline(events, local);
+    setContinuationDrafts((current) => ({
+      ...current,
+      [sessionIdentity(local)]: buildSessionHandoff(session, events),
+    }));
+    setContinuationEvents((current) => ({
+      ...current,
+      [sessionIdentity(local)]: preservedEvents,
+    }));
   }
 
 
@@ -291,6 +327,7 @@ export default function App() {
                 hasConfiguredSharingDevice={hasConfiguredSharingDevice}
                 onOpenSettings={() => { setShowSettings(true); setMatchTarget(null); setSelected(null); }}
                 onStartSession={startSession}
+                onContinueSyncedSession={continueSyncedSession}
                 onHideSessions={() => setSessionSidebarOpen(false)}
                 onSelectSession={selectSession}
                 onDragSession={setDraggedSession}
@@ -322,6 +359,12 @@ export default function App() {
                   setSessionSharingMode(settings.mode);
                   setSharedSessionKeys(new Set(settings.sharedSessionKeys));
                   setHasConfiguredSharingDevice(settings.hasConfiguredDevice);
+                  if (shared) {
+                    const sync = await syncAllMeshPeers();
+                    if (sync.peers.some((peer) => peer.connected)) {
+                      window.dispatchEvent(new CustomEvent("mesh-sessions-synced", { detail: settings }));
+                    }
+                  }
                 }}
               />
               <div className="resize-handle right" />
@@ -376,12 +419,45 @@ export default function App() {
               }}
               onTerminalClose={() => setTerminalOpen(false)}
               liveSessionKey={liveSessionKeys[sessionIdentity(selected)]}
+              initialDraft={continuationDrafts[sessionIdentity(selected)]}
+              initialEvents={continuationEvents[sessionIdentity(selected)]}
+              onContinuationDraftSent={() => {
+                const identity = sessionIdentity(selected);
+                setContinuationDrafts((current) => {
+                  const { [identity]: _draft, ...remaining } = current;
+                  return remaining;
+                });
+              }}
             />
           )}
         </main>
       </div>
     </div>
   );
+}
+
+function continueTimeline(events: AppEvent[], session: SessionMeta): AppEvent[] {
+  let replacedStart = false;
+  const continued = events.map((event) => {
+    if (event.kind !== "session_start" || replacedStart) return event;
+    replacedStart = true;
+    return {
+      kind: "session_start" as const,
+      ts: session.timestamp,
+      id: session.id,
+      cwd: session.cwd,
+      model: session.model,
+      source: session.source,
+    };
+  });
+  return replacedStart ? continued : [{
+    kind: "session_start",
+    ts: session.timestamp,
+    id: session.id,
+    cwd: session.cwd,
+    model: session.model,
+    source: session.source,
+  }, ...continued];
 }
 
 function DesktopMacTitlebar({

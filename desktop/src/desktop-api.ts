@@ -43,6 +43,10 @@ export interface ConnectMeshPeerResponse {
   detail: string;
 }
 
+export interface SyncAllMeshPeersResponse {
+  peers: MeshPeerStatus[];
+}
+
 export interface DesktopSettings {
   appearance: DesktopAppearance;
   provider: ExplainProvider;
@@ -259,6 +263,10 @@ export function regenerateMeshIdentity(): Promise<MeshStatus> {
 
 export function connectMeshPeer(deviceId: string): Promise<ConnectMeshPeerResponse> {
   return invoke<ConnectMeshPeerResponse>("connect_mesh_peer", { request: { deviceId } });
+}
+
+export function syncAllMeshPeers(): Promise<SyncAllMeshPeersResponse> {
+  return invoke<SyncAllMeshPeersResponse>("sync_all_mesh_peers");
 }
 
 export function saveDesktopSettings(request: SaveDesktopSettingsRequest): Promise<DesktopSettings> {

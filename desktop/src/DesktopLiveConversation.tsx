@@ -48,6 +48,8 @@ export default function DesktopLiveConversation({
   visible = true,
   pinned = false,
   onNeedsAttention,
+  initialDraft = "",
+  onInitialDraftSent,
 }: {
   provider: LiveProvider;
   sessionKey: string;
@@ -60,10 +62,12 @@ export default function DesktopLiveConversation({
   visible?: boolean;
   pinned?: boolean;
   onNeedsAttention?: () => void;
+  initialDraft?: string;
+  onInitialDraftSent?: () => void;
 }) {
   const adapter = getHarnessAdapter(provider);
   const [state, setState] = useState<ConnectionState>("idle");
-  const [draft, setDraft] = useState("");
+  const [draft, setDraft] = useState(initialDraft);
   const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [approval, setApproval] = useState<Approval | null>(null);
@@ -76,6 +80,7 @@ export default function DesktopLiveConversation({
   const [modelSelection, setModelSelection] = useState(0);
   const [modelOptions, setModelOptions] = useState<readonly ModelOption[]>([]);
   const pendingSlashCommand = useRef<{ command: string; callId: string; output: string } | null>(null);
+  const connection = useRef<Promise<boolean> | null>(null);
   const slashInput = draft.startsWith("/") ? draft.slice(1).trimStart() : null;
   const slashQuery = slashInput?.split(/\s/, 1)[0].toLowerCase() ?? null;
   const matchingCommands = slashQuery === null ? [] : slashCommands.filter((command) => command.includes(slashQuery));
@@ -89,6 +94,12 @@ export default function DesktopLiveConversation({
   useEffect(() => {
     if (!draft) composerRef.current?.style.removeProperty("height");
   }, [activeTurnId, draft]);
+
+  useEffect(() => {
+    // A continuation opens with a reviewable handoff draft. Attach now so the
+    // status dot reflects the real harness state before the user sends it.
+    if (initialDraft && state === "idle") void connect();
+  }, [initialDraft, state]);
 
   useEffect(() => {
     let cancelled = false;
@@ -182,7 +193,17 @@ export default function DesktopLiveConversation({
         const turn = params.turn as { id?: string } | undefined;
         setActiveTurnId(turn?.id || null);
       }
-      if (message.method === "turn/completed") setActiveTurnId(null);
+      if (message.method === "turn/completed") {
+        setActiveTurnId(null);
+        const turn = params.turn as { status?: string; error?: { message?: string } | string } | undefined;
+        const error = typeof turn?.error === "string"
+          ? turn.error
+          : turn?.error?.message;
+        if (turn?.status === "failed" || error) {
+          setState("error");
+          setError(error || "Codex could not complete this turn.");
+        }
+      }
       if (message.method === "thread/status/changed") {
         const status = params.status as { type?: string } | undefined;
         if (status?.type === "idle") setActiveTurnId(null);
@@ -228,19 +249,25 @@ export default function DesktopLiveConversation({
   }, [onApprovalChange, onContextCompaction, onTimelineEvent, provider, sessionKey]);
 
   async function connect(): Promise<boolean> {
-    if (state === "connecting") return false;
-    setState("connecting");
-    setError("");
-    try {
-      await adapter.connect({ sessionKey, threadId, cwd, activeTurnId, tokenUsage });
-      setModelOptions(await adapter.models({ sessionKey, threadId, cwd, activeTurnId, tokenUsage }));
-      setState("ready");
-      return true;
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-      setState("error");
-      return false;
-    }
+    if (connection.current) return connection.current;
+    const attempt = (async () => {
+      setState("connecting");
+      setError("");
+      try {
+        await adapter.connect({ sessionKey, threadId, cwd, activeTurnId, tokenUsage });
+        setModelOptions(await adapter.models({ sessionKey, threadId, cwd, activeTurnId, tokenUsage }));
+        setState("ready");
+        return true;
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : String(reason));
+        setState("error");
+        return false;
+      } finally {
+        connection.current = null;
+      }
+    })();
+    connection.current = attempt;
+    return attempt;
   }
 
   async function submit(textOverride?: string) {
@@ -289,6 +316,9 @@ export default function DesktopLiveConversation({
         }
       } else {
         await adapter.sendTurn({ sessionKey, threadId, cwd, activeTurnId, tokenUsage }, text, imageUrls);
+        // A continuation handoff is a one-time composer seed. Users often
+        // edit it before sending, so consume it after the first normal turn.
+        if (initialDraft) onInitialDraftSent?.();
         if (provider === "claude-code") {
         // Claude's stream reports completion as a result frame. Mark it busy
         // immediately so the shared status glyph cannot lag behind the send.

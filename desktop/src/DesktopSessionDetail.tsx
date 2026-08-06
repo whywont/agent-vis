@@ -24,6 +24,9 @@ export default function DesktopSessionDetail({
   onTerminalClose,
   matchTarget,
   liveSessionKey,
+  initialDraft,
+  initialEvents,
+  onContinuationDraftSent,
 }: {
   session: SessionMeta;
   sessionName: string | null;
@@ -35,10 +38,13 @@ export default function DesktopSessionDetail({
   onTerminalClose: () => void;
   matchTarget: SessionMatchTarget | null;
   liveSessionKey?: string;
+  initialDraft?: string;
+  initialEvents?: AppEvent[];
+  onContinuationDraftSent?: () => void;
 }) {
   const isNewSession = session.file.startsWith("live:");
-  const [events, setEvents] = useState<AppEvent[]>(() => isNewSession ? [sessionStartEvent(session)] : []);
-  const [loading, setLoading] = useState(!isNewSession);
+  const [events, setEvents] = useState<AppEvent[]>(() => initialEvents || (isNewSession ? [sessionStartEvent(session)] : []));
+  const [loading, setLoading] = useState(!isNewSession && !initialEvents);
   const [error, setError] = useState("");
   const [loadedBatches, setLoadedBatches] = useState(0);
   const [branch, setBranch] = useState<string | null>(null);
@@ -71,7 +77,9 @@ export default function DesktopSessionDetail({
       .then((nextEvents) => {
         if (!cancelled) {
           setError("");
-          setEvents(nextEvents);
+          setEvents((current) => initialEvents?.length
+            ? mergeContinuationEvents(current, nextEvents)
+            : nextEvents);
         }
       })
       .catch((reason: unknown) => {
@@ -83,7 +91,7 @@ export default function DesktopSessionDetail({
     return () => {
       cancelled = true;
     };
-  }, [files, isNewSession, session.modified, session.timestamp, session.id, session.cwd, session.model, session.source]);
+  }, [files, initialEvents, isNewSession, session.modified, session.timestamp, session.id, session.cwd, session.model, session.source]);
 
   useEffect(() => {
     const panel = fileTreeRef.current;
@@ -476,6 +484,8 @@ export default function DesktopSessionDetail({
                 onContextCompaction={handleContextCompaction}
                 onTimelineEvent={handleLiveTimelineEvent}
                 tokenUsage={tokenUsage}
+                initialDraft={initialDraft}
+                onInitialDraftSent={onContinuationDraftSent}
               />
             ) : undefined}
             onOpenTerminal={splitView || transcriptOnly ? undefined : onTerminalOpen}
@@ -588,6 +598,14 @@ function sessionStartEvent(session: SessionMeta): AppEvent {
     model: session.model,
     source: session.source,
   };
+}
+
+function mergeContinuationEvents(imported: AppEvent[], local: AppEvent[]): AppEvent[] {
+  const identities = new Set(imported
+    .filter((event) => event.kind !== "session_start")
+    .map(timelineEventIdentity));
+  const additions = local.filter((event) => event.kind !== "session_start" && !identities.has(timelineEventIdentity(event)));
+  return [...imported, ...additions].sort((left, right) => Date.parse(left.ts) - Date.parse(right.ts));
 }
 
 interface TerminalSession {

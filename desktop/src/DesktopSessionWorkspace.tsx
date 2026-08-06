@@ -1,4 +1,4 @@
-import type { SessionMeta } from "@/lib/types";
+import type { AppEvent, SessionMeta } from "@/lib/types";
 import type { SessionMatchTarget } from "./App";
 import DesktopSessionDetail from "./DesktopSessionDetail";
 
@@ -14,6 +14,9 @@ export default function DesktopSessionWorkspace({
   onTerminalOpen,
   onTerminalClose,
   liveSessionKey,
+  initialDraft,
+  initialEvents,
+  onContinuationDraftSent,
 }: {
   primary: SessionMeta;
   secondary: SessionMeta | null;
@@ -26,13 +29,16 @@ export default function DesktopSessionWorkspace({
   onTerminalOpen: (session: SessionMeta) => void;
   onTerminalClose: () => void;
   liveSessionKey?: string;
+  initialDraft?: string;
+  initialEvents?: AppEvent[];
+  onContinuationDraftSent?: () => void;
 }) {
   const split = Boolean(secondary);
   return (
     <div className={`desktop-session-workspace${split ? " split" : ""}`}>
       <div className="desktop-split-pane desktop-split-primary">
         <DesktopSessionDetail
-          key={`${primary.source}:${primary.id}:${primary.file}`}
+          key={`${primary.source}:${primary.id}:${primary.file}:${initialEvents?.length ? "continued" : "new"}`}
           session={primary}
           sessionName={primaryName}
           activeTab={activeTab}
@@ -43,6 +49,9 @@ export default function DesktopSessionWorkspace({
           onTerminalClose={onTerminalClose}
           matchTarget={matchTarget}
           liveSessionKey={liveSessionKey}
+          initialDraft={initialDraft}
+          initialEvents={initialEvents}
+          onContinuationDraftSent={onContinuationDraftSent}
         />
       </div>
       {secondary && (

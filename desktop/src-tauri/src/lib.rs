@@ -20,7 +20,9 @@ use codex_app_server::{
     CodexAppServerState,
 };
 use explain::explain_diff;
-use mesh::{connect_mesh_peer, get_mesh_status, regenerate_mesh_identity, MeshState};
+use mesh::{
+    connect_mesh_peer, get_mesh_status, regenerate_mesh_identity, sync_all_mesh_peers, MeshState,
+};
 use search::{search_sessions, SearchIndexState};
 use sessions::{delete_session, list_sessions, read_session_records};
 use settings::{
@@ -60,6 +62,7 @@ pub fn run() {
             get_mesh_status,
             regenerate_mesh_identity,
             connect_mesh_peer,
+            sync_all_mesh_peers,
             explain_diff,
             get_git_branch,
             choose_workspace_directory,

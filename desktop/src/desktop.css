@@ -289,8 +289,7 @@ body.terminal-over-sessions #sidebar {
   display: inline-flex;
   align-items: center;
   flex-shrink: 0;
-  gap: 3px;
-  margin-left: 7px;
+  margin-left: 5px;
   padding: 2px 4px;
   border-radius: 3px;
   font: 8px var(--font-mono);
