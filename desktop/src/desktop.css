@@ -776,6 +776,41 @@ body.terminal-over-sessions #sidebar {
   box-shadow: 0 0 9px rgba(var(--accent-rgb), 0.55);
 }
 .desktop-codex-live-dot.error { background: var(--red); }
+.desktop-codex-live-interrupt {
+  align-self: center !important;
+  display: grid;
+  width: 16px;
+  min-width: 16px !important;
+  height: 18px;
+  min-height: 18px !important;
+  padding: 0 !important;
+  place-items: center;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+.desktop-codex-live-interrupt span {
+  width: 9px;
+  height: 10px;
+  background: linear-gradient(90deg, var(--accent) 0 32%, transparent 32% 68%, var(--accent) 68% 100%);
+  box-shadow: 0 0 9px rgba(var(--accent-rgb), 0.55);
+}
+.desktop-codex-live-resume {
+  align-self: center !important;
+  display: grid;
+  width: 16px;
+  height: 18px;
+  flex: 0 0 16px;
+  place-items: center;
+}
+.desktop-codex-live-resume span {
+  width: 9px;
+  height: 11px;
+  background: var(--accent);
+  box-shadow: 0 0 8px rgba(var(--accent-rgb), 0.48);
+  clip-path: polygon(8% 0, 100% 50%, 8% 100%);
+}
+.desktop-codex-live-interrupt:hover span { background: var(--text); }
 .desktop-codex-live-bar textarea {
   display: block;
   height: 30px;

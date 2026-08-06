@@ -486,6 +486,7 @@ export default function DesktopSessionDetail({
                 tokenUsage={tokenUsage}
                 initialDraft={initialDraft}
                 onInitialDraftSent={onContinuationDraftSent}
+                onTurnCompleted={() => window.dispatchEvent(new Event("live-session-turn-completed"))}
               />
             ) : undefined}
             onOpenTerminal={splitView || transcriptOnly ? undefined : onTerminalOpen}

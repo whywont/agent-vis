@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { AppEvent } from "@/lib/types";
-import { respondToCodexApproval } from "./desktop-api";
+import { interruptCodexTurn, respondToCodexApproval } from "./desktop-api";
 import { getHarnessAdapter, type LiveProvider, type ModelOption } from "./harness-adapters";
 
 type ApprovalDecision = string | Record<string, unknown>;
@@ -50,6 +50,7 @@ export default function DesktopLiveConversation({
   onNeedsAttention,
   initialDraft = "",
   onInitialDraftSent,
+  onTurnCompleted,
 }: {
   provider: LiveProvider;
   sessionKey: string;
@@ -64,6 +65,7 @@ export default function DesktopLiveConversation({
   onNeedsAttention?: () => void;
   initialDraft?: string;
   onInitialDraftSent?: () => void;
+  onTurnCompleted?: () => void;
 }) {
   const adapter = getHarnessAdapter(provider);
   const [state, setState] = useState<ConnectionState>("idle");
@@ -79,6 +81,7 @@ export default function DesktopLiveConversation({
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [modelSelection, setModelSelection] = useState(0);
   const [modelOptions, setModelOptions] = useState<readonly ModelOption[]>([]);
+  const [interrupted, setInterrupted] = useState(false);
   const pendingSlashCommand = useRef<{ command: string; callId: string; output: string } | null>(null);
   const connection = useRef<Promise<boolean> | null>(null);
   const slashInput = draft.startsWith("/") ? draft.slice(1).trimStart() : null;
@@ -170,6 +173,7 @@ export default function DesktopLiveConversation({
           } else {
             setState("ready");
           }
+          onTurnCompleted?.();
         }
       }).then((stop) => {
         if (cancelled) stop();
@@ -192,6 +196,7 @@ export default function DesktopLiveConversation({
       if (message.method === "turn/started") {
         const turn = params.turn as { id?: string } | undefined;
         setActiveTurnId(turn?.id || null);
+        setInterrupted(false);
       }
       if (message.method === "turn/completed") {
         setActiveTurnId(null);
@@ -203,6 +208,7 @@ export default function DesktopLiveConversation({
           setState("error");
           setError(error || "Codex could not complete this turn.");
         }
+        onTurnCompleted?.();
       }
       if (message.method === "thread/status/changed") {
         const status = params.status as { type?: string } | undefined;
@@ -246,7 +252,7 @@ export default function DesktopLiveConversation({
       cancelled = true;
       unlisten?.();
     };
-  }, [onApprovalChange, onContextCompaction, onTimelineEvent, provider, sessionKey]);
+  }, [onApprovalChange, onContextCompaction, onTimelineEvent, onTurnCompleted, provider, sessionKey]);
 
   async function connect(): Promise<boolean> {
     if (connection.current) return connection.current;
@@ -335,6 +341,16 @@ export default function DesktopLiveConversation({
     }
   }
 
+  async function interruptActiveTurn() {
+    if (provider !== "codex" || !activeTurnId) return;
+    try {
+      await interruptCodexTurn(sessionKey, threadId, activeTurnId);
+      setInterrupted(true);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    }
+  }
+
   async function addImages(files: Iterable<File>) {
     const candidates = [...files]
       .filter((file) => file.type.startsWith("image/") && file.size <= MAX_IMAGE_BYTES)
@@ -399,11 +415,27 @@ export default function DesktopLiveConversation({
   return (
     <section className={`desktop-codex-live-strip${pinned ? " is-pinned" : ""}${visible ? "" : " is-hidden"}`} aria-label={`Message ${adapter.label}`}>
       <div className={`desktop-codex-live-bar${images.length ? " has-images" : ""}`}>
-        <span
-          className={`desktop-codex-live-dot ${approval ? "running" : activeTurnId ? "paused" : state}`}
-          aria-label={approval ? "Codex needs approval" : activeTurnId ? `${provider === "codex" ? "Codex" : "Claude"} working` : `${provider === "codex" ? "Codex" : "Claude"} ready`}
-          role="status"
-        />
+        {provider === "codex" && activeTurnId ? (
+          <button
+            type="button"
+            className="desktop-codex-live-interrupt"
+            onClick={() => void interruptActiveTurn()}
+            title="Stop Codex (Esc)"
+            aria-label="Stop Codex"
+          >
+            <span aria-hidden="true" />
+          </button>
+        ) : provider === "codex" && interrupted ? (
+          <span className="desktop-codex-live-resume" title="Codex turn interrupted" aria-label="Codex turn interrupted">
+            <span aria-hidden="true" />
+          </span>
+        ) : (
+          <span
+            className={`desktop-codex-live-dot ${approval ? "running" : state}`}
+            aria-label={approval ? "Codex needs approval" : `${provider === "codex" ? "Codex" : "Claude"} ready`}
+            role="status"
+          />
+        )}
         <textarea
           ref={composerRef}
           value={draft}
@@ -438,6 +470,11 @@ export default function DesktopLiveConversation({
             input.style.height = `${Math.min(input.scrollHeight, 148)}px`;
           }}
           onKeyDown={(event) => {
+            if (event.key === "Escape" && activeTurnId && provider === "codex") {
+              event.preventDefault();
+              void interruptActiveTurn();
+              return;
+            }
             if (modelPickerOpen && event.key === "ArrowDown") {
               event.preventDefault();
               setModelSelection((current) => (current + 1) % modelOptions.length);

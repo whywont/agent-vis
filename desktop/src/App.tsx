@@ -157,6 +157,11 @@ export default function App() {
 
     void refreshSessions();
     const timer = window.setInterval(() => void refreshSessions(), SESSION_POLL_INTERVAL_MS);
+    const refreshAfterLiveTurn = () => {
+      // The harness writes its JSONL just after reporting completion. Refresh
+      // once here instead of making the background discovery poll more eager.
+      window.setTimeout(() => void refreshSessions(), 200);
+    };
     const refreshAfterSync = (event: Event) => {
       const sharing = (event as CustomEvent<SessionSharingSettings>).detail;
       if (sharing) {
@@ -169,10 +174,12 @@ export default function App() {
       void refreshSessions();
     };
     window.addEventListener("mesh-sessions-synced", refreshAfterSync);
+    window.addEventListener("live-session-turn-completed", refreshAfterLiveTurn);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
       window.removeEventListener("mesh-sessions-synced", refreshAfterSync);
+      window.removeEventListener("live-session-turn-completed", refreshAfterLiveTurn);
     };
   }, []);
 
