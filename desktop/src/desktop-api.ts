@@ -17,6 +17,13 @@ interface SessionRecordBatch {
 }
 
 export type ExplainProvider = "anthropic" | "openai-compatible" | "openrouter";
+export type SessionSharingMode = "off" | "selected" | "all";
+
+export interface PairedDevice {
+  id: string;
+  name: string;
+  endpoint: string;
+}
 
 export interface DesktopSettings {
   appearance: DesktopAppearance;
@@ -27,6 +34,8 @@ export interface DesktopSettings {
   anthropicKeyConfigured: boolean;
   localKeyConfigured: boolean;
   openRouterKeyConfigured: boolean;
+  sessionSharingMode: SessionSharingMode;
+  pairedDevices: PairedDevice[];
 }
 
 export interface DesktopAppearanceSettings {
@@ -45,6 +54,14 @@ export interface SaveDesktopSettingsRequest {
   clearAnthropicApiKey: boolean;
   clearLocalApiKey: boolean;
   clearOpenRouterApiKey: boolean;
+  sessionSharingMode: SessionSharingMode;
+  pairedDevices: PairedDevice[];
+}
+
+export interface SessionSharingSettings {
+  mode: SessionSharingMode;
+  sharedSessionKeys: string[];
+  hasConfiguredDevice: boolean;
 }
 
 export interface ExplainDiffRequest {
@@ -216,6 +233,14 @@ export function getDesktopAppearance(): Promise<DesktopAppearanceSettings> {
 
 export function saveDesktopSettings(request: SaveDesktopSettingsRequest): Promise<DesktopSettings> {
   return invoke<DesktopSettings>("save_desktop_settings", { request });
+}
+
+export function getSessionSharingSettings(): Promise<SessionSharingSettings> {
+  return invoke<SessionSharingSettings>("get_session_sharing_settings");
+}
+
+export function updateSessionShare(sessionKey: string, shared: boolean): Promise<SessionSharingSettings> {
+  return invoke<SessionSharingSettings>("update_session_share", { request: { sessionKey, shared } });
 }
 
 export function explainDiff(request: ExplainDiffRequest): Promise<string> {

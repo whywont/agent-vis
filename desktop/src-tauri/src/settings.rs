@@ -2,6 +2,7 @@ use crate::secrets::{
     SecretStore, SystemSecretStore, ANTHROPIC_KEY_ACCOUNT, LOCAL_KEY_ACCOUNT,
     OPENROUTER_KEY_ACCOUNT,
 };
+use crate::sessions::local_session_key_exists;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -12,6 +13,8 @@ const MAX_SETTINGS_FILE_BYTES: usize = 64 * 1024;
 const MAX_SECRET_LENGTH: usize = 16 * 1024;
 const SETTINGS_FILE: &str = "settings.json";
 const MAX_EXPLAIN_INSTRUCTIONS_BYTES: usize = 32 * 1024;
+const MAX_PAIRED_DEVICES: usize = 32;
+const MAX_SHARED_SESSION_KEYS: usize = 10_000;
 pub(crate) const DEFAULT_EXPLAIN_INSTRUCTIONS: &str = "You are a code reviewer helping developers understand changes. Explain git patches concisely - what changed, what it does, and why it likely matters. The current complete file is supplied for surrounding context; the patch is authoritative about the change itself. Be brief (2-4 sentences for small changes, a short paragraph for complex ones). Skip obvious details like 'a line was added'. Focus on intent and impact.";
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
@@ -31,6 +34,23 @@ pub(crate) enum DesktopAppearance {
     Light,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum SessionSharingMode {
+    #[default]
+    Off,
+    Selected,
+    All,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PairedDevice {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) endpoint: String,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DesktopSettingsFile {
@@ -47,6 +67,12 @@ pub(crate) struct DesktopSettingsFile {
     pub(crate) local_api_key: String,
     #[serde(default, skip_serializing)]
     pub(crate) open_router_api_key: String,
+    #[serde(default)]
+    pub(crate) session_sharing_mode: SessionSharingMode,
+    #[serde(default)]
+    pub(crate) shared_session_keys: Vec<String>,
+    #[serde(default)]
+    pub(crate) paired_devices: Vec<PairedDevice>,
 }
 
 impl Default for DesktopSettingsFile {
@@ -60,6 +86,9 @@ impl Default for DesktopSettingsFile {
             anthropic_api_key: String::new(),
             local_api_key: String::new(),
             open_router_api_key: String::new(),
+            session_sharing_mode: SessionSharingMode::default(),
+            shared_session_keys: Vec::new(),
+            paired_devices: Vec::new(),
         }
     }
 }
@@ -75,6 +104,8 @@ pub(crate) struct DesktopSettings {
     anthropic_key_configured: bool,
     local_key_configured: bool,
     open_router_key_configured: bool,
+    session_sharing_mode: SessionSharingMode,
+    paired_devices: Vec<PairedDevice>,
 }
 
 #[derive(Debug, Serialize)]
@@ -94,6 +125,8 @@ impl DesktopSettings {
             anthropic_key_configured: secrets.anthropic_api_key.is_some(),
             local_key_configured: secrets.local_api_key.is_some(),
             open_router_key_configured: secrets.open_router_api_key.is_some(),
+            session_sharing_mode: settings.session_sharing_mode,
+            paired_devices: settings.paired_devices.clone(),
         }
     }
 }
@@ -126,6 +159,23 @@ pub(crate) struct SaveDesktopSettingsRequest {
     clear_anthropic_api_key: bool,
     clear_local_api_key: bool,
     clear_open_router_api_key: bool,
+    session_sharing_mode: SessionSharingMode,
+    paired_devices: Vec<PairedDevice>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SessionSharingSettings {
+    mode: SessionSharingMode,
+    shared_session_keys: Vec<String>,
+    has_configured_device: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct UpdateSessionShareRequest {
+    session_key: String,
+    shared: bool,
 }
 
 fn default_explain_instructions() -> String {
@@ -162,6 +212,19 @@ pub(crate) fn validate_desktop_settings(settings: &mut DesktopSettingsFile) -> R
         .trim_end_matches('/')
         .to_owned();
     settings.explain_instructions = settings.explain_instructions.trim().to_owned();
+    validate_paired_devices(&mut settings.paired_devices)?;
+    settings.shared_session_keys.sort();
+    settings.shared_session_keys.dedup();
+    if settings.shared_session_keys.len() > MAX_SHARED_SESSION_KEYS {
+        return Err("Too many shared sessions are configured.".to_owned());
+    }
+    if settings
+        .shared_session_keys
+        .iter()
+        .any(|key| !valid_session_key(key))
+    {
+        return Err("A shared session reference is invalid.".to_owned());
+    }
     if settings.model.is_empty() {
         return Err("A model name is required.".to_owned());
     }
@@ -196,6 +259,79 @@ pub(crate) fn validate_desktop_settings(settings: &mut DesktopSettingsFile) -> R
         }
     }
     Ok(())
+}
+
+fn validate_paired_devices(devices: &mut [PairedDevice]) -> Result<(), String> {
+    if devices.len() > MAX_PAIRED_DEVICES {
+        return Err("Too many paired devices are configured.".to_owned());
+    }
+    for device in devices.iter_mut() {
+        device.id = device.id.trim().to_owned();
+        device.name = device.name.trim().to_owned();
+        device.endpoint = device.endpoint.trim().to_owned();
+        if device.id.is_empty()
+            || device.id.len() > 128
+            || !device
+                .id
+                .chars()
+                .all(|value| value.is_ascii_alphanumeric() || value == '-' || value == '_')
+        {
+            return Err("Each paired device needs a valid ID.".to_owned());
+        }
+        if device.name.is_empty() || device.name.len() > 128 {
+            return Err("Each paired device needs a name.".to_owned());
+        }
+        if !valid_device_endpoint(&device.endpoint) {
+            return Err("Each paired device needs a valid address.".to_owned());
+        }
+    }
+    devices.sort_by(|left, right| left.id.cmp(&right.id));
+    if devices.windows(2).any(|pair| pair[0].id == pair[1].id) {
+        return Err("Paired device IDs must be unique.".to_owned());
+    }
+    Ok(())
+}
+
+fn valid_device_endpoint(endpoint: &str) -> bool {
+    if endpoint.is_empty() || endpoint.len() > 512 || endpoint.contains(char::is_whitespace) {
+        return false;
+    }
+    let Ok(url) = reqwest::Url::parse(&format!("mesh://{endpoint}")) else {
+        return false;
+    };
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    let valid_host = host.parse::<std::net::IpAddr>().is_ok()
+        || (host.len() <= 253
+            && host.split('.').all(|label| {
+                !label.is_empty()
+                    && label.len() <= 63
+                    && !label.starts_with('-')
+                    && !label.ends_with('-')
+                    && label
+                        .chars()
+                        .all(|value| value.is_ascii_alphanumeric() || value == '-')
+            }));
+    valid_host
+        && url.port().is_some_and(|port| port != 0)
+        && url.username().is_empty()
+        && url.password().is_none()
+        && matches!(url.path(), "" | "/")
+        && url.query().is_none()
+        && url.fragment().is_none()
+}
+
+fn valid_session_key(key: &str) -> bool {
+    key.len() <= 512
+        && key.split_once(':').is_some_and(|(source, id)| {
+            matches!(source, "codex" | "claude-code")
+                && !id.is_empty()
+                && id
+                    .chars()
+                    .all(|value| value.is_ascii_alphanumeric() || value == '-')
+        })
 }
 
 fn validate_secret(secret: &str) -> Result<String, String> {
@@ -343,11 +479,25 @@ fn save_desktop_settings_with_store(
 ) -> Result<DesktopSettings, String> {
     let (mut settings, _) = load_desktop_settings(path, store)?;
     let previous_local_base_url = settings.local_base_url.clone();
+    let previous_sharing_mode = settings.session_sharing_mode;
+    let previous_paired_devices = settings.paired_devices.clone();
     settings.appearance = request.appearance;
     settings.provider = request.provider;
     settings.model = request.model;
     settings.local_base_url = request.local_base_url;
     settings.explain_instructions = request.explain_instructions;
+    settings.session_sharing_mode = request.session_sharing_mode;
+    settings.paired_devices = request.paired_devices;
+    if settings.paired_devices.is_empty() {
+        settings.session_sharing_mode = SessionSharingMode::Off;
+    }
+    if settings.session_sharing_mode != SessionSharingMode::Selected
+        || previous_sharing_mode != SessionSharingMode::Selected
+        || settings.paired_devices != previous_paired_devices
+        || settings.paired_devices.is_empty()
+    {
+        settings.shared_session_keys.clear();
+    }
     validate_desktop_settings(&mut settings)?;
     let anthropic_key = validate_secret(&request.anthropic_api_key)?;
     let local_key = validate_secret(&request.local_api_key)?;
@@ -389,6 +539,53 @@ fn save_desktop_settings_with_store(
     write_desktop_settings(path, &settings)?;
     let secrets = read_explain_secrets(store, &settings.local_base_url)?;
     Ok(DesktopSettings::new(&settings, &secrets))
+}
+
+#[tauri::command]
+pub(crate) fn get_session_sharing_settings(
+    app: tauri::AppHandle,
+) -> Result<SessionSharingSettings, String> {
+    let settings = read_desktop_settings(&desktop_settings_path(&app)?)?;
+    Ok(SessionSharingSettings {
+        mode: settings.session_sharing_mode,
+        shared_session_keys: settings.shared_session_keys,
+        has_configured_device: !settings.paired_devices.is_empty(),
+    })
+}
+
+#[tauri::command]
+pub(crate) fn update_session_share(
+    app: tauri::AppHandle,
+    request: UpdateSessionShareRequest,
+) -> Result<SessionSharingSettings, String> {
+    if !valid_session_key(&request.session_key) {
+        return Err("The session reference is invalid.".to_owned());
+    }
+    let path = desktop_settings_path(&app)?;
+    let mut settings = read_desktop_settings(&path)?;
+    if request.shared {
+        if settings.session_sharing_mode != SessionSharingMode::Selected {
+            return Err("Selected-session sharing is not enabled.".to_owned());
+        }
+        if settings.paired_devices.is_empty() {
+            return Err("Configure a device before sharing a transcript.".to_owned());
+        }
+        if !local_session_key_exists(&request.session_key)? {
+            return Err("The local session was not found.".to_owned());
+        }
+        settings.shared_session_keys.push(request.session_key);
+    } else {
+        settings
+            .shared_session_keys
+            .retain(|key| key != &request.session_key);
+    }
+    validate_desktop_settings(&mut settings)?;
+    write_desktop_settings(&path, &settings)?;
+    Ok(SessionSharingSettings {
+        mode: settings.session_sharing_mode,
+        shared_session_keys: settings.shared_session_keys,
+        has_configured_device: !settings.paired_devices.is_empty(),
+    })
 }
 
 fn update_secret(
@@ -465,6 +662,8 @@ mod tests {
             clear_anthropic_api_key: false,
             clear_local_api_key: false,
             clear_open_router_api_key: false,
+            session_sharing_mode: SessionSharingMode::Off,
+            paired_devices: Vec::new(),
         }
     }
 
@@ -534,6 +733,107 @@ mod tests {
         validate_desktop_settings(&mut settings).unwrap();
         settings.local_base_url = "http://[::1]:11434/v1".to_owned();
         validate_desktop_settings(&mut settings).unwrap();
+    }
+
+    #[test]
+    fn validates_session_sharing_devices_and_references() {
+        let mut settings = DesktopSettingsFile {
+            paired_devices: vec![PairedDevice {
+                id: "macbook-air".to_owned(),
+                name: "MacBook Air".to_owned(),
+                endpoint: "100.64.0.12:4242".to_owned(),
+            }],
+            shared_session_keys: vec![
+                "codex:019fd3da-83a".to_owned(),
+                "codex:019fd3da-83a".to_owned(),
+            ],
+            ..DesktopSettingsFile::default()
+        };
+        validate_desktop_settings(&mut settings).unwrap();
+        assert_eq!(settings.shared_session_keys, ["codex:019fd3da-83a"]);
+
+        settings.paired_devices[0].endpoint = "bad address".to_owned();
+        assert_eq!(
+            validate_desktop_settings(&mut settings).unwrap_err(),
+            "Each paired device needs a valid address."
+        );
+
+        for invalid in [
+            "example.com",
+            "https://example.com:4242",
+            "user@example.com:4242",
+            "example.com:4242/path",
+            "-bad.example:4242",
+            "example.com:0",
+        ] {
+            settings.paired_devices[0].endpoint = invalid.to_owned();
+            assert_eq!(
+                validate_desktop_settings(&mut settings).unwrap_err(),
+                "Each paired device needs a valid address."
+            );
+        }
+
+        settings.paired_devices[0].endpoint = "device.tailnet.ts.net:4242".to_owned();
+        validate_desktop_settings(&mut settings).unwrap();
+        settings.paired_devices[0].endpoint = "[fd7a:115c:a1e0::1]:4242".to_owned();
+        validate_desktop_settings(&mut settings).unwrap();
+    }
+
+    #[test]
+    fn disabling_selected_sharing_clears_saved_session_access() {
+        let directory = temp_dir("sharing-policy");
+        let path = directory.join(SETTINGS_FILE);
+        let settings = DesktopSettingsFile {
+            session_sharing_mode: SessionSharingMode::Selected,
+            shared_session_keys: vec!["codex:private-session".to_owned()],
+            paired_devices: vec![PairedDevice {
+                id: "phone".to_owned(),
+                name: "Phone".to_owned(),
+                endpoint: "100.64.0.12:4242".to_owned(),
+            }],
+            ..DesktopSettingsFile::default()
+        };
+        write_desktop_settings(&path, &settings).unwrap();
+
+        save_desktop_settings_with_store(
+            &path,
+            save_settings_request("http://127.0.0.1:11434/v1"),
+            &MemorySecretStore::default(),
+        )
+        .unwrap();
+
+        let saved = read_desktop_settings(&path).unwrap();
+        assert_eq!(saved.session_sharing_mode, SessionSharingMode::Off);
+        assert!(saved.shared_session_keys.is_empty());
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn removing_the_last_device_disables_all_session_sharing() {
+        let directory = temp_dir("sharing-device-removal");
+        let path = directory.join(SETTINGS_FILE);
+        let settings = DesktopSettingsFile {
+            session_sharing_mode: SessionSharingMode::All,
+            paired_devices: vec![PairedDevice {
+                id: "phone".to_owned(),
+                name: "Phone".to_owned(),
+                endpoint: "100.64.0.12:4242".to_owned(),
+            }],
+            ..DesktopSettingsFile::default()
+        };
+        write_desktop_settings(&path, &settings).unwrap();
+        let mut request = save_settings_request("http://127.0.0.1:11434/v1");
+        request.session_sharing_mode = SessionSharingMode::All;
+
+        let saved = save_desktop_settings_with_store(&path, request, &MemorySecretStore::default())
+            .unwrap();
+
+        assert_eq!(saved.session_sharing_mode, SessionSharingMode::Off);
+        assert_eq!(
+            read_desktop_settings(&path).unwrap().session_sharing_mode,
+            SessionSharingMode::Off
+        );
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

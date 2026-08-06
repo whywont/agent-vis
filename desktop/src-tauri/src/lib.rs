@@ -21,7 +21,10 @@ use codex_app_server::{
 use explain::explain_diff;
 use search::{search_sessions, SearchIndexState};
 use sessions::{delete_session, list_sessions, read_session_records};
-use settings::{get_desktop_appearance, get_desktop_settings, save_desktop_settings};
+use settings::{
+    get_desktop_appearance, get_desktop_settings, get_session_sharing_settings,
+    save_desktop_settings, update_session_share,
+};
 use tauri::Manager;
 use terminal::{resize_terminal, start_terminal, stop_terminal, write_terminal, TerminalState};
 use workspace::{
@@ -47,8 +50,10 @@ pub fn run() {
             search_sessions,
             read_session_records,
             get_desktop_settings,
+            get_session_sharing_settings,
             get_desktop_appearance,
             save_desktop_settings,
+            update_session_share,
             explain_diff,
             get_git_branch,
             choose_workspace_directory,

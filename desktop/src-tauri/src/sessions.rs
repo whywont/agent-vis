@@ -275,6 +275,17 @@ pub(crate) fn discover_sessions(home: &Path) -> Vec<SessionMeta> {
     sessions
 }
 
+fn local_session_key_exists_in(home: &Path, session_key: &str) -> bool {
+    discover_sessions(home)
+        .iter()
+        .any(|session| format!("{}:{}", session.source, session.id) == session_key)
+}
+
+pub(crate) fn local_session_key_exists(session_key: &str) -> Result<bool, String> {
+    let home = dirs::home_dir().ok_or("Could not resolve the home directory")?;
+    Ok(local_session_key_exists_in(&home, session_key))
+}
+
 pub(crate) fn trusted_workspace_roots() -> Result<HashSet<PathBuf>, String> {
     let home = dirs::home_dir().ok_or("Could not resolve the home directory")?;
     Ok(collect_trusted_workspace_roots(&discover_sessions(&home)))
@@ -623,6 +634,22 @@ mod tests {
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].timestamp, "2026-08-02T00:00:00Z");
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn verifies_session_keys_against_local_transcripts() {
+        let home = temp_dir("session-key");
+        let root = home.join(".codex/sessions/2026/08/05");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("session.jsonl"),
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"known-session\",\"cwd\":\"/repo\"}}\n",
+        )
+        .unwrap();
+
+        assert!(local_session_key_exists_in(&home, "codex:known-session"));
+        assert!(!local_session_key_exists_in(&home, "codex:unknown-session"));
+        fs::remove_dir_all(home).unwrap();
     }
 
     #[cfg(unix)]

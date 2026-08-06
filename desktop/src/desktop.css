@@ -284,6 +284,24 @@ body.terminal-over-sessions #sidebar {
   background: rgba(16, 163, 127, 0.14);
 }
 
+.desktop-session-json-only {
+  flex-shrink: 0;
+  padding: 2px 4px;
+  border: 1px solid var(--border-light);
+  border-radius: 3px;
+  color: var(--text-muted);
+  font: 8px var(--font-mono);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.session-item-dropdown-note {
+  display: block;
+  padding: 7px 9px;
+  color: var(--text-muted);
+  font: 9px/1.4 var(--font-mono);
+}
+
 .desktop-macos-titlebar {
   display: none;
   height: 36px;

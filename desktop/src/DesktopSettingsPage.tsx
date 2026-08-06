@@ -4,6 +4,8 @@ import {
   saveDesktopSettings,
   type DesktopSettings,
   type ExplainProvider,
+  type PairedDevice,
+  type SessionSharingMode,
 } from "./desktop-api";
 import { applyDesktopAppearance, type DesktopAppearance } from "./desktop-theme";
 
@@ -16,6 +18,8 @@ const emptySettings: DesktopSettings = {
   anthropicKeyConfigured: false,
   localKeyConfigured: false,
   openRouterKeyConfigured: false,
+  sessionSharingMode: "off",
+  pairedDevices: [],
 };
 
 export default function DesktopSettingsPage({ onBack }: { onBack: () => void }) {
@@ -27,6 +31,8 @@ export default function DesktopSettingsPage({ onBack }: { onBack: () => void }) 
   const [clearLocalApiKey, setClearLocalApiKey] = useState(false);
   const [clearOpenRouterApiKey, setClearOpenRouterApiKey] = useState(false);
   const [status, setStatus] = useState("loading...");
+  const [deviceName, setDeviceName] = useState("");
+  const [deviceEndpoint, setDeviceEndpoint] = useState("");
 
   useEffect(() => {
     getDesktopSettings()
@@ -58,8 +64,12 @@ export default function DesktopSettingsPage({ onBack }: { onBack: () => void }) 
         clearAnthropicApiKey,
         clearLocalApiKey,
         clearOpenRouterApiKey,
+        sessionSharingMode: settings.sessionSharingMode,
+        pairedDevices: settings.pairedDevices,
       });
       setSettings(saved);
+      // The sidebar reloads its complete sharing state from persisted settings.
+      window.dispatchEvent(new CustomEvent("session-sharing-settings-changed"));
       setAnthropicApiKey("");
       setLocalApiKey("");
       setOpenRouterApiKey("");
@@ -75,6 +85,24 @@ export default function DesktopSettingsPage({ onBack }: { onBack: () => void }) 
   const local = settings.provider === "openai-compatible";
   const openRouter = settings.provider === "openrouter";
   const disabled = status === "loading..." || status === "saving...";
+
+  function addDevice() {
+    const name = deviceName.trim();
+    const endpoint = deviceEndpoint.trim();
+    if (!name || !endpoint) {
+      setStatus("Enter a device name and Tailscale or manual address.");
+      return;
+    }
+    const device: PairedDevice = {
+      id: crypto.randomUUID(),
+      name,
+      endpoint,
+    };
+    set("pairedDevices", [...settings.pairedDevices, device]);
+    setDeviceName("");
+    setDeviceEndpoint("");
+    setStatus("Device added. Save settings to keep it.");
+  }
 
   return (
     <section className="settings-page desktop-settings-page">
@@ -199,12 +227,50 @@ export default function DesktopSettingsPage({ onBack }: { onBack: () => void }) 
         </section>
 
         <section className="settings-card desktop-settings-info-card">
+          <h3>Session sharing</h3>
+          <p>Share encrypted transcript data between explicitly connected devices. Shared remote sessions are <em>json-only</em>: they do not include a live agent, terminal, files, or credentials.</p>
+          <label>
+            Sharing policy
+            <select value={settings.sessionSharingMode} onChange={(event) => set("sessionSharingMode", event.target.value as SessionSharingMode)}>
+              <option value="off">No sharing</option>
+              <option value="selected">Share selected sessions</option>
+              <option value="all">Automatically share all sessions</option>
+            </select>
+          </label>
+          <div className="desktop-settings-fact"><span>Transport</span><strong>not connected yet</strong></div>
+          <div className="desktop-settings-fact"><span>Remote terminal</span><strong>not shared</strong></div>
+        </section>
+
+        <section className="settings-card desktop-settings-info-card">
+          <h3>Configured devices</h3>
+          <p>Save a Tailscale address or another private-network endpoint here. It is only stored configuration for now: connection and encrypted replication are not implemented yet.</p>
+          {settings.pairedDevices.length ? (
+            <div className="desktop-paired-devices">
+              {settings.pairedDevices.map((device) => (
+                <div key={device.id} className="desktop-paired-device">
+                  <span><strong>{device.name}</strong><small>{device.endpoint}</small></span>
+                  <button type="button" onClick={() => set("pairedDevices", settings.pairedDevices.filter((item) => item.id !== device.id))}>remove</button>
+                </div>
+              ))}
+            </div>
+          ) : <p className="settings-tip">No devices configured yet.</p>}
+          <label>
+            Device name
+            <input value={deviceName} onChange={(event) => setDeviceName(event.target.value)} placeholder="MacBook Air" />
+          </label>
+          <label>
+            Tailscale or manual address
+            <input value={deviceEndpoint} onChange={(event) => setDeviceEndpoint(event.target.value)} placeholder="100.64.0.12:4242" spellCheck={false} />
+          </label>
+          <button type="button" className="settings-remove" onClick={addDevice}>add device</button>
+        </section>
+
+        <section className="settings-card desktop-settings-info-card">
           <h3>Desktop boundary</h3>
-          <p>The native app reads local session history directly through Tauri. It does not start the web server, expose a network listener, or allow remote terminal control.</p>
-          <div className="desktop-settings-fact"><span>Session access</span><strong>local only</strong></div>
-          <div className="desktop-settings-fact"><span>Saved secrets</span><strong>app config file</strong></div>
-          <div className="desktop-settings-fact"><span>Tailscale controls</span><strong>web app only</strong></div>
-          <p className="settings-tip">Use the web Settings page if you intentionally want phone/Tailscale access.</p>
+          <p>The native app reads local session history directly through Tauri. Mesh transcript sharing does not add remote terminal control; the existing phone remote-terminal feature is unchanged.</p>
+          <div className="desktop-settings-fact"><span>Session access</span><strong>local + synced transcripts</strong></div>
+          <div className="desktop-settings-fact"><span>Saved secrets</span><strong>OS keychain</strong></div>
+          <div className="desktop-settings-fact"><span>Tailscale controls</span><strong>manual peer setup</strong></div>
         </section>
       </div>
       <div className="settings-actions">

@@ -1,7 +1,16 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { SessionMeta } from "@/lib/types";
 import { formatTime } from "@/utils/format";
-import { deleteSession, getDesktopAppearance, listSessions, startClaudeSession, startCodexSession } from "./desktop-api";
+import {
+  deleteSession,
+  getDesktopAppearance,
+  getSessionSharingSettings,
+  listSessions,
+  startClaudeSession,
+  startCodexSession,
+  updateSessionShare,
+  type SessionSharingMode,
+} from "./desktop-api";
 import type { LiveProvider } from "./harness-adapters";
 import DesktopSessionList from "./DesktopSessionList";
 import DesktopSettingsPage from "./DesktopSettingsPage";
@@ -45,6 +54,9 @@ export default function App() {
   const [matchTarget, setMatchTarget] = useState<SessionMatchTarget | null>(null);
   const [sessionAliases, setSessionAliases] = useState(() => loadSessionAliases());
   const [liveSessionKeys, setLiveSessionKeys] = useState<Record<string, string>>({});
+  const [sessionSharingMode, setSessionSharingMode] = useState<SessionSharingMode>("off");
+  const [sharedSessionKeys, setSharedSessionKeys] = useState<Set<string>>(() => new Set());
+  const [hasConfiguredSharingDevice, setHasConfiguredSharingDevice] = useState(false);
   const sidebarRef = useRef<HTMLElement>(null);
   const mainRef = useRef<HTMLElement>(null);
 
@@ -54,6 +66,30 @@ export default function App() {
     }).catch(() => {
       // Appearance is cosmetic; leave the default theme in place on a settings error.
     });
+  }, []);
+
+  useEffect(() => {
+    void getSessionSharingSettings().then((settings) => {
+      setSessionSharingMode(settings.mode);
+      setSharedSessionKeys(new Set(settings.sharedSessionKeys));
+      setHasConfiguredSharingDevice(settings.hasConfiguredDevice);
+    }).catch(() => {
+      // Sharing remains unavailable when local settings cannot be read.
+    });
+  }, []);
+
+  useEffect(() => {
+    function refreshSharing() {
+      void getSessionSharingSettings().then((settings) => {
+        setSessionSharingMode(settings.mode);
+        setSharedSessionKeys(new Set(settings.sharedSessionKeys));
+        setHasConfiguredSharingDevice(settings.hasConfiguredDevice);
+      }).catch(() => {
+        // Keep the last known sharing state when settings cannot be refreshed.
+      });
+    }
+    window.addEventListener("session-sharing-settings-changed", refreshSharing);
+    return () => window.removeEventListener("session-sharing-settings-changed", refreshSharing);
   }, []);
 
   useLayoutEffect(() => {
@@ -220,6 +256,9 @@ export default function App() {
                 settingsActive={showSettings}
                 sessionAliases={sessionAliases}
                 currentSessionCwd={selected?.cwd || null}
+                sessionSharingMode={sessionSharingMode}
+                sharedSessionKeys={sharedSessionKeys}
+                hasConfiguredSharingDevice={hasConfiguredSharingDevice}
                 onOpenSettings={() => { setShowSettings(true); setMatchTarget(null); setSelected(null); }}
                 onStartSession={startSession}
                 onHideSessions={() => setSessionSidebarOpen(false)}
@@ -247,6 +286,12 @@ export default function App() {
                 }}
                 onRenameSession={(session, name) => {
                   setSessionAliases((current) => saveSessionAlias(current, session, name));
+                }}
+                onToggleSessionShare={async (session, shared) => {
+                  const settings = await updateSessionShare(sessionIdentity(session), shared);
+                  setSessionSharingMode(settings.mode);
+                  setSharedSessionKeys(new Set(settings.sharedSessionKeys));
+                  setHasConfiguredSharingDevice(settings.hasConfiguredDevice);
                 }}
               />
               <div className="resize-handle right" />
