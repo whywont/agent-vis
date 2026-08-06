@@ -38,6 +38,8 @@ export default function DesktopSettingsPage({ onBack }: { onBack: () => void }) 
   const [deviceEndpoint, setDeviceEndpoint] = useState("");
   const [devicePublicKey, setDevicePublicKey] = useState("");
   const [meshStatus, setMeshStatus] = useState<MeshStatus | null>(null);
+  const [syncingDeviceId, setSyncingDeviceId] = useState<string | null>(null);
+  const [deviceSyncResults, setDeviceSyncResults] = useState<Record<string, { connected: boolean; detail: string }>>({});
 
   useEffect(() => {
     getDesktopSettings()
@@ -91,13 +93,66 @@ export default function DesktopSettingsPage({ onBack }: { onBack: () => void }) 
     }
   }
 
+  async function persistSettings(pairedDevices: PairedDevice[]) {
+    return saveDesktopSettings({
+      appearance: settings.appearance,
+      provider: settings.provider,
+      model: settings.model,
+      localBaseUrl: settings.localBaseUrl,
+      explainInstructions: settings.explainInstructions,
+      anthropicApiKey,
+      localApiKey,
+      openRouterApiKey,
+      clearAnthropicApiKey,
+      clearLocalApiKey,
+      clearOpenRouterApiKey,
+      sessionSharingMode: settings.sessionSharingMode,
+      pairedDevices,
+    });
+  }
+
+  async function saveAndSync(device: PairedDevice) {
+    setSyncingDeviceId(device.id);
+    setDeviceSyncResults((current) => ({
+      ...current,
+      [device.id]: { connected: false, detail: "Waiting for peer response..." },
+    }));
+    setStatus("Saving peer configuration...");
+    try {
+      const pairedDevices = settings.pairedDevices.map((item) => ({
+        ...item,
+        endpoint: meshEndpoint(item.endpoint),
+      }));
+      const saved = await persistSettings(pairedDevices);
+      setSettings(saved);
+      window.dispatchEvent(new CustomEvent("session-sharing-settings-changed"));
+      setStatus(`Connecting to ${device.name}...`);
+      const result = await connectMeshPeer(device.id);
+      setStatus(result.detail);
+      setDeviceSyncResults((current) => ({ ...current, [device.id]: result }));
+      if (result.connected) window.dispatchEvent(new CustomEvent("mesh-sessions-synced"));
+      setMeshStatus(await getMeshStatus());
+    } catch (reason: unknown) {
+      const detail = reason instanceof Error ? reason.message : String(reason);
+      setStatus(detail);
+      setDeviceSyncResults((current) => ({
+        ...current,
+        [device.id]: { connected: false, detail },
+      }));
+    } finally {
+      setSyncingDeviceId(null);
+    }
+  }
+
   const local = settings.provider === "openai-compatible";
   const openRouter = settings.provider === "openrouter";
   const disabled = status === "loading..." || status === "saving...";
+  const deviceDraftReady = validDeviceDraft(deviceName, deviceEndpoint, devicePublicKey);
+  const connectedPeer = meshStatus?.peers.some((peer) => peer.connected) ?? false;
 
-  function addDevice() {
+  async function addDevice() {
     const name = deviceName.trim();
-    const endpoint = deviceEndpoint.trim();
+    const endpoint = meshEndpoint(deviceEndpoint);
     const publicKey = devicePublicKey.trim();
     if (!name || !endpoint || !publicKey) {
       setStatus("Enter a device name, address, and identity key.");
@@ -109,11 +164,19 @@ export default function DesktopSettingsPage({ onBack }: { onBack: () => void }) 
       endpoint,
       publicKey,
     };
-    set("pairedDevices", [...settings.pairedDevices, device]);
-    setDeviceName("");
-    setDeviceEndpoint("");
-    setDevicePublicKey("");
-    setStatus("Device added. Save settings to keep it.");
+    setStatus("Saving device...");
+    try {
+      const saved = await persistSettings([...settings.pairedDevices, device]);
+      setSettings(saved);
+      setMeshStatus(await getMeshStatus());
+      window.dispatchEvent(new CustomEvent("session-sharing-settings-changed"));
+      setDeviceName("");
+      setDeviceEndpoint("");
+      setDevicePublicKey("");
+      setStatus("Device saved.");
+    } catch (reason: unknown) {
+      setStatus(reason instanceof Error ? reason.message : String(reason));
+    }
   }
 
   return (
@@ -248,7 +311,7 @@ export default function DesktopSettingsPage({ onBack }: { onBack: () => void }) 
               <option value="all">Automatically share all sessions</option>
             </select>
           </label>
-          <div className="desktop-settings-fact"><span>Transport</span><strong>{meshStatus?.listening ? "ready for authenticated pairing" : settings.pairedDevices.some((device) => device.publicKey) ? "listener unavailable" : "off until a peer is saved"}</strong></div>
+          <div className="desktop-settings-fact"><span>Transport</span><strong>{connectedPeer ? "peer sync completed" : meshStatus?.listening ? "waiting for peer device" : settings.pairedDevices.some((device) => device.publicKey) ? "listener unavailable" : "off until a peer is saved"}</strong></div>
           <div className="desktop-settings-fact"><span>Remote terminal</span><strong>not shared</strong></div>
         </section>
 
@@ -260,15 +323,38 @@ export default function DesktopSettingsPage({ onBack }: { onBack: () => void }) 
             <div className="desktop-paired-devices">
               {settings.pairedDevices.map((device) => (
                 <div key={device.id} className="desktop-paired-device">
-                  <span><strong>{device.name}</strong><small>{device.endpoint}</small><small>{device.publicKey ? "identity key pinned" : "missing identity key"}</small></span>
-                  <button type="button" disabled={!device.publicKey} onClick={() => {
-                    connectMeshPeer(device.id).then((result) => {
-                      setStatus(result.detail);
-                      if (result.connected) window.dispatchEvent(new CustomEvent("mesh-sessions-synced"));
-                      return getMeshStatus();
-                    }).then(setMeshStatus).catch((reason: unknown) => setStatus(reason instanceof Error ? reason.message : String(reason)));
-                  }}>sync now</button>
-                  <button type="button" onClick={() => set("pairedDevices", settings.pairedDevices.filter((item) => item.id !== device.id))}>remove</button>
+                  <div className="desktop-paired-device-copy">
+                    <strong>{device.name}</strong>
+                    <code>{meshEndpoint(device.endpoint)}</code>
+                    <small className={device.publicKey ? "configured" : "missing"}>
+                      {device.publicKey ? "Identity key pinned" : "Identity key missing"}
+                    </small>
+                    {(deviceSyncResults[device.id] || meshStatus?.peers.find((peer) => peer.id === device.id))?.detail ? (
+                      <small className={(deviceSyncResults[device.id] || meshStatus?.peers.find((peer) => peer.id === device.id))?.connected ? "connected" : syncingDeviceId === device.id ? "connecting" : "failed"}>
+                        {(deviceSyncResults[device.id] || meshStatus?.peers.find((peer) => peer.id === device.id))?.detail}
+                      </small>
+                    ) : device.publicKey ? (
+                      <small className="waiting">Waiting for peer device - open Agent Vis on both Macs</small>
+                    ) : null}
+                  </div>
+                  <div className="desktop-paired-device-actions">
+                    <button
+                      type="button"
+                      className="desktop-peer-sync"
+                      disabled={!device.publicKey || syncingDeviceId !== null}
+                      onClick={() => void saveAndSync(device)}
+                    >
+                      {syncingDeviceId === device.id ? "syncing..." : "sync now"}
+                    </button>
+                    <button
+                      type="button"
+                      className="desktop-peer-remove"
+                      disabled={syncingDeviceId !== null}
+                      onClick={() => set("pairedDevices", settings.pairedDevices.filter((item) => item.id !== device.id))}
+                    >
+                      remove
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -285,7 +371,17 @@ export default function DesktopSettingsPage({ onBack }: { onBack: () => void }) 
             Device identity key
             <input value={devicePublicKey} onChange={(event) => setDevicePublicKey(event.target.value)} placeholder="Paste the other device's identity key" spellCheck={false} />
           </label>
-          <button type="button" className="settings-remove" onClick={addDevice}>add device</button>
+          <div className="desktop-device-save-row">
+            <button
+              type="button"
+              className={`desktop-device-save${deviceDraftReady ? " ready" : ""}`}
+              disabled={disabled || !deviceDraftReady}
+              onClick={() => void addDevice()}
+            >
+              save device
+            </button>
+            <small>{deviceDraftReady ? "Ready to save" : "Enter a name, address, and valid identity key"}</small>
+          </div>
         </section>
 
         <section className="settings-card desktop-settings-info-card">
@@ -302,6 +398,25 @@ export default function DesktopSettingsPage({ onBack }: { onBack: () => void }) 
       </div>
     </section>
   );
+}
+
+function meshEndpoint(value: string): string {
+  const endpoint = value.trim();
+  if (!endpoint) return endpoint;
+  if (/^\[[^\]]+\]:\d+$/.test(endpoint) || /^[^:]+:\d+$/.test(endpoint)) return endpoint;
+  if (/^\[[^\]]+\]$/.test(endpoint)) return `${endpoint}:4242`;
+  if ((endpoint.match(/:/g) || []).length > 1) return `[${endpoint}]:4242`;
+  return `${endpoint}:4242`;
+}
+
+function validDeviceDraft(name: string, endpoint: string, publicKey: string): boolean {
+  const normalizedEndpoint = meshEndpoint(endpoint);
+  return name.trim().length > 0
+    && name.trim().length <= 128
+    && normalizedEndpoint.length <= 512
+    && !normalizedEndpoint.includes(" ")
+    && (/^\[[^\]]+\]:\d+$/.test(normalizedEndpoint) || /^[^:]+:\d+$/.test(normalizedEndpoint))
+    && /^[A-Za-z0-9+/]{43}$/.test(publicKey.trim());
 }
 
 function AppearanceOption({

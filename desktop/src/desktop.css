@@ -1034,6 +1034,141 @@ body.terminal-over-sessions #sidebar {
   text-align: right;
 }
 
+.desktop-paired-devices {
+  display: grid;
+  gap: 10px;
+  margin: 4px 0 14px;
+}
+
+.desktop-paired-device {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 18px;
+  align-items: center;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.desktop-paired-device-copy {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.desktop-paired-device-copy strong {
+  color: var(--text);
+  font: 600 13px var(--font-sans);
+}
+
+.desktop-paired-device-copy code {
+  overflow: hidden;
+  color: var(--text-muted);
+  font: 11px var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.desktop-paired-device-copy small {
+  color: var(--text-dim);
+  font: 10px/1.35 var(--font-mono);
+}
+
+.desktop-paired-device-copy small.configured,
+.desktop-paired-device-copy small.connected {
+  color: var(--green);
+}
+
+.desktop-paired-device-copy small.missing,
+.desktop-paired-device-copy small.failed {
+  color: var(--red);
+}
+
+.desktop-paired-device-copy small.connecting {
+  color: var(--accent);
+}
+
+.desktop-paired-device-copy small.waiting {
+  color: var(--text-muted);
+}
+
+.desktop-paired-device-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.desktop-paired-device-actions button {
+  min-width: 74px;
+  height: 30px;
+  padding: 0 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  cursor: pointer;
+  font: 10px var(--font-mono);
+}
+
+.desktop-paired-device-actions button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.desktop-peer-sync {
+  background: rgba(var(--accent-rgb), 0.12);
+  color: var(--accent);
+}
+
+.desktop-peer-remove {
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.desktop-device-save-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.desktop-device-save-row small {
+  color: var(--text-dim);
+  font: 10px var(--font-mono);
+}
+
+.desktop-device-save {
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: default;
+  font: 10px var(--font-mono);
+  transition: border-color 150ms ease, background 150ms ease, color 150ms ease, box-shadow 150ms ease;
+}
+
+.desktop-device-save.ready {
+  border-color: rgba(var(--accent-rgb), 0.58);
+  background: rgba(var(--accent-rgb), 0.14);
+  box-shadow: 0 0 18px rgba(var(--accent-rgb), 0.08);
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.desktop-device-save:disabled {
+  opacity: 0.55;
+}
+
+@media (max-width: 620px) {
+  .desktop-paired-device {
+    grid-template-columns: 1fr;
+  }
+
+  .desktop-paired-device-actions button {
+    flex: 1;
+  }
+}
+
 .desktop-detail-state {
   display: grid;
   flex: 1;
