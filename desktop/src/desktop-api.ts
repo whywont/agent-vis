@@ -123,6 +123,11 @@ export function listSessions(): Promise<SessionMeta[]> {
   return invoke<SessionMeta[]>("list_sessions");
 }
 
+/** Read only the selected transcript's mtime; avoids a full session discovery scan. */
+export function getSessionModified(fileRefs: string): Promise<string> {
+  return invoke<string>("get_session_modified", { fileRefs });
+}
+
 export function searchSessions(query: string): Promise<SessionSearchResponse> {
   return invoke<SessionSearchResponse>("search_sessions", { query });
 }

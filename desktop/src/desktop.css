@@ -1468,7 +1468,7 @@ body.terminal-over-sessions #sidebar {
 }
 
 .file-tree-panel {
-  width: 250px;
+  width: 285px;
 }
 
 .desktop-file-card-stack {
@@ -1770,6 +1770,59 @@ body.terminal-over-sessions #sidebar {
 .desktop-file-panel-toggle {
   margin-left: auto;
 }
+
+.desktop-file-panel-tabs {
+  display: flex;
+  height: 100%;
+  align-items: stretch;
+  gap: 3px;
+}
+
+.desktop-file-panel-tabs button {
+  padding: 0 3px;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font: 10px var(--font-mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.desktop-file-panel-tabs button.active {
+  border-bottom-color: var(--accent);
+  color: var(--text);
+}
+
+.desktop-live-stream {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  padding: 7px 8px 10px;
+  background: #171717;
+  color: #d3d3d3;
+  font: 10px/1.48 var(--font-mono);
+}
+
+.desktop-live-stream-line {
+  padding: 7px 2px;
+}
+
+.desktop-live-stream-line b { display: flex; align-items: baseline; gap: 5px; color: #8fc4a8; font-size: 9px; font-weight: 600; line-height: 1.2; text-transform: uppercase; }
+.desktop-live-stream-line time { color: #657066; font-size: 8px; font-style: normal; font-weight: 400; letter-spacing: 0; }
+.desktop-live-stream-line pre { min-width: 0; margin: 3px 0 0; overflow-wrap: anywhere; color: #d7d7d7; white-space: pre-wrap; font: inherit; }
+.desktop-live-stream-line.kind-input b { color: #77b7df; }
+.desktop-live-stream-line.kind-input pre { color: #b9d9ed; }
+.desktop-live-stream-line.kind-reasoning b { color: #b9a171; }
+.desktop-live-stream-line.kind-reasoning pre { color: #ada99f; }
+.desktop-live-stream-line.kind-tool b { color: #d5b46c; }
+.desktop-live-stream-line.kind-tool pre { color: #d6c69f; }
+.desktop-live-stream-line.kind-output b { color: #a69ccf; }
+.desktop-live-stream-line.kind-output pre { color: #c4c0d4; }
+.desktop-live-stream-line.kind-system b { color: #7f9a85; }
+.desktop-live-stream-line.kind-system pre { color: #839487; font-style: italic; }
+.desktop-live-stream-empty { padding: 5px 2px; color: #747a74; }
 
 .desktop-file-tree-file {
   cursor: pointer;

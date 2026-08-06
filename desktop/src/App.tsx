@@ -1,10 +1,11 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { AppEvent, SessionMeta } from "@/lib/types";
 import { formatTime } from "@/utils/format";
 import {
   deleteSession,
   chooseWorkspaceDirectory,
   getDesktopAppearance,
+  getSessionModified,
   getSessionSharingSettings,
   listSessions,
   readSession,
@@ -37,6 +38,7 @@ import {
 import { buildSessionHandoff, continuationModel } from "./session-handoff";
 
 const SESSION_POLL_INTERVAL_MS = 5000;
+const LIVE_SESSION_REFRESH_DEBOUNCE_MS = 450;
 
 export interface SessionMatchTarget {
   eventTs: string;
@@ -73,10 +75,44 @@ export default function App() {
   const sidebarRef = useRef<HTMLElement>(null);
   const mainRef = useRef<HTMLElement>(null);
   const sessionsRef = useRef<SessionMeta[]>([]);
+  const selectedRef = useRef<SessionMeta | null>(null);
+  const liveRefreshTimer = useRef<number | null>(null);
+  const liveRefreshInFlight = useRef(false);
 
   useEffect(() => {
     sessionsRef.current = sessions;
   }, [sessions]);
+
+  useEffect(() => {
+    selectedRef.current = selected;
+  }, [selected]);
+
+  const refreshActiveLiveSession = useCallback(() => {
+    // Bridge events can arrive token-by-token. Coalesce them into a small,
+    // selected-session-only refresh instead of speeding up global discovery.
+    if (liveRefreshTimer.current !== null || liveRefreshInFlight.current) return;
+    liveRefreshTimer.current = window.setTimeout(async () => {
+      liveRefreshTimer.current = null;
+      liveRefreshInFlight.current = true;
+      try {
+        const current = selectedRef.current;
+        // Fresh sessions have no JSONL path until their first write. Their
+        // bridge stream remains immediate; global discovery adopts the record.
+        if (!current || current.file.startsWith("live:")) return;
+        const modified = await getSessionModified(sessionFiles(current));
+        setSelected((selected) => selected && sessionIdentity(selected) === sessionIdentity(current)
+          && selected.modified !== modified ? { ...selected, modified } : selected);
+      } catch {
+        // The bridge remains usable while the harness is between JSONL writes.
+      } finally {
+        liveRefreshInFlight.current = false;
+      }
+    }, LIVE_SESSION_REFRESH_DEBOUNCE_MS);
+  }, []);
+
+  useEffect(() => () => {
+    if (liveRefreshTimer.current !== null) window.clearTimeout(liveRefreshTimer.current);
+  }, []);
 
   useEffect(() => {
     void getDesktopAppearance().then((settings) => {
@@ -428,6 +464,7 @@ export default function App() {
               liveSessionKey={liveSessionKeys[sessionIdentity(selected)]}
               initialDraft={continuationDrafts[sessionIdentity(selected)]}
               initialEvents={continuationEvents[sessionIdentity(selected)]}
+              onLiveActivity={refreshActiveLiveSession}
               onContinuationDraftSent={() => {
                 const identity = sessionIdentity(selected);
                 setContinuationDrafts((current) => {

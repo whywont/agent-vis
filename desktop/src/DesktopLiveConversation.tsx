@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { AppEvent } from "@/lib/types";
 import { interruptCodexTurn, respondToCodexApproval } from "./desktop-api";
 import { getHarnessAdapter, type LiveProvider, type ModelOption } from "./harness-adapters";
+import type { LiveStreamEntry } from "./DesktopLiveStream";
 
 type ApprovalDecision = string | Record<string, unknown>;
 
@@ -44,6 +45,8 @@ export default function DesktopLiveConversation({
   onApprovalChange,
   onContextCompaction,
   onTimelineEvent,
+  onStreamEvent,
+  onActivity,
   tokenUsage,
   visible = true,
   pinned = false,
@@ -59,6 +62,8 @@ export default function DesktopLiveConversation({
   onApprovalChange?: (command: string | null) => void;
   onContextCompaction?: () => void;
   onTimelineEvent?: (event: AppEvent) => void;
+  onStreamEvent?: (event: LiveStreamEntry) => void;
+  onActivity?: () => void;
   tokenUsage?: { total: number; input: number; output: number };
   visible?: boolean;
   pinned?: boolean;
@@ -110,6 +115,7 @@ export default function DesktopLiveConversation({
     if (provider === "claude-code") {
       void listen<ClaudeStreamEvent>("claude-stream-event", (event) => {
         if (event.payload.sessionKey !== sessionKey) return;
+        onActivity?.();
         const message = event.payload.message;
         if (message.type === "agent-vis/disconnected") {
           setState("error");
@@ -119,6 +125,7 @@ export default function DesktopLiveConversation({
         }
         if (message.type === "system" && message.status === "requesting") {
           setActiveTurnId("claude-turn");
+          onStreamEvent?.(streamEntry("system", "Claude is working."));
           return;
         }
         if (message.type === "system" && message.subtype === "init") {
@@ -154,6 +161,10 @@ export default function DesktopLiveConversation({
             });
           }
         }
+        if (message.type === "assistant") {
+          const output = assistantText(message);
+          if (output) onStreamEvent?.(streamEntry("assistant", output));
+        }
         if (message.type === "result") {
           const pending = pendingSlashCommand.current;
           const result = typeof message.result === "string" ? message.result.trim() : "";
@@ -167,6 +178,7 @@ export default function DesktopLiveConversation({
           }
           pendingSlashCommand.current = null;
           setActiveTurnId(null);
+          onStreamEvent?.(streamEntry("system", message.subtype === "success" ? "Claude finished." : "Claude stopped."));
           if (message.subtype !== "success") {
             setState("error");
             setError(typeof message.result === "string" ? message.result : "Claude could not complete this turn.");
@@ -186,6 +198,7 @@ export default function DesktopLiveConversation({
     }
     void listen<AppServerEvent>("codex-app-server-event", (event) => {
       if (event.payload.sessionKey !== sessionKey) return;
+      onActivity?.();
       const { message } = event.payload;
       const params = message.params || {};
       if (message.method === "agent-vis/disconnected") {
@@ -197,6 +210,7 @@ export default function DesktopLiveConversation({
         const turn = params.turn as { id?: string } | undefined;
         setActiveTurnId(turn?.id || null);
         setInterrupted(false);
+        onStreamEvent?.(streamEntry("system", "Codex is working."));
       }
       if (message.method === "turn/completed") {
         setActiveTurnId(null);
@@ -208,6 +222,7 @@ export default function DesktopLiveConversation({
           setState("error");
           setError(error || "Codex could not complete this turn.");
         }
+        onStreamEvent?.(streamEntry("system", turn?.status === "completed" ? "Codex finished." : "Codex stopped."));
         onTurnCompleted?.();
       }
       if (message.method === "thread/status/changed") {
@@ -217,6 +232,8 @@ export default function DesktopLiveConversation({
       if (message.method === "item/started" && isCodexCompaction(params.item)) {
         onContextCompaction?.();
       }
+      const streamEvent = codexStreamEvent(message.method, params);
+      if (streamEvent) onStreamEvent?.(streamEvent);
       if (message.method === "serverRequest/resolved") {
         setApproval(null);
         onApprovalChange?.(null);
@@ -252,7 +269,7 @@ export default function DesktopLiveConversation({
       cancelled = true;
       unlisten?.();
     };
-  }, [onApprovalChange, onContextCompaction, onTimelineEvent, onTurnCompleted, provider, sessionKey]);
+  }, [onActivity, onApprovalChange, onContextCompaction, onStreamEvent, onTimelineEvent, onTurnCompleted, provider, sessionKey]);
 
   async function connect(): Promise<boolean> {
     if (connection.current) return connection.current;
@@ -299,6 +316,7 @@ export default function DesktopLiveConversation({
     }
     try {
       const imageUrls = images.map((image) => image.url);
+      onStreamEvent?.(streamEntry("input", text || `${imageUrls.length} image attachment${imageUrls.length === 1 ? "" : "s"}`));
       const isSlashCommand = text.startsWith("/") && exactSlashCommand;
       const callId = isSlashCommand ? crypto.randomUUID() : undefined;
       if (isSlashCommand && callId) {
@@ -588,6 +606,44 @@ export default function DesktopLiveConversation({
       )}
     </section>
   );
+}
+
+function streamEntry(kind: LiveStreamEntry["kind"], text: string, id: string = crypto.randomUUID()): LiveStreamEntry {
+  return { id, kind, text, ts: new Date().toISOString() };
+}
+
+function codexStreamEvent(method: string | undefined, params: Record<string, unknown>): LiveStreamEntry | null {
+  if (!method) return null;
+  const item = params.item;
+  if (method === "item/started" || method === "item/completed") {
+    const formatted = formatCodexItem(item);
+    return formatted ? streamEntry(formatted.kind, formatted.text, `codex:${formatted.id}`) : null;
+  }
+  const delta = typeof params.delta === "string" ? params.delta : "";
+  const itemId = typeof params.itemId === "string" ? params.itemId : "";
+  if (!delta || !itemId) return null;
+  if (method.includes("agentMessage")) return { ...streamEntry("assistant", delta, `codex:${itemId}`), append: true };
+  if (method.includes("reasoning")) return { ...streamEntry("reasoning", delta, `codex:${itemId}`), append: true };
+  if (method.includes("commandExecution")) return { ...streamEntry("output", delta, `codex:${itemId}`), append: true };
+  return null;
+}
+
+function formatCodexItem(item: unknown): { id: string; kind: LiveStreamEntry["kind"]; text: string } | null {
+  if (typeof item !== "object" || item === null) return null;
+  const record = item as Record<string, unknown>;
+  const id = typeof record.id === "string" ? record.id : crypto.randomUUID();
+  const type = typeof record.type === "string" ? record.type : "";
+  const text = stringValue(record.text) || stringValue(record.content) || stringValue(record.command) || stringValue(record.query);
+  if (type === "agentMessage" && text) return { id, kind: "assistant", text };
+  if (type === "reasoning" && text) return { id, kind: "reasoning", text };
+  if (type === "commandExecution") return { id, kind: "tool", text: text ? `$ ${text}` : "Running command..." };
+  if (type === "fileChange") return { id, kind: "tool", text: "Applying file changes..." };
+  if (type === "webSearch") return { id, kind: "tool", text: text ? `Searching: ${text}` : "Searching the web..." };
+  return null;
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
 }
 
 function fileAsDataUrl(file: File): Promise<string> {

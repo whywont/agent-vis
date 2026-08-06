@@ -10,6 +10,7 @@ import DesktopFilesCanvas from "./DesktopFilesCanvas";
 import DesktopTimeline from "./DesktopTimeline";
 import DesktopTerminal from "./DesktopTerminal";
 import DesktopLiveConversation from "./DesktopLiveConversation";
+import DesktopLiveStream, { type LiveStreamEntry } from "./DesktopLiveStream";
 import { getGitBranch, readSession, stopTerminal } from "./desktop-api";
 import { startWindowDrag } from "./window-drag";
 
@@ -26,6 +27,7 @@ export default function DesktopSessionDetail({
   liveSessionKey,
   initialDraft,
   initialEvents,
+  onLiveActivity,
   onContinuationDraftSent,
 }: {
   session: SessionMeta;
@@ -40,6 +42,7 @@ export default function DesktopSessionDetail({
   liveSessionKey?: string;
   initialDraft?: string;
   initialEvents?: AppEvent[];
+  onLiveActivity?: () => void;
   onContinuationDraftSent?: () => void;
 }) {
   const isNewSession = session.file.startsWith("live:");
@@ -50,6 +53,8 @@ export default function DesktopSessionDetail({
   const [branch, setBranch] = useState<string | null>(null);
   const [branchCopied, setBranchCopied] = useState(false);
   const [filePanelOpen, setFilePanelOpen] = useState(true);
+  const [filePanelView, setFilePanelView] = useState<"patches" | "stream">("patches");
+  const [liveStream, setLiveStream] = useState<LiveStreamEntry[]>([]);
   // Match the resize floor so opening a terminal never takes more room than
   // the user can immediately reclaim.
   const [terminalHeight, setTerminalHeight] = useState(140);
@@ -262,6 +267,17 @@ export default function DesktopSessionDetail({
   const handleLiveTimelineEvent = useCallback((event: AppEvent) => {
     setEvents((current) => [...current, event]);
   }, []);
+  const handleLiveStreamEvent = useCallback((event: LiveStreamEntry) => {
+    setLiveStream((current) => {
+      const index = current.findIndex((entry) => entry.id === event.id);
+      if (index < 0) return [...current, { ...event, append: undefined }];
+      const next = [...current];
+      next[index] = event.append
+        ? { ...next[index], text: `${next[index].text}${event.text}` }
+        : { ...next[index], ...event, append: undefined };
+      return next;
+    });
+  }, []);
   const tokenUsage = useMemo(() => {
     const latest = [...events].reverse().find((event) => event.kind === "token_usage");
     return latest?.kind === "token_usage"
@@ -421,17 +437,36 @@ export default function DesktopSessionDetail({
             <>
               <div className="file-tree-panel" ref={fileTreeRef}>
                 <div className="file-tree-header">
-                  <span>changed files</span>
+                  <div className="desktop-file-panel-tabs" role="tablist" aria-label="Side panel view">
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={filePanelView === "patches"}
+                      className={filePanelView === "patches" ? "active" : ""}
+                      onClick={() => setFilePanelView("patches")}
+                    >
+                      patches
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={filePanelView === "stream"}
+                      className={filePanelView === "stream" ? "active" : ""}
+                      onClick={() => setFilePanelView("stream")}
+                    >
+                      stream
+                    </button>
+                  </div>
                   <button
                     className="desktop-panel-toggle desktop-file-panel-toggle"
                     onClick={() => setFilePanelOpen(false)}
-                    title="Hide changed files"
-                    aria-label="Hide changed files"
+                    title="Hide side panel"
+                    aria-label="Hide side panel"
                   >
                     &#8249;
                   </button>
                 </div>
-                {branch && (
+                {filePanelView === "patches" && branch && (
                   <button
                     type="button"
                     className="desktop-file-branch-row"
@@ -451,7 +486,11 @@ export default function DesktopSessionDetail({
                     {branchCopied && <small role="status">Branch copied</small>}
                   </button>
                 )}
-                <DesktopFileTree events={events} sessionCwd={cwd} onJumpToPatch={jumpToPatch} />
+                {filePanelView === "patches" ? (
+                  <DesktopFileTree events={events} sessionCwd={cwd} onJumpToPatch={jumpToPatch} />
+                ) : (
+                  <DesktopLiveStream entries={liveStream} />
+                )}
               </div>
               <div className="file-tree-resize-handle" ref={resizeHandleRef} />
             </>
@@ -459,10 +498,10 @@ export default function DesktopSessionDetail({
             <button
               className="desktop-panel-reopen desktop-files-reopen"
               onClick={() => setFilePanelOpen(true)}
-              title="Show changed files"
-              aria-label="Show changed files"
+              title="Show side panel"
+              aria-label="Show side panel"
             >
-              <span>files</span>
+              <span>panel</span>
               <b>&#8250;</b>
             </button>
           ) : null}
@@ -483,6 +522,8 @@ export default function DesktopSessionDetail({
                 onApprovalChange={handleApprovalChange}
                 onContextCompaction={handleContextCompaction}
                 onTimelineEvent={handleLiveTimelineEvent}
+                onStreamEvent={handleLiveStreamEvent}
+                onActivity={onLiveActivity}
                 tokenUsage={tokenUsage}
                 initialDraft={initialDraft}
                 onInitialDraftSent={onContinuationDraftSent}

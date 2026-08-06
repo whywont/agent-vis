@@ -578,6 +578,35 @@ pub(crate) fn list_sessions(app: tauri::AppHandle) -> Result<Vec<SessionMeta>, S
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub(crate) fn get_session_modified(
+    app: tauri::AppHandle,
+    file_refs: String,
+) -> Result<String, String> {
+    let refs = file_refs
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    if refs.is_empty() || refs.len() > MAX_GROUPED_FILES {
+        return Err("Invalid grouped session reference".to_owned());
+    }
+    let home = dirs::home_dir().ok_or("Could not resolve the home directory")?;
+    let synced_root = synced_sessions_root(&app)?;
+    let newest = refs
+        .iter()
+        .try_fold(SystemTime::UNIX_EPOCH, |latest, file_ref| {
+            let (path, _) = resolve_any_session_ref(&home, &synced_root, file_ref)?;
+            let modified = path
+                .metadata()
+                .map_err(|error| error.to_string())?
+                .modified()
+                .unwrap_or(SystemTime::UNIX_EPOCH);
+            Ok::<_, String>(latest.max(modified))
+        })?;
+    Ok(system_time_iso(newest))
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub(crate) fn delete_session(app: tauri::AppHandle, file_refs: String) -> Result<usize, String> {
     let home = dirs::home_dir().ok_or("Could not resolve the home directory")?;
     delete_session_refs(&home, &synced_sessions_root(&app)?, &file_refs)

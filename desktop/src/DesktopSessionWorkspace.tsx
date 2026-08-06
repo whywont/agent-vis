@@ -16,6 +16,7 @@ export default function DesktopSessionWorkspace({
   liveSessionKey,
   initialDraft,
   initialEvents,
+  onLiveActivity,
   onContinuationDraftSent,
 }: {
   primary: SessionMeta;
@@ -31,6 +32,7 @@ export default function DesktopSessionWorkspace({
   liveSessionKey?: string;
   initialDraft?: string;
   initialEvents?: AppEvent[];
+  onLiveActivity?: () => void;
   onContinuationDraftSent?: () => void;
 }) {
   const split = Boolean(secondary);
@@ -51,6 +53,7 @@ export default function DesktopSessionWorkspace({
           liveSessionKey={liveSessionKey}
           initialDraft={initialDraft}
           initialEvents={initialEvents}
+          onLiveActivity={onLiveActivity}
           onContinuationDraftSent={onContinuationDraftSent}
         />
       </div>

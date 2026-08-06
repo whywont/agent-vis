@@ -24,7 +24,7 @@ use mesh::{
     connect_mesh_peer, get_mesh_status, regenerate_mesh_identity, sync_all_mesh_peers, MeshState,
 };
 use search::{search_sessions, SearchIndexState};
-use sessions::{delete_session, list_sessions, read_session_records};
+use sessions::{delete_session, get_session_modified, list_sessions, read_session_records};
 use settings::{
     get_desktop_appearance, get_desktop_settings, get_session_sharing_settings,
     save_desktop_settings, update_session_share,
@@ -51,6 +51,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             list_sessions,
+            get_session_modified,
             delete_session,
             search_sessions,
             read_session_records,
