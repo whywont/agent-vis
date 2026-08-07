@@ -7,6 +7,14 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 pub(crate) const MAX_EDIT_FILE_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_WORKSPACE_FILES: usize = 10_000;
+const MAX_WORKSPACE_DEPTH: usize = 32;
+
+fn authorized_workspace_roots(app: &tauri::AppHandle) -> Result<HashSet<PathBuf>, String> {
+    let mut roots = trusted_workspace_roots()?;
+    roots.extend(crate::collab::collab_workspace_roots(app)?);
+    Ok(roots)
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,6 +37,18 @@ pub(crate) struct SaveWorkspaceFileRequest {
 pub(crate) struct ResolveWorkspaceFilepathsRequest {
     workspace_root: String,
     filepaths: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ListWorkspaceFilesRequest {
+    workspace_root: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WorkspaceTreeEntry {
+    path: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -77,8 +97,11 @@ fn git_branch_for_workspace(
 }
 
 #[tauri::command]
-pub(crate) fn get_git_branch(workspace_root: String) -> Result<Option<String>, String> {
-    let roots = trusted_workspace_roots()?;
+pub(crate) fn get_git_branch(
+    app: tauri::AppHandle,
+    workspace_root: String,
+) -> Result<Option<String>, String> {
+    let roots = authorized_workspace_roots(&app)?;
     git_branch_for_workspace(&workspace_root, &roots)
 }
 
@@ -116,13 +139,14 @@ pub(crate) fn choose_workspace_directory() -> Result<Option<String>, String> {
 
 #[tauri::command]
 pub(crate) fn resolve_workspace_filepaths(
+    app: tauri::AppHandle,
     request: ResolveWorkspaceFilepathsRequest,
 ) -> Result<Vec<Option<String>>, String> {
     const MAX_PATHS: usize = 10_000;
     if request.filepaths.len() > MAX_PATHS {
         return Err("Too many workspace files requested.".to_owned());
     }
-    let roots = trusted_workspace_roots()?;
+    let roots = authorized_workspace_roots(&app)?;
     let root = validate_workspace_root(&request.workspace_root, &roots)?;
     let renames = git_rename_map(&root)?;
     Ok(request
@@ -130,6 +154,59 @@ pub(crate) fn resolve_workspace_filepaths(
         .iter()
         .map(|filepath| resolve_workspace_filepath(&root, filepath, &renames))
         .collect())
+}
+
+#[tauri::command]
+pub(crate) fn list_workspace_files(
+    app: tauri::AppHandle,
+    request: ListWorkspaceFilesRequest,
+) -> Result<Vec<WorkspaceTreeEntry>, String> {
+    let roots = authorized_workspace_roots(&app)?;
+    let root = validate_workspace_root(&request.workspace_root, &roots)?;
+    let mut files = Vec::new();
+    collect_workspace_files(&root, &root, 0, &mut files)?;
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(files)
+}
+
+fn collect_workspace_files(
+    root: &Path,
+    directory: &Path,
+    depth: usize,
+    files: &mut Vec<WorkspaceTreeEntry>,
+) -> Result<(), String> {
+    if depth > MAX_WORKSPACE_DEPTH || files.len() >= MAX_WORKSPACE_FILES {
+        return Ok(());
+    }
+    let entries = fs::read_dir(directory).map_err(|error| error.to_string())?;
+    for entry in entries {
+        if files.len() >= MAX_WORKSPACE_FILES {
+            break;
+        }
+        let entry = entry.map_err(|error| error.to_string())?;
+        let file_type = entry.file_type().map_err(|error| error.to_string())?;
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        // Dependency caches and VCS metadata are not editor source files.
+        if file_type.is_dir()
+            && matches!(
+                name.as_ref(),
+                ".git" | "node_modules" | ".next" | "target" | "dist" | "build"
+            )
+        {
+            continue;
+        }
+        if file_type.is_dir() {
+            collect_workspace_files(root, &path, depth + 1, files)?;
+        } else if file_type.is_file() {
+            let relative = path.strip_prefix(root).map_err(|error| error.to_string())?;
+            files.push(WorkspaceTreeEntry {
+                path: relative.to_string_lossy().into_owned(),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn git_rename_map(root: &Path) -> Result<HashMap<String, String>, String> {
@@ -246,9 +323,10 @@ fn read_workspace_file_content(path: &Path) -> Result<String, String> {
 
 #[tauri::command]
 pub(crate) fn read_workspace_file(
+    app: tauri::AppHandle,
     request: ReadWorkspaceFileRequest,
 ) -> Result<WorkspaceFile, String> {
-    let roots = trusted_workspace_roots()?;
+    let roots = authorized_workspace_roots(&app)?;
     let path = resolve_workspace_file(&request.workspace_root, &request.filepath, &roots)?;
     Ok(WorkspaceFile {
         content: read_workspace_file_content(&path)?,
@@ -257,9 +335,10 @@ pub(crate) fn read_workspace_file(
 
 #[tauri::command]
 pub(crate) fn save_workspace_file(
+    app: tauri::AppHandle,
     request: SaveWorkspaceFileRequest,
 ) -> Result<WorkspaceFile, String> {
-    let roots = trusted_workspace_roots()?;
+    let roots = authorized_workspace_roots(&app)?;
     save_workspace_file_with_roots(request, &roots)
 }
 

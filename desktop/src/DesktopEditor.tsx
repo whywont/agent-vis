@@ -85,6 +85,22 @@ function languageForPath(path: string) {
   return [];
 }
 
+function explainTargetForView(view: EditorView, hostElement: HTMLDivElement | null): ExplainTarget | null {
+  const selection = view.state.selection.main;
+  const end = Math.max(selection.from, selection.to - 1);
+  const startLine = view.state.doc.lineAt(selection.from);
+  const endLine = view.state.doc.lineAt(end);
+  const coords = view.coordsAtPos(startLine.from);
+  const host = hostElement?.getBoundingClientRect();
+  if (!coords || !host) return null;
+  return {
+    startLine: startLine.number,
+    endLine: endLine.number,
+    text: selection.empty ? startLine.text : view.state.sliceDoc(selection.from, selection.to),
+    top: coords.top - host.top,
+  };
+}
+
 export default function DesktopEditor({ workspaceRoot }: { workspaceRoot: string }) {
   const [files, setFiles] = useState<WorkspaceTreeEntry[]>([]);
   const [activePath, setActivePath] = useState<string | null>(null);
@@ -124,7 +140,10 @@ export default function DesktopEditor({ workspaceRoot }: { workspaceRoot: string
     finally { setLoading(false); }
   }, [workspaceRoot]);
 
-  useEffect(() => { void refreshFiles(); }, [refreshFiles]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => void refreshFiles(), 0);
+    return () => window.clearTimeout(timer);
+  }, [refreshFiles]);
 
   useEffect(() => {
     const handle = explorerResizeRef.current;
@@ -153,16 +172,24 @@ export default function DesktopEditor({ workspaceRoot }: { workspaceRoot: string
   }, [explorerWidth]);
 
   useEffect(() => {
-    if (!activePath && files[0]) setActivePath(files[0].path);
+    if (activePath || !files[0]) return;
+    const timer = window.setTimeout(() => setActivePath(files[0].path), 0);
+    return () => window.clearTimeout(timer);
   }, [activePath, files]);
 
   useEffect(() => {
     if (!activePath) return;
     let cancelled = false;
-    setError(""); setExplanation(""); setExplainTarget(null); setLoadedPath(null);
-    void readWorkspaceFile(workspaceRoot, activePath).then((next) => {
-      if (!cancelled) { setContent(next); setSavedContent(next); setLoadedPath(activePath); }
-    }).catch((reason: unknown) => !cancelled && setError(reason instanceof Error ? reason.message : String(reason)));
+    void Promise.resolve().then(async () => {
+      if (cancelled) return;
+      setError(""); setExplanation(""); setExplainTarget(null); setLoadedPath(null);
+      try {
+        const next = await readWorkspaceFile(workspaceRoot, activePath);
+        if (!cancelled) { setContent(next); setSavedContent(next); setLoadedPath(activePath); }
+      } catch (reason) {
+        if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason));
+      }
+    });
     return () => { cancelled = true; };
   }, [activePath, workspaceRoot]);
 
@@ -199,7 +226,7 @@ export default function DesktopEditor({ workspaceRoot }: { workspaceRoot: string
           keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab, { key: "Mod-s", run: () => { void save(); return true; } }]),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) setContent(update.state.doc.toString());
-            if (update.selectionSet) window.requestAnimationFrame(() => setExplainTarget(explainTargetForView(view)));
+            if (update.selectionSet) window.requestAnimationFrame(() => setExplainTarget(explainTargetForView(view, editorHostRef.current)));
           }),
         ],
       }),
@@ -222,22 +249,6 @@ export default function DesktopEditor({ workspaceRoot }: { workspaceRoot: string
       else next.add(path);
       return next;
     });
-  }
-
-  function explainTargetForView(view: EditorView): ExplainTarget | null {
-    const selection = view.state.selection.main;
-    const end = Math.max(selection.from, selection.to - 1);
-    const startLine = view.state.doc.lineAt(selection.from);
-    const endLine = view.state.doc.lineAt(end);
-    const coords = view.coordsAtPos(startLine.from);
-    const host = editorHostRef.current?.getBoundingClientRect();
-    if (!coords || !host) return null;
-    return {
-      startLine: startLine.number,
-      endLine: endLine.number,
-      text: selection.empty ? startLine.text : view.state.sliceDoc(selection.from, selection.to),
-      top: coords.top - host.top,
-    };
   }
 
   function trackLine(event: React.MouseEvent<HTMLDivElement>) {

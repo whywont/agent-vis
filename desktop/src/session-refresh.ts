@@ -13,6 +13,7 @@ export function sessionListsEqual(current: SessionMeta[], next: SessionMeta[]): 
     return sessionIdentity(session) === sessionIdentity(candidate)
       && session.modified === candidate.modified
       && session.timestamp === candidate.timestamp
+      && session.customName === candidate.customName
       && (session.files?.join(",") || session.file) === (candidate.files?.join(",") || candidate.file);
   });
 }

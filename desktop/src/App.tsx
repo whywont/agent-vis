@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { AppEvent, SessionMeta } from "@/lib/types";
+import type { AppEvent, SessionMeta, TranscriptSessionMeta } from "@/lib/types";
 import { formatTime } from "@/utils/format";
 import {
   deleteSession,
   chooseWorkspaceDirectory,
+  createCollabRoom,
   getDesktopAppearance,
   getSessionModified,
   getSessionSharingSettings,
   listSessions,
+  listCollabRooms,
   readSession,
   startClaudeSession,
   startCodexSession,
@@ -20,6 +22,8 @@ import type { LiveProvider } from "./harness-adapters";
 import DesktopSessionList from "./DesktopSessionList";
 import DesktopSettingsPage from "./DesktopSettingsPage";
 import DesktopSessionWorkspace from "./DesktopSessionWorkspace";
+import DesktopCollabWorkspace from "./DesktopCollabWorkspace";
+import DesktopCollabSidebar from "./DesktopCollabSidebar";
 import { loadSessionAliases, saveSessionAlias, sessionAlias } from "./session-aliases";
 import {
   mergeRefreshedSessions,
@@ -53,6 +57,9 @@ function sessionFiles(session: SessionMeta): string {
 
 export default function App() {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
+  const [collabRooms, setCollabRooms] = useState<SessionMeta[]>([]);
+  const [collabMode, setCollabMode] = useState(false);
+  const [selectedCollabWorkerId, setSelectedCollabWorkerId] = useState<string | null>(null);
   const [selected, setSelected] = useState<SessionMeta | null>(null);
   const [splitSession, setSplitSession] = useState<SessionMeta | null>(null);
   const [draggedSession, setDraggedSession] = useState<SessionMeta | null>(null);
@@ -61,7 +68,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
   const [sessionSidebarOpen, setSessionSidebarOpen] = useState(true);
-  const [activeTab, setActiveTab] = useState<"session" | "files">("session");
+  const [activeTab, setActiveTab] = useState<"session" | "files" | "editor">("session");
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [matchTarget, setMatchTarget] = useState<SessionMatchTarget | null>(null);
   const [sessionAliases, setSessionAliases] = useState(() => loadSessionAliases());
@@ -171,7 +178,11 @@ export default function App() {
       if (refreshing) return;
       refreshing = true;
       try {
-        const nextSessions = await listSessions();
+        const [transcriptSessions, nextCollabRooms] = await Promise.all([
+          listSessions(),
+          listCollabRooms().catch(() => []),
+        ]);
+        const nextSessions = transcriptSessions.sort((left, right) => right.modified.localeCompare(left.modified));
         if (cancelled) return;
         loadedOnce = true;
         setError("");
@@ -179,7 +190,10 @@ export default function App() {
           const merged = mergeRefreshedSessions(current, nextSessions);
           return sessionListsEqual(current, merged) ? current : merged;
         });
-        setSelected((current) => refreshSelectedSessionWithLive(current, nextSessions));
+        setCollabRooms(nextCollabRooms.sort((left, right) => right.modified.localeCompare(left.modified)));
+        setSelected((current) => current?.source === "collab"
+          ? nextCollabRooms.find((room) => room.id === current.id) || current
+          : refreshSelectedSessionWithLive(current, nextSessions));
         setSplitSession((current) => refreshSelectedSession(current, nextSessions));
       } catch (reason: unknown) {
         if (!cancelled && !loadedOnce) {
@@ -258,7 +272,7 @@ export default function App() {
 
   function addSplitSession(files: string) {
     const next = sessions.find((session) => sessionFiles(session) === files) || null;
-    if (!next) return;
+    if (!next || next.source === "collab") return;
     if (!selected) {
       setSelected(next);
       return;
@@ -307,7 +321,46 @@ export default function App() {
     return { session: next, sessionKey };
   }
 
+  async function startCollabRoom(cwd: string) {
+    const room = await createCollabRoom(cwd);
+    setCollabRooms((current) => [room, ...current.filter((candidate) => candidate.id !== room.id)]);
+    setCollabMode(true);
+    setSelectedCollabWorkerId(null);
+    setShowSettings(false);
+    setActiveTab("session");
+    setMatchTarget(null);
+    setSplitSession(null);
+    setTerminalOpen(false);
+    setSelected(room);
+  }
+
+  async function openCollab() {
+    const cwd = await chooseWorkspaceDirectory();
+    if (cwd) await startCollabRoom(cwd);
+  }
+
+  function enterCollabMode() {
+    setCollabMode(true);
+    setShowSettings(false);
+    setSelected(null);
+    setSplitSession(null);
+    setMatchTarget(null);
+    setTerminalOpen(false);
+    setSelectedCollabWorkerId(null);
+  }
+
+  function goHome() {
+    setCollabMode(false);
+    setSelectedCollabWorkerId(null);
+    setShowSettings(false);
+    setSelected(null);
+    setSplitSession(null);
+    setMatchTarget(null);
+    setTerminalOpen(false);
+  }
+
   async function continueSyncedSession(session: SessionMeta) {
+    if (session.source === "collab") return;
     const cwd = await chooseWorkspaceDirectory();
     if (!cwd) return;
     const events = await readSession(sessionFiles(session), session.modified);
@@ -333,7 +386,7 @@ export default function App() {
     <div id="app" className={selected ? "has-session" : "no-session"}>
       <DesktopMacTitlebar
         session={showSettings ? null : selected}
-        sessionName={selected ? sessionAlias(sessionAliases, selected) : null}
+        sessionName={selected?.source === "collab" ? selected.customName || selected.project || "Collaboration" : selected ? sessionAlias(sessionAliases, selected) : null}
         splitSession={splitSession}
         splitSessionName={splitSession ? sessionAlias(sessionAliases, splitSession) : null}
         activeTab={activeTab}
@@ -341,8 +394,8 @@ export default function App() {
         splitView={splitActive}
         splitCenter={splitCenter}
         onActiveTabChange={(tab) => {
-          if (selected?.synced && tab === "files") return;
-          if (tab === "files") setMatchTarget(null);
+          if (selected?.synced && (tab === "files" || tab === "editor")) return;
+          if (tab === "files" || tab === "editor") setMatchTarget(null);
           setActiveTab(tab);
         }}
         onTerminalOpen={() => {
@@ -350,13 +403,26 @@ export default function App() {
           setTerminalOpen(true);
           if (selected) window.dispatchEvent(new CustomEvent("open-session-terminal", { detail: selected }));
         }}
+        onOpenCollab={enterCollabMode}
         onCloseSplit={() => setSplitSession(null)}
       />
       <div className="desktop-app-body">
         <nav id="sidebar" ref={sidebarRef} className={sessionSidebarOpen ? "" : "desktop-sidebar-collapsed"}>
           {sessionSidebarOpen ? (
             <>
-              <DesktopSessionList
+              {collabMode ? <DesktopCollabSidebar
+                rooms={collabRooms}
+                selectedRoom={selected?.source === "collab" ? selected : null}
+                selectedWorkerId={selectedCollabWorkerId}
+                onSelectRoom={(room) => { setSelected(room); setSelectedCollabWorkerId(null); }}
+                onSelectWorker={(room, workerId) => { setSelected(room); setSelectedCollabWorkerId(workerId); }}
+                onCreateRoom={() => void openCollab()}
+                onExit={goHome}
+                onRoomDeleted={(room) => {
+                  setCollabRooms((current) => current.filter((candidate) => candidate.id !== room.id));
+                  if (selected?.id === room.id) setSelected(null);
+                }}
+              /> : <DesktopSessionList
                 sessions={sessions}
                 currentFile={selectedFiles}
                 loading={loading}
@@ -409,7 +475,7 @@ export default function App() {
                     }
                   }
                 }}
-              />
+              />}
               <div className="resize-handle right" />
             </>
           ) : (
@@ -432,6 +498,15 @@ export default function App() {
         >
           {showSettings ? (
             <DesktopSettingsPage onBack={() => setShowSettings(false)} />
+          ) : collabMode && !selected ? (
+            <div className="welcome desktop-collab-welcome">
+              <div className="welcome-inner">
+                <span>Custom collaboration</span>
+                <h2>Choose or create a room</h2>
+                <p>Rooms and their participant sessions live separately from the normal transcript catalog.</p>
+                <button type="button" onClick={() => void openCollab()}>Choose repository</button>
+              </div>
+            </div>
           ) : !selected ? (
             <div className="welcome">
               <div className="welcome-inner">
@@ -441,18 +516,24 @@ export default function App() {
                 <p>Explore local Claude Code and Codex work without starting a server.</p>
               </div>
             </div>
-          ) : (
+          ) : selected.source === "collab" ? (
+            <DesktopCollabWorkspace
+              room={selected}
+              selectedWorkerId={selectedCollabWorkerId}
+              onSelectedWorkerChange={setSelectedCollabWorkerId}
+            />
+          ) : isTranscriptSession(selected) ? (
             <DesktopSessionWorkspace
               primary={selected}
-              secondary={splitSession}
+              secondary={splitSession && isTranscriptSession(splitSession) ? splitSession : null}
               primaryName={sessionAlias(sessionAliases, selected)}
               secondaryName={splitSession ? sessionAlias(sessionAliases, splitSession) : null}
               activeTab={activeTab}
               terminalOpen={terminalOpen}
               matchTarget={matchTarget}
               onActiveTabChange={(tab) => {
-                if (selected.synced && tab === "files") return;
-                if (tab === "files") setMatchTarget(null);
+                if (selected.synced && (tab === "files" || tab === "editor")) return;
+                if (tab === "files" || tab === "editor") setMatchTarget(null);
                 setActiveTab(tab);
               }}
               onTerminalOpen={(session) => {
@@ -460,6 +541,7 @@ export default function App() {
                 setTerminalOpen(true);
                 window.dispatchEvent(new CustomEvent("open-session-terminal", { detail: session }));
               }}
+              onOpenCollab={enterCollabMode}
               onTerminalClose={() => setTerminalOpen(false)}
               liveSessionKey={liveSessionKeys[sessionIdentity(selected)]}
               initialDraft={continuationDrafts[sessionIdentity(selected)]}
@@ -473,7 +555,7 @@ export default function App() {
                 });
               }}
             />
-          )}
+          ) : null}
         </main>
       </div>
     </div>
@@ -504,6 +586,10 @@ function continueTimeline(events: AppEvent[], session: SessionMeta): AppEvent[] 
   }, ...continued];
 }
 
+function isTranscriptSession(session: SessionMeta): session is TranscriptSessionMeta {
+  return session.source === "codex" || session.source === "claude-code";
+}
+
 function DesktopMacTitlebar({
   session,
   sessionName,
@@ -515,21 +601,24 @@ function DesktopMacTitlebar({
   splitCenter,
   onActiveTabChange,
   onTerminalOpen,
+  onOpenCollab,
   onCloseSplit,
 }: {
   session: SessionMeta | null;
   sessionName: string | null;
   splitSession: SessionMeta | null;
   splitSessionName: string | null;
-  activeTab: "session" | "files";
+  activeTab: "session" | "files" | "editor";
   terminalOpen: boolean;
   splitView: boolean;
   splitCenter: number | null;
-  onActiveTabChange: (tab: "session" | "files") => void;
+  onActiveTabChange: (tab: "session" | "files" | "editor") => void;
   onTerminalOpen: () => void;
+  onOpenCollab?: () => void;
   onCloseSplit: () => void;
 }) {
   const [copied, setCopied] = useState(false);
+  const collab = session?.source === "collab";
 
   return (
     <header
@@ -546,21 +635,21 @@ function DesktopMacTitlebar({
           >
             {sessionName || session.id}
           </span>
-          <button
-            className="desktop-copy-session-id"
-            title={copied ? "Session ID copied" : `Session ID: ${session.id} — click to copy`}
-            aria-label={copied ? "Copied session ID" : "Copy session ID"}
-            onClick={() => {
-              navigator.clipboard.writeText(session.id).then(() => {
-                setCopied(true);
-                window.setTimeout(() => setCopied(false), 1200);
-              }).catch(() => {});
-            }}
-          >
-            {copied ? "✓" : "⧉"}
-          </button>
+          {!collab && <button
+              className="desktop-copy-session-id"
+              title={copied ? "Session ID copied" : `Session ID: ${session.id} — click to copy`}
+              aria-label={copied ? "Copied session ID" : "Copy session ID"}
+              onClick={() => {
+                navigator.clipboard.writeText(session.id).then(() => {
+                  setCopied(true);
+                  window.setTimeout(() => setCopied(false), 1200);
+                }).catch(() => {});
+              }}
+            >
+              {copied ? "✓" : "⧉"}
+            </button>}
           <span className="meta-tag">{session.cwd.replace(/^\/(?:Users|home)\/[^/]+/, "~")}</span>
-          <span className="meta-tag">{formatTime(session.timestamp)}</span>
+          {!collab && <span className="meta-tag">{formatTime(session.timestamp)}</span>}
         </div>
       )}
       {session && splitSession && (
@@ -576,7 +665,10 @@ function DesktopMacTitlebar({
       )}
       {session && (
         <div className="desktop-titlebar-tabs" data-window-no-drag>
-          <button
+          {collab ? <>
+            <button className="desktop-collab-tab active" onClick={onOpenCollab}>Collab</button>
+            <button onClick={() => window.dispatchEvent(new CustomEvent("toggle-collab-coordination"))}>Coordination</button>
+          </> : <><button
             className={activeTab === "session" ? "active" : ""}
             onClick={() => onActiveTabChange("session")}
           >
@@ -590,6 +682,23 @@ function DesktopMacTitlebar({
           >
             Files
           </button>
+          <button
+            className={activeTab === "editor" ? "active" : ""}
+            onClick={() => onActiveTabChange("editor")}
+            disabled={splitView || Boolean(session.synced)}
+            title={session.synced ? "Editor is unavailable for synced transcripts" : splitView ? "Editor is unavailable while sessions are split" : undefined}
+          >
+            Editor
+          </button>
+          <button
+            className="desktop-collab-tab"
+            onClick={onOpenCollab}
+            disabled={!onOpenCollab}
+            title="Choose a repository and open collaboration mode"
+          >
+            Collab
+          </button>
+          </>}
         </div>
       )}
     </header>
@@ -597,9 +706,10 @@ function DesktopMacTitlebar({
 }
 
 function TitlebarSession({ session, name, onClose }: { session: SessionMeta; name: string | null; onClose?: () => void }) {
+  const source = session.source === "collab" ? "collab" : session.source === "codex" ? "codex" : "claude";
   return (
     <span className="desktop-titlebar-split-session" title={session.id}>
-      <i className={session.source === "codex" ? "source-codex" : "source-claude"}>{session.source === "codex" ? "codex" : "claude"}</i>
+      <i className={`source-${source}`}>{source}</i>
       <b>{name || session.id}</b>
       {onClose && <button type="button" onClick={onClose} title="Close split session" aria-label="Close split session">x</button>}
     </span>

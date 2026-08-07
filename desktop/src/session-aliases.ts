@@ -48,7 +48,7 @@ export function saveSessionAlias(
 }
 
 export function sessionAlias(aliases: SessionAliases, session: SessionMeta): string | null {
-  return aliases[sessionIdentity(session)] || null;
+  return aliases[sessionIdentity(session)] || session.customName || null;
 }
 
 function normalizeSessionAlias(value: unknown): string {

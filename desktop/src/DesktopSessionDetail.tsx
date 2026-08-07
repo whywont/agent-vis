@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import type { AppEvent, FileChangeEvent, SessionMeta } from "@/lib/types";
+import type { AppEvent, FileChangeEvent, TranscriptSessionMeta } from "@/lib/types";
 import { timelineEventIdentity } from "@/lib/timeline-events";
 import type { SessionMatchTarget } from "./App";
 import { formatTime } from "@/utils/format";
@@ -14,6 +14,9 @@ import DesktopLiveStream, { type LiveStreamEntry } from "./DesktopLiveStream";
 import { getGitBranch, readSession, stopTerminal } from "./desktop-api";
 import { startWindowDrag } from "./window-drag";
 
+// CodeMirror is only needed for the editor tab, keeping normal transcript loads light.
+const DesktopEditor = lazy(() => import("./DesktopEditor"));
+
 export default function DesktopSessionDetail({
   session,
   sessionName,
@@ -22,6 +25,7 @@ export default function DesktopSessionDetail({
   splitView = false,
   onActiveTabChange,
   onTerminalOpen,
+  onOpenCollab,
   onTerminalClose,
   matchTarget,
   liveSessionKey,
@@ -30,13 +34,14 @@ export default function DesktopSessionDetail({
   onLiveActivity,
   onContinuationDraftSent,
 }: {
-  session: SessionMeta;
+  session: TranscriptSessionMeta;
   sessionName: string | null;
-  activeTab: "session" | "files";
+  activeTab: "session" | "files" | "editor";
   terminalOpen: boolean;
   splitView?: boolean;
-  onActiveTabChange: (tab: "session" | "files") => void;
+  onActiveTabChange: (tab: "session" | "files" | "editor") => void;
   onTerminalOpen: () => void;
+  onOpenCollab?: () => void;
   onTerminalClose: () => void;
   matchTarget: SessionMatchTarget | null;
   liveSessionKey?: string;
@@ -320,7 +325,7 @@ export default function DesktopSessionDetail({
   // timeline metadata which briefly belongs to the prior selection on switch.
   useEffect(() => {
     function openTerminal(event: Event) {
-      const requested = (event as CustomEvent<SessionMeta>).detail;
+      const requested = (event as CustomEvent<TranscriptSessionMeta>).detail;
       if (!requested || requested.synced || terminalSessionKey(requested, requested.id) !== currentSessionKey) return;
       const terminal = firstTerminalSession(requested, requested.id, requested.cwd);
       setTerminals((current) => {
@@ -459,6 +464,22 @@ export default function DesktopSessionDetail({
           >
             Files
           </button>
+          <button
+            className={`session-tab-btn${activeTab === "editor" ? " active" : ""}`}
+            onClick={() => onActiveTabChange("editor")}
+            disabled={splitView || transcriptOnly}
+            title={transcriptOnly ? "Editor is unavailable for synced transcripts" : splitView ? "Editor is unavailable while sessions are split" : undefined}
+          >
+            Editor
+          </button>
+          <button
+            className="session-tab-btn desktop-collab-tab"
+            onClick={onOpenCollab}
+            disabled={!onOpenCollab}
+            title="Choose a repository and open collaboration mode"
+          >
+            Collab
+          </button>
         </div>
       </div>
       {loading ? (
@@ -467,6 +488,10 @@ export default function DesktopSessionDetail({
         <div className="desktop-detail-state error">{error}</div>
       ) : activeTab === "files" && !splitView && !transcriptOnly ? (
         <DesktopFilesCanvas events={events} sessionCwd={cwd} />
+      ) : activeTab === "editor" && !splitView && !transcriptOnly ? (
+        <Suspense fallback={<div className="desktop-detail-state">Loading editor...</div>}>
+          <DesktopEditor workspaceRoot={cwd} />
+        </Suspense>
       ) : (
         <div className="detail-body">
           {!splitView && !transcriptOnly && filePanelOpen ? (
@@ -669,7 +694,7 @@ export default function DesktopSessionDetail({
   }
 }
 
-function sessionStartEvent(session: SessionMeta): AppEvent {
+function sessionStartEvent(session: TranscriptSessionMeta): AppEvent {
   return {
     kind: "session_start",
     ts: session.timestamp,
@@ -715,11 +740,11 @@ interface TerminalSession {
   prefillResume: boolean;
 }
 
-function terminalSessionKey(session: SessionMeta, id: string): string {
+function terminalSessionKey(session: TranscriptSessionMeta, id: string): string {
   return `${session.source}:${id}`;
 }
 
-function firstTerminalSession(session: SessionMeta, id: string, cwd: string): TerminalSession {
+function firstTerminalSession(session: TranscriptSessionMeta, id: string, cwd: string): TerminalSession {
   const sessionKey = terminalSessionKey(session, id);
   // Live sessions are driven by native structured harness adapters. The dock
   // remains an independent shell instead of opening another resumed client.

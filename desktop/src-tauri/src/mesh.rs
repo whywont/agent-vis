@@ -1092,7 +1092,7 @@ fn sync_mesh_peer(
         stream
             .set_write_timeout(Some(TRANSFER_TIMEOUT))
             .map_err(|error| error.to_string())?;
-        let sent = match send_snapshots(&mut stream, &mut transport, &settings) {
+        let sent = match send_snapshots(&mut stream, &mut transport, settings) {
             Ok(sent) => sent,
             Err(detail) => {
                 report_sync_error(&mut stream, &mut transport, &detail);
@@ -1102,7 +1102,7 @@ fn sync_mesh_peer(
         let received = match receive_snapshots(
             &mut stream,
             &mut transport,
-            &synced_sessions_root(&app)?,
+            &synced_sessions_root(app)?,
             &device.id,
         ) {
             Ok(received) => received,

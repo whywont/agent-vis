@@ -1,0 +1,321 @@
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { SessionMeta } from "@/lib/types";
+import { collabDispatchPrompt } from "./collab-state";
+import {
+  acquireCollabLease,
+  addCollabWorker,
+  claimCollabTask,
+  connectClaudeThread,
+  connectCodexThread,
+  createCollabTask,
+  getCollabRoomState,
+  integrateCollabChange,
+  postCollabAgentMessage,
+  postCollabMessage,
+  releaseCollabLease,
+  renewCollabLease,
+  reviewCollabChange,
+  sendClaudeTurn,
+  sendCodexTurn,
+  startClaudeSession,
+  startCodexSession,
+  submitCollabChange,
+  updateCollabWorkerRuntime,
+  type CollabRoomState,
+  type CollabWorker,
+} from "./desktop-api";
+
+interface CodexRuntimeEvent {
+  sessionKey: string;
+  message: { method?: string; params?: Record<string, unknown> };
+}
+
+interface ClaudeRuntimeEvent {
+  sessionKey: string;
+  message: Record<string, unknown>;
+}
+
+type AgentStreamEntry = {
+  id: string;
+  kind: "assistant" | "reasoning" | "tool" | "system";
+  text: string;
+};
+
+export default function DesktopCollabRoom({
+  session,
+  selectedWorkerId,
+  onSelectedWorkerChange,
+}: {
+  session: SessionMeta;
+  selectedWorkerId: string | null;
+  onSelectedWorkerChange: (workerId: string | null) => void;
+}) {
+  const roomRef = session.file;
+  const [state, setState] = useState<CollabRoomState | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [groupDraft, setGroupDraft] = useState("");
+  const [coordinationOpen, setCoordinationOpen] = useState(false);
+  const [workerName, setWorkerName] = useState("");
+  const [provider, setProvider] = useState("codex");
+  const [taskTitle, setTaskTitle] = useState("");
+  const [taskScope, setTaskScope] = useState("");
+  const [leaseWorker, setLeaseWorker] = useState("");
+  const [leaseResource, setLeaseResource] = useState("");
+  const [submissionTitle, setSubmissionTitle] = useState("");
+  const [submissionSummary, setSubmissionSummary] = useState("");
+  const [streams, setStreams] = useState<Record<string, AgentStreamEntry[]>>({});
+  const stateRef = useRef<CollabRoomState | null>(null);
+  const responseBuffers = useRef(new Map<string, string>());
+  const reconnectAttempts = useRef(new Set<string>());
+
+  const updateState = useCallback((next: CollabRoomState) => {
+    stateRef.current = next;
+    setState(next);
+    window.dispatchEvent(new CustomEvent("collab-room-state-changed", { detail: next.roomId }));
+  }, []);
+
+  const refresh = useCallback(async () => {
+    try {
+      updateState(await getCollabRoomState(roomRef));
+      setError("");
+    } catch (nextError) {
+      setError(errorText(nextError));
+    } finally {
+      setLoading(false);
+    }
+  }, [roomRef, updateState]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => void refresh(), 0);
+    return () => window.clearTimeout(timer);
+  }, [refresh]);
+  useEffect(() => { stateRef.current = state; }, [state]);
+  useEffect(() => {
+    const toggleCoordination = () => setCoordinationOpen((open) => !open);
+    window.addEventListener("toggle-collab-coordination", toggleCoordination);
+    return () => window.removeEventListener("toggle-collab-coordination", toggleCoordination);
+  }, []);
+  useEffect(() => {
+    if (!coordinationOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setCoordinationOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [coordinationOpen]);
+
+  const appendStream = useCallback((workerId: string, entry: AgentStreamEntry, append = false) => {
+    setStreams((current) => {
+      const entries = current[workerId] || [];
+      const last = entries.at(-1);
+      const next = append && last?.id === entry.id
+        ? [...entries.slice(0, -1), { ...last, text: `${last.text}${entry.text}` }]
+        : [...entries, entry];
+      return { ...current, [workerId]: next.slice(-150) };
+    });
+  }, []);
+
+  const startWorker = useCallback(async (worker: CollabWorker) => {
+    if (!supportsRuntime(worker)) return;
+    reconnectAttempts.current.add(worker.id);
+    updateState(await updateCollabWorkerRuntime(roomRef, worker.id, worker.sessionKey, worker.threadId, "starting"));
+    try {
+      let sessionKey = worker.sessionKey;
+      let threadId = worker.threadId;
+      if (sessionKey && threadId) {
+        if (worker.provider === "codex") await connectCodexThread(sessionKey, threadId, worker.worktreePath);
+        else await connectClaudeThread(sessionKey, threadId, worker.worktreePath);
+      } else {
+        sessionKey = `collab:${session.id}:${worker.id}`;
+        if (worker.provider === "codex") threadId = (await startCodexSession(sessionKey, worker.worktreePath, "")).id;
+        else {
+          const requestedId = crypto.randomUUID();
+          threadId = await startClaudeSession(sessionKey, requestedId, worker.worktreePath, "default");
+        }
+      }
+      updateState(await updateCollabWorkerRuntime(roomRef, worker.id, sessionKey, threadId, "running"));
+    } catch (nextError) {
+      const detail = errorText(nextError);
+      updateState(await updateCollabWorkerRuntime(roomRef, worker.id, worker.sessionKey, worker.threadId, "error", detail));
+      setError(detail);
+    }
+  }, [roomRef, session.id, updateState]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const unlisteners: UnlistenFn[] = [];
+    const workerForSession = (sessionKey: string) => stateRef.current?.workers.find((worker) => worker.sessionKey === sessionKey);
+    const recordReply = async (sessionKey: string, text: string) => {
+      const worker = workerForSession(sessionKey);
+      const reply = text.trim();
+      if (!worker || !reply) return;
+      try {
+        const next = await postCollabAgentMessage(roomRef, worker, reply, false);
+        if (!cancelled) updateState(next);
+      } catch (nextError) {
+        if (!cancelled) setError(errorText(nextError));
+      }
+    };
+    void listen<CodexRuntimeEvent>("codex-app-server-event", (event) => {
+      const { sessionKey, message } = event.payload;
+      const worker = workerForSession(sessionKey);
+      if (!worker) return;
+      const params = message.params || {};
+      const delta = typeof params.delta === "string" ? params.delta : "";
+      const itemId = typeof params.itemId === "string" ? params.itemId : crypto.randomUUID();
+      if (message.method?.includes("agentMessage") && delta) {
+        responseBuffers.current.set(sessionKey, `${responseBuffers.current.get(sessionKey) || ""}${delta}`);
+        appendStream(worker.id, { id: `assistant:${itemId}`, kind: "assistant", text: delta }, true);
+      } else if (message.method?.includes("reasoning") && delta) {
+        appendStream(worker.id, { id: `reasoning:${itemId}`, kind: "reasoning", text: delta }, true);
+      } else if (message.method?.includes("commandExecution") && delta) {
+        appendStream(worker.id, { id: `tool:${itemId}`, kind: "tool", text: delta }, true);
+      }
+      if (message.method === "item/completed") {
+        const text = codexAgentText(params.item);
+        if (text) responseBuffers.current.set(sessionKey, text);
+        const tool = codexToolText(params.item);
+        if (tool) appendStream(worker.id, { id: `tool:${itemId}:complete`, kind: "tool", text: tool });
+      }
+      if (message.method === "turn/started") appendStream(worker.id, { id: crypto.randomUUID(), kind: "system", text: "Working" });
+      if (message.method === "turn/completed") {
+        const reply = responseBuffers.current.get(sessionKey) || "";
+        responseBuffers.current.delete(sessionKey);
+        appendStream(worker.id, { id: crypto.randomUUID(), kind: "system", text: "Turn complete" });
+        void recordReply(sessionKey, reply);
+      }
+      if (message.method === "agent-vis/disconnected") void markWorkerDisconnected(roomRef, worker, updateState, setError);
+    }).then((unlisten) => cancelled ? unlisten() : unlisteners.push(unlisten));
+    void listen<ClaudeRuntimeEvent>("claude-stream-event", (event) => {
+      const { sessionKey, message } = event.payload;
+      const worker = workerForSession(sessionKey);
+      if (!worker) return;
+      if (message.type === "assistant") {
+        const text = claudeAssistantText(message);
+        if (text) {
+          responseBuffers.current.set(sessionKey, text);
+          appendStream(worker.id, { id: `assistant:${crypto.randomUUID()}`, kind: "assistant", text });
+        }
+      }
+      if (message.type === "system" && message.status === "requesting") appendStream(worker.id, { id: crypto.randomUUID(), kind: "system", text: "Working" });
+      if (message.type === "result") {
+        const reply = responseBuffers.current.get(sessionKey) || (typeof message.result === "string" ? message.result : "");
+        responseBuffers.current.delete(sessionKey);
+        appendStream(worker.id, { id: crypto.randomUUID(), kind: "system", text: "Turn complete" });
+        void recordReply(sessionKey, reply);
+      }
+      if (message.type === "agent-vis/disconnected") void markWorkerDisconnected(roomRef, worker, updateState, setError);
+    }).then((unlisten) => cancelled ? unlisten() : unlisteners.push(unlisten));
+    return () => { cancelled = true; unlisteners.forEach((unlisten) => unlisten()); };
+  }, [appendStream, roomRef, updateState]);
+
+  useEffect(() => {
+    if (!state) return;
+    const reconnectable = state.workers.filter((worker) =>
+      worker.runtimeStatus === "running" && supportsRuntime(worker) && !reconnectAttempts.current.has(worker.id));
+    if (!reconnectable.length) return;
+    const timer = window.setTimeout(() => {
+      for (const worker of reconnectable) void startWorker(worker);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [startWorker, state]);
+
+  const selectedWorker = state?.workers.find((worker) => worker.id === selectedWorkerId) || null;
+  const groupMessages = state?.messages.filter((item) => !item.recipientId) || [];
+  const workerNames = useMemo(() => new Map(state?.workers.map((worker) => [worker.id, worker.name]) || []), [state?.workers]);
+
+  if (loading) return <div className="desktop-collab-room desktop-collab-loading">Opening room...</div>;
+  if (!state) return <div className="desktop-collab-room desktop-collab-loading error">{error || "Unable to open room."}</div>;
+  const selectedLeaseWorker = leaseWorker || state.workers[0]?.id || "";
+
+  async function mutate(operation: () => Promise<CollabRoomState>) {
+    setBusy(true);
+    setError("");
+    try { updateState(await operation()); return true; }
+    catch (nextError) { setError(errorText(nextError)); return false; }
+    finally { setBusy(false); }
+  }
+
+  async function sendToWorker(worker: CollabWorker, body: string) {
+    if (!worker.sessionKey || !worker.threadId) throw new Error(`${worker.name} is not running.`);
+    const roomState = stateRef.current;
+    if (!roomState) throw new Error("Collaboration state is unavailable.");
+    const prompt = collabDispatchPrompt(roomState, worker, body);
+    if (worker.provider === "codex") await sendCodexTurn(worker.sessionKey, worker.threadId, null, prompt, []);
+    else await sendClaudeTurn(worker.sessionKey, prompt, []);
+  }
+
+  async function sendGroup(event: FormEvent) {
+    event.preventDefault();
+    const body = groupDraft.trim();
+    if (!body) return;
+    setBusy(true);
+    setError("");
+    try {
+      const next = await postCollabMessage(roomRef, body);
+      updateState(next);
+      setGroupDraft("");
+      const running = next.workers.filter((worker) => worker.runtimeStatus === "running" && supportsRuntime(worker));
+      const results = await Promise.allSettled(running.map((worker) => sendToWorker(worker, body)));
+      const failures = results.filter((result) => result.status === "rejected") as PromiseRejectedResult[];
+      if (failures.length) setError(failures.map((failure) => errorText(failure.reason)).join("\n"));
+    } catch (nextError) { setError(errorText(nextError)); }
+    finally { setBusy(false); }
+  }
+
+  async function addWorker(event: FormEvent) {
+    event.preventDefault();
+    const known = new Set(stateRef.current?.workers.map((worker) => worker.id) || []);
+    if (!await mutate(() => addCollabWorker(roomRef, workerName, provider, provider === "human" ? "collaborator" : "agent worker"))) return;
+    setWorkerName("");
+    const worker = stateRef.current?.workers.find((candidate) => !known.has(candidate.id));
+    if (worker && supportsRuntime(worker)) await startWorker(worker);
+  }
+
+  return <section className={`desktop-collab-room desktop-collab-chat-layout${selectedWorker ? " direct-open" : ""}`}>
+    <button className="desktop-collab-coordination-fallback" type="button" onClick={() => setCoordinationOpen((open) => !open)}>Coordination</button>
+    {error && <div className="desktop-collab-error" role="alert">{error}</div>}
+    <div className="desktop-collab-conversations">
+      <ConversationPane online={state.workers.filter((worker) => worker.runtimeStatus === "running").length} messages={groupMessages} draft={groupDraft} onDraft={setGroupDraft} onSubmit={sendGroup} busy={busy} placeholder="Message the room..." />
+      <aside className="desktop-collab-agent-rail">
+        {selectedWorker ? <DirectPane worker={selectedWorker} stream={streams[selectedWorker.id] || []} onClose={() => onSelectedWorkerChange(null)} onStart={() => void startWorker(selectedWorker)} busy={busy} /> : <AgentRoster workers={state.workers} workerName={workerName} setWorkerName={setWorkerName} provider={provider} setProvider={setProvider} onAddWorker={addWorker} onSelect={onSelectedWorkerChange} onStart={(worker) => void startWorker(worker)} busy={busy} />}
+      </aside>
+    </div>
+    {coordinationOpen && <div className="desktop-collab-coordination-layer" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setCoordinationOpen(false); }}><CoordinationDrawer onClose={() => setCoordinationOpen(false)} state={state} busy={busy} workerNames={workerNames} taskTitle={taskTitle} setTaskTitle={setTaskTitle} taskScope={taskScope} setTaskScope={setTaskScope} leaseWorker={selectedLeaseWorker} setLeaseWorker={setLeaseWorker} leaseResource={leaseResource} setLeaseResource={setLeaseResource} submissionTitle={submissionTitle} setSubmissionTitle={setSubmissionTitle} submissionSummary={submissionSummary} setSubmissionSummary={setSubmissionSummary} onCreateTask={(event) => { event.preventDefault(); void mutate(() => createCollabTask(roomRef, taskTitle, taskScope)).then((ok) => { if (ok) { setTaskTitle(""); setTaskScope(""); } }); }} onClaimTask={(taskId, workerId) => void mutate(() => claimCollabTask(roomRef, taskId, workerId))} onAcquireLease={(event) => { event.preventDefault(); void mutate(() => acquireCollabLease(roomRef, selectedLeaseWorker, null, leaseResource, "exclusive", 900)).then((ok) => { if (ok) setLeaseResource(""); }); }} onRenewLease={(lease) => void mutate(() => renewCollabLease(roomRef, lease))} onReleaseLease={(lease) => void mutate(() => releaseCollabLease(roomRef, lease))} onSubmitChange={(event) => { event.preventDefault(); if (!selectedLeaseWorker) return; void mutate(() => submitCollabChange(roomRef, selectedLeaseWorker, submissionTitle, submissionSummary, state.leases)).then((ok) => { if (ok) { setSubmissionTitle(""); setSubmissionSummary(""); } }); }} onReview={(id, decision) => void mutate(() => reviewCollabChange(roomRef, id, decision, decision === "approved" ? "Approved by host" : "Changes requested"))} onIntegrate={(id) => void mutate(() => integrateCollabChange(roomRef, id))} /></div>}
+  </section>;
+}
+
+function ConversationPane({ online, messages, draft, onDraft, onSubmit, busy, placeholder }: { online: number; messages: CollabRoomState["messages"]; draft: string; onDraft: (value: string) => void; onSubmit: (event: FormEvent) => void; busy: boolean; placeholder: string }) {
+  return <main className="desktop-collab-conversation group"><header><strong># group chat</strong><span>{online} online</span></header><div className="desktop-collab-thread">{messages.map((message) => <article key={message.id} className={message.authorId === "local-host" ? "host" : "agent"}><header><b>{message.authorName}</b><time>{formatTimestamp(message.createdAt)}</time></header><p>{message.body}</p></article>)}{!messages.length && <p className="empty">Start the group conversation.</p>}</div><form onSubmit={onSubmit}><input value={draft} onChange={(event) => onDraft(event.target.value)} placeholder={placeholder} required /><button disabled={busy}>Send</button></form></main>;
+}
+
+function DirectPane({ worker, stream, onClose, onStart, busy }: { worker: CollabWorker; stream: AgentStreamEntry[]; onClose: () => void; onStart: () => void; busy: boolean }) {
+  return <aside className="desktop-collab-direct"><header><div><i className={`runtime ${worker.runtimeStatus}`} /><strong>{worker.name}</strong><span>{worker.provider} / {runtimeLabel(worker)}</span></div><button type="button" onClick={onClose}>x</button></header>{worker.runtimeStatus !== "running" && supportsRuntime(worker) && <button className="start-agent" type="button" onClick={onStart} disabled={busy || worker.runtimeStatus === "starting"}>Start agent</button>}<section className="desktop-collab-agent-stream"><header>Live stream</header>{stream.map((entry) => <article key={entry.id} className={`kind-${entry.kind}`}><b>{entry.kind}</b><pre>{entry.text}</pre></article>)}{!stream.length && <p className="empty">Reasoning and tool activity appear here during a turn.</p>}</section></aside>;
+}
+
+function AgentRoster({ workers, workerName, setWorkerName, provider, setProvider, onAddWorker, onSelect, onStart, busy }: { workers: CollabWorker[]; workerName: string; setWorkerName: (value: string) => void; provider: string; setProvider: (value: string) => void; onAddWorker: (event: FormEvent) => void; onSelect: (workerId: string) => void; onStart: (worker: CollabWorker) => void; busy: boolean }) {
+  return <section className="desktop-collab-roster desktop-collab-restored-roster"><header><strong>People & agents</strong><span>{workers.length} total</span></header><div className="desktop-collab-worker-list">{workers.map((worker) => <article key={worker.id} role="button" tabIndex={0} onClick={() => onSelect(worker.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") onSelect(worker.id); }}><header><b>{worker.name}</b><i className={`runtime ${worker.runtimeStatus}`}>{runtimeLabel(worker)}</i></header><span>{worker.provider} / {worker.role}</span><code>{worker.branch}</code>{worker.runtimeError && <p>{worker.runtimeError}</p>}<footer><button type="button" onClick={(event) => { event.stopPropagation(); void navigator.clipboard.writeText(worker.worktreePath); }}>Copy path</button>{supportsRuntime(worker) && worker.runtimeStatus !== "running" && <button type="button" disabled={busy || worker.runtimeStatus === "starting"} onClick={(event) => { event.stopPropagation(); onStart(worker); }}>Start agent</button>}</footer></article>)}{!workers.length && <p className="desktop-collab-empty">Create an agent to add its isolated worktree.</p>}</div><form className="desktop-collab-form compact" onSubmit={onAddWorker}><label>Name<input value={workerName} onChange={(event) => setWorkerName(event.target.value)} placeholder="Frontend agent" required /></label><label>Provider<select value={provider} onChange={(event) => setProvider(event.target.value)}><option value="codex">Codex</option><option value="claude">Claude</option><option value="opencode">OpenCode</option><option value="openrouter">OpenRouter</option><option value="human">Human collaborator</option></select></label><button disabled={busy}>Create isolated worker</button></form></section>;
+}
+
+function CoordinationDrawer(props: CoordinationProps) {
+  const { state, busy } = props;
+  const reviews = state.changeSets.filter((change) => change.status === "review");
+  const approved = state.changeSets.filter((change) => change.status === "approved");
+  return <aside className="desktop-collab-coordination" role="dialog" aria-modal="true" aria-label="Coordination"><header className="desktop-collab-coordination-header"><div><strong>Coordination</strong><span>Claims, locks, review, and integration</span></div><button type="button" onClick={props.onClose} aria-label="Close coordination">x</button></header><div className="desktop-collab-coordination-body"><section><header>Claims</header><form onSubmit={props.onCreateTask}><input value={props.taskTitle} onChange={(event) => props.setTaskTitle(event.target.value)} placeholder="Task" required /><input value={props.taskScope} onChange={(event) => props.setTaskScope(event.target.value)} placeholder="Scope: desktop/src/**" required /><button disabled={busy}>Create</button></form>{state.tasks.map((task) => <article key={task.id}><b>{task.title}</b><code>{task.scope}</code><select value={task.claimedBy || ""} onChange={(event) => props.onClaimTask(task.id, event.target.value || null)}><option value="">Unclaimed</option>{state.workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}</select></article>)}</section><section><header>Leases</header><form onSubmit={props.onAcquireLease}><select value={props.leaseWorker} onChange={(event) => props.setLeaseWorker(event.target.value)} required><option value="">Worker</option>{state.workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}</select><input value={props.leaseResource} onChange={(event) => props.setLeaseResource(event.target.value)} placeholder="File or directory" required /><button disabled={busy}>Lock</button></form>{state.leases.map((lease) => <article key={lease.id}><code>{lease.resource}</code><span>{props.workerNames.get(lease.holderId)} / fence {lease.fencingToken}</span><button onClick={() => props.onRenewLease(lease)}>Renew</button><button onClick={() => props.onReleaseLease(lease)}>Release</button></article>)}</section><section><header>Review & integrate</header><form onSubmit={props.onSubmitChange}><select value={props.leaseWorker} onChange={(event) => props.setLeaseWorker(event.target.value)} required><option value="">Worker</option>{state.workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}</select><input value={props.submissionTitle} onChange={(event) => props.setSubmissionTitle(event.target.value)} placeholder="Change title" required /><input value={props.submissionSummary} onChange={(event) => props.setSubmissionSummary(event.target.value)} placeholder="Summary" /><button disabled={busy}>Submit</button></form>{reviews.map((change) => <article key={change.id}><b>{change.title}</b><span>{props.workerNames.get(change.workerId)}</span><button onClick={() => props.onReview(change.id, "approved")}>Approve</button><button onClick={() => props.onReview(change.id, "rejected")}>Reject</button></article>)}{approved.map((change, index) => <article key={change.id}><b>{change.title}</b><span>queue #{index + 1}</span><button disabled={index !== 0} onClick={() => props.onIntegrate(change.id)}>Integrate</button></article>)}</section></div></aside>;
+}
+
+type CoordinationProps = {
+  state: CollabRoomState; busy: boolean; workerNames: Map<string, string>; onClose: () => void; taskTitle: string; setTaskTitle: (value: string) => void; taskScope: string; setTaskScope: (value: string) => void; leaseWorker: string; setLeaseWorker: (value: string) => void; leaseResource: string; setLeaseResource: (value: string) => void; submissionTitle: string; setSubmissionTitle: (value: string) => void; submissionSummary: string; setSubmissionSummary: (value: string) => void; onCreateTask: (event: FormEvent) => void; onClaimTask: (taskId: string, workerId: string | null) => void; onAcquireLease: (event: FormEvent) => void; onRenewLease: (lease: CollabRoomState["leases"][number]) => void; onReleaseLease: (lease: CollabRoomState["leases"][number]) => void; onSubmitChange: (event: FormEvent) => void; onReview: (id: string, decision: "approved" | "rejected") => void; onIntegrate: (id: string) => void;
+};
+
+function supportsRuntime(worker: CollabWorker) { return worker.provider === "codex" || worker.provider === "claude"; }
+function runtimeLabel(worker: CollabWorker) { return supportsRuntime(worker) ? worker.runtimeStatus : worker.provider === "human" ? "person" : "adapter needed"; }
+function errorText(error: unknown) { return error instanceof Error ? error.message : String(error); }
+function formatTimestamp(value: string) { const date = new Date(value); return Number.isNaN(date.valueOf()) ? value : date.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); }
+function codexAgentText(item: unknown) { if (typeof item !== "object" || item === null) return ""; const record = item as Record<string, unknown>; return record.type === "agentMessage" && typeof record.text === "string" ? record.text.trim() : ""; }
+function codexToolText(item: unknown) { if (typeof item !== "object" || item === null) return ""; const record = item as Record<string, unknown>; return record.type === "commandExecution" && typeof record.command === "string" ? `$ ${record.command}` : record.type === "fileChange" ? "Changed files" : ""; }
+function claudeAssistantText(message: Record<string, unknown>) { const assistant = message.message; if (typeof assistant !== "object" || assistant === null || !("content" in assistant)) return ""; const content = (assistant as { content?: unknown }).content; return Array.isArray(content) ? content.flatMap((block) => typeof block === "object" && block !== null && "type" in block && block.type === "text" && "text" in block && typeof block.text === "string" ? [block.text] : []).join("\n").trim() : ""; }
+async function markWorkerDisconnected(roomRef: string, worker: CollabWorker, updateState: (state: CollabRoomState) => void, setError: (error: string) => void) { try { updateState(await updateCollabWorkerRuntime(roomRef, worker.id, worker.sessionKey, worker.threadId, "offline", "Agent disconnected.")); } catch (error) { setError(errorText(error)); } }

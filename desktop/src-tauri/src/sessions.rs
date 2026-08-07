@@ -109,7 +109,7 @@ pub(crate) struct SessionRecordBatch {
     total_bytes: u64,
 }
 
-fn system_time_iso(value: SystemTime) -> String {
+pub(crate) fn system_time_iso(value: SystemTime) -> String {
     let duration = value
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_default();
@@ -556,6 +556,7 @@ pub(crate) fn trusted_workspace_roots() -> Result<HashSet<PathBuf>, String> {
 pub(crate) fn list_sessions(app: tauri::AppHandle) -> Result<Vec<SessionMeta>, String> {
     let home = dirs::home_dir().ok_or("Could not resolve the home directory")?;
     let mut sessions = discover_sessions(&home);
+    sessions.retain(|session| !crate::collab::is_collab_worktree_cwd(&app, &session.cwd));
     collect_synced_sessions(&synced_sessions_root(&app)?, &mut sessions);
     sessions.sort_by(|left, right| right.modified.cmp(&left.modified));
 
