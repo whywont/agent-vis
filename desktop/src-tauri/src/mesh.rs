@@ -57,6 +57,12 @@ pub(crate) struct ConnectMeshPeerResponse {
     detail: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SyncAllMeshPeersResponse {
+    peers: Vec<MeshPeerStatus>,
+}
+
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ConnectMeshPeerRequest {
@@ -998,22 +1004,53 @@ pub(crate) fn connect_mesh_peer(
         .iter()
         .find(|device| device.id == request.device_id)
         .ok_or("The configured device was not found.")?;
-    let peer_key = decode_public_key(&device.public_key)?;
-    let address = device
-        .endpoint
-        .to_socket_addrs()
-        .map_err(|_| "Could not resolve the mesh peer address.")?
-        .next()
-        .ok_or("Could not resolve the mesh peer address.")?;
-    let mut stream = TcpStream::connect_timeout(&address, HANDSHAKE_TIMEOUT)
-        .map_err(|error| format!("Could not connect to {}: {error}", device.name))?;
-    stream
-        .set_read_timeout(Some(HANDSHAKE_TIMEOUT))
-        .map_err(|error| error.to_string())?;
-    stream
-        .set_write_timeout(Some(HANDSHAKE_TIMEOUT))
-        .map_err(|error| error.to_string())?;
+    Ok(sync_mesh_peer(&app, &state, &settings, device))
+}
+
+#[tauri::command]
+pub(crate) fn sync_all_mesh_peers(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, MeshState>,
+) -> Result<SyncAllMeshPeersResponse, String> {
+    let settings = read_validated_desktop_settings(&desktop_settings_path(&app)?)?;
+    let peers = settings
+        .paired_devices
+        .iter()
+        .filter(|device| valid_public_key(&device.public_key))
+        .map(|device| {
+            let response = sync_mesh_peer(&app, &state, &settings, device);
+            MeshPeerStatus {
+                id: device.id.clone(),
+                connected: response.connected,
+                detail: response.detail,
+            }
+        })
+        .collect();
+    Ok(SyncAllMeshPeersResponse { peers })
+}
+
+fn sync_mesh_peer(
+    app: &tauri::AppHandle,
+    state: &MeshState,
+    settings: &DesktopSettingsFile,
+    device: &crate::settings::PairedDevice,
+) -> ConnectMeshPeerResponse {
     let result = (|| {
+        let peer_key = decode_public_key(&device.public_key)?;
+        let address = device
+            .endpoint
+            .to_socket_addrs()
+            .map_err(|_| "Could not resolve the mesh peer address.")?
+            .next()
+            .ok_or("Could not resolve the mesh peer address.")?;
+        let mut stream = TcpStream::connect_timeout(&address, HANDSHAKE_TIMEOUT)
+            .map_err(|error| format!("Could not connect to {}: {error}", device.name))?;
+        stream
+            .set_read_timeout(Some(HANDSHAKE_TIMEOUT))
+            .map_err(|error| error.to_string())?;
+        stream
+            .set_write_timeout(Some(HANDSHAKE_TIMEOUT))
+            .map_err(|error| error.to_string())?;
         let private_key = state
             .identity
             .lock()
@@ -1055,7 +1092,7 @@ pub(crate) fn connect_mesh_peer(
         stream
             .set_write_timeout(Some(TRANSFER_TIMEOUT))
             .map_err(|error| error.to_string())?;
-        let sent = match send_snapshots(&mut stream, &mut transport, &settings) {
+        let sent = match send_snapshots(&mut stream, &mut transport, settings) {
             Ok(sent) => sent,
             Err(detail) => {
                 report_sync_error(&mut stream, &mut transport, &detail);
@@ -1065,7 +1102,7 @@ pub(crate) fn connect_mesh_peer(
         let received = match receive_snapshots(
             &mut stream,
             &mut transport,
-            &synced_sessions_root(&app)?,
+            &synced_sessions_root(app)?,
             &device.id,
         ) {
             Ok(received) => received,
@@ -1080,17 +1117,17 @@ pub(crate) fn connect_mesh_peer(
         Ok((sent, received)) => {
             let detail = format!("Synced {received} received and {sent} shared transcripts.");
             set_status(&state.statuses, &device.id, true, detail.clone());
-            Ok(ConnectMeshPeerResponse {
+            ConnectMeshPeerResponse {
                 connected: true,
                 detail,
-            })
+            }
         }
         Err(detail) => {
             set_status(&state.statuses, &device.id, false, detail.clone());
-            Ok(ConnectMeshPeerResponse {
+            ConnectMeshPeerResponse {
                 connected: false,
                 detail,
-            })
+            }
         }
     }
 }

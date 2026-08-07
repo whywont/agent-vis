@@ -10,6 +10,7 @@ import DesktopFilesCanvas from "./DesktopFilesCanvas";
 import DesktopTimeline from "./DesktopTimeline";
 import DesktopTerminal from "./DesktopTerminal";
 import DesktopLiveConversation from "./DesktopLiveConversation";
+import DesktopLiveStream, { type LiveStreamEntry } from "./DesktopLiveStream";
 import { getGitBranch, readSession, stopTerminal } from "./desktop-api";
 import { startWindowDrag } from "./window-drag";
 
@@ -24,6 +25,10 @@ export default function DesktopSessionDetail({
   onTerminalClose,
   matchTarget,
   liveSessionKey,
+  initialDraft,
+  initialEvents,
+  onLiveActivity,
+  onContinuationDraftSent,
 }: {
   session: SessionMeta;
   sessionName: string | null;
@@ -35,15 +40,21 @@ export default function DesktopSessionDetail({
   onTerminalClose: () => void;
   matchTarget: SessionMatchTarget | null;
   liveSessionKey?: string;
+  initialDraft?: string;
+  initialEvents?: AppEvent[];
+  onLiveActivity?: () => void;
+  onContinuationDraftSent?: () => void;
 }) {
   const isNewSession = session.file.startsWith("live:");
-  const [events, setEvents] = useState<AppEvent[]>(() => isNewSession ? [sessionStartEvent(session)] : []);
-  const [loading, setLoading] = useState(!isNewSession);
+  const [events, setEvents] = useState<AppEvent[]>(() => initialEvents || (isNewSession ? [sessionStartEvent(session)] : []));
+  const [loading, setLoading] = useState(!isNewSession && !initialEvents);
   const [error, setError] = useState("");
   const [loadedBatches, setLoadedBatches] = useState(0);
   const [branch, setBranch] = useState<string | null>(null);
   const [branchCopied, setBranchCopied] = useState(false);
   const [filePanelOpen, setFilePanelOpen] = useState(true);
+  const [filePanelView, setFilePanelView] = useState<"patches" | "stream">("patches");
+  const [liveStream, setLiveStream] = useState<{ scope: string; entries: LiveStreamEntry[] }>({ scope: "", entries: [] });
   // Match the resize floor so opening a terminal never takes more room than
   // the user can immediately reclaim.
   const [terminalHeight, setTerminalHeight] = useState(140);
@@ -61,6 +72,9 @@ export default function DesktopSessionDetail({
   const fileTreeRef = useRef<HTMLDivElement>(null);
   const resizeHandleRef = useRef<HTMLDivElement>(null);
   const jumpRequestId = useRef(0);
+  const pendingLiveStreamRef = useRef<LiveStreamEntry[]>([]);
+  const liveStreamFlushTimer = useRef<number | null>(null);
+  const liveStreamEpochRef = useRef(0);
   const files = session.files?.join(",") || session.file;
   const transcriptOnly = Boolean(session.synced);
 
@@ -71,7 +85,9 @@ export default function DesktopSessionDetail({
       .then((nextEvents) => {
         if (!cancelled) {
           setError("");
-          setEvents(nextEvents);
+          setEvents((current) => initialEvents?.length
+            ? mergeContinuationEvents(current, nextEvents)
+            : nextEvents);
         }
       })
       .catch((reason: unknown) => {
@@ -83,7 +99,22 @@ export default function DesktopSessionDetail({
     return () => {
       cancelled = true;
     };
-  }, [files, isNewSession, session.modified, session.timestamp, session.id, session.cwd, session.model, session.source]);
+  }, [files, initialEvents, isNewSession, session.modified, session.timestamp, session.id, session.cwd, session.model, session.source]);
+
+  const liveStreamScope = `${session.source}:${session.id}:${session.file}`;
+
+  useEffect(() => {
+    pendingLiveStreamRef.current = [];
+    liveStreamEpochRef.current += 1;
+    if (liveStreamFlushTimer.current !== null) {
+      window.clearTimeout(liveStreamFlushTimer.current);
+      liveStreamFlushTimer.current = null;
+    }
+  }, [liveStreamScope]);
+
+  useEffect(() => () => {
+    if (liveStreamFlushTimer.current !== null) window.clearTimeout(liveStreamFlushTimer.current);
+  }, []);
 
   useEffect(() => {
     const panel = fileTreeRef.current;
@@ -254,6 +285,27 @@ export default function DesktopSessionDetail({
   const handleLiveTimelineEvent = useCallback((event: AppEvent) => {
     setEvents((current) => [...current, event]);
   }, []);
+  const handleLiveStreamEvent = useCallback((event: LiveStreamEntry) => {
+    // App-server notifications can arrive token-by-token. Redraw the whole
+    // split view at a bounded rate so Stream cannot slow an active turn.
+    const epoch = liveStreamEpochRef.current;
+    pendingLiveStreamRef.current.push(event);
+    if (liveStreamFlushTimer.current !== null) return;
+    liveStreamFlushTimer.current = window.setTimeout(() => {
+      liveStreamFlushTimer.current = null;
+      // A queued bridge notification belongs to the selection that produced
+      // it. Never let it repopulate a newly selected session's Stream/card.
+      if (epoch !== liveStreamEpochRef.current) return;
+      const queued = pendingLiveStreamRef.current.splice(0);
+      if (queued.length) setLiveStream((current) => ({
+        scope: liveStreamScope,
+        entries: mergeLiveStreamEntries(current.scope === liveStreamScope ? current.entries : [], queued),
+      }));
+    }, 160);
+  }, [liveStreamScope]);
+  const handleLiveTurnCompleted = useCallback(() => {
+    window.dispatchEvent(new Event("live-session-turn-completed"));
+  }, []);
   const tokenUsage = useMemo(() => {
     const latest = [...events].reverse().find((event) => event.kind === "token_usage");
     return latest?.kind === "token_usage"
@@ -340,6 +392,14 @@ export default function DesktopSessionDetail({
     });
   }
 
+  function copyBranch() {
+    if (!branch) return;
+    navigator.clipboard.writeText(branch).then(() => {
+      setBranchCopied(true);
+      window.setTimeout(() => setBranchCopied(false), 1400);
+    }).catch(() => {});
+  }
+
   useEffect(() => {
     let cancelled = false;
     if (!cwd) return;
@@ -413,28 +473,42 @@ export default function DesktopSessionDetail({
             <>
               <div className="file-tree-panel" ref={fileTreeRef}>
                 <div className="file-tree-header">
-                  <span>changed files</span>
+                  <div className="desktop-file-panel-tabs" role="tablist" aria-label="Side panel view">
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={filePanelView === "patches"}
+                      className={filePanelView === "patches" ? "active" : ""}
+                      onClick={() => setFilePanelView("patches")}
+                    >
+                      patches
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={filePanelView === "stream"}
+                      className={filePanelView === "stream" ? "active" : ""}
+                      onClick={() => setFilePanelView("stream")}
+                    >
+                      stream
+                    </button>
+                  </div>
                   <button
                     className="desktop-panel-toggle desktop-file-panel-toggle"
                     onClick={() => setFilePanelOpen(false)}
-                    title="Hide changed files"
-                    aria-label="Hide changed files"
+                    title="Hide side panel"
+                    aria-label="Hide side panel"
                   >
                     &#8249;
                   </button>
                 </div>
-                {branch && (
+                {filePanelView === "patches" && branch && (
                   <button
                     type="button"
                     className="desktop-file-branch-row"
                     title={`Copy branch name: ${branch}`}
                     aria-label={`Copy branch name: ${branch}`}
-                    onClick={() => {
-                      navigator.clipboard.writeText(branch).then(() => {
-                        setBranchCopied(true);
-                        window.setTimeout(() => setBranchCopied(false), 1400);
-                      }).catch(() => {});
-                    }}
+                    onClick={copyBranch}
                   >
                     <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
                       <path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25Z" />
@@ -443,7 +517,18 @@ export default function DesktopSessionDetail({
                     {branchCopied && <small role="status">Branch copied</small>}
                   </button>
                 )}
-                <DesktopFileTree events={events} sessionCwd={cwd} onJumpToPatch={jumpToPatch} />
+                {filePanelView === "patches" ? (
+                  <DesktopFileTree events={events} sessionCwd={cwd} onJumpToPatch={jumpToPatch} />
+                ) : (
+                <DesktopLiveStream
+                    entries={liveStream.scope === liveStreamScope ? liveStream.entries : []}
+                    events={events}
+                    sessionCwd={cwd}
+                    branch={branch}
+                    branchCopied={branchCopied}
+                    onCopyBranch={copyBranch}
+                  />
+                )}
               </div>
               <div className="file-tree-resize-handle" ref={resizeHandleRef} />
             </>
@@ -451,10 +536,10 @@ export default function DesktopSessionDetail({
             <button
               className="desktop-panel-reopen desktop-files-reopen"
               onClick={() => setFilePanelOpen(true)}
-              title="Show changed files"
-              aria-label="Show changed files"
+              title="Show side panel"
+              aria-label="Show side panel"
             >
-              <span>files</span>
+              <span>panel</span>
               <b>&#8250;</b>
             </button>
           ) : null}
@@ -467,7 +552,7 @@ export default function DesktopSessionDetail({
               : matchTarget)}
             liveConversation={!transcriptOnly && (session.source === "codex" || session.source === "claude-code") ? (
               <DesktopLiveConversation
-                key={`${session.source}:${session.id}`}
+                key={liveStreamScope}
                 provider={session.source}
                 sessionKey={liveSessionKey || `${session.source}:${session.id}`}
                 threadId={session.id}
@@ -475,7 +560,12 @@ export default function DesktopSessionDetail({
                 onApprovalChange={handleApprovalChange}
                 onContextCompaction={handleContextCompaction}
                 onTimelineEvent={handleLiveTimelineEvent}
+                onStreamEvent={handleLiveStreamEvent}
+                onActivity={onLiveActivity}
                 tokenUsage={tokenUsage}
+                initialDraft={initialDraft}
+                onInitialDraftSent={onContinuationDraftSent}
+                onTurnCompleted={handleLiveTurnCompleted}
               />
             ) : undefined}
             onOpenTerminal={splitView || transcriptOnly ? undefined : onTerminalOpen}
@@ -588,6 +678,32 @@ function sessionStartEvent(session: SessionMeta): AppEvent {
     model: session.model,
     source: session.source,
   };
+}
+
+function mergeContinuationEvents(imported: AppEvent[], local: AppEvent[]): AppEvent[] {
+  const identities = new Set(imported
+    .filter((event) => event.kind !== "session_start")
+    .map(timelineEventIdentity));
+  const additions = local.filter((event) => event.kind !== "session_start" && !identities.has(timelineEventIdentity(event)));
+  return [...imported, ...additions].sort((left, right) => Date.parse(left.ts) - Date.parse(right.ts));
+}
+
+function mergeLiveStreamEntries(current: LiveStreamEntry[], incoming: LiveStreamEntry[]): LiveStreamEntry[] {
+  const next = [...current];
+  for (const event of incoming) {
+    const index = next.findIndex((entry) => entry.id === event.id);
+    if (index < 0) {
+      const previous = next.at(-1);
+      // Lifecycle frames are sometimes duplicated by the harness.
+      if (event.kind === "system" && previous?.kind === "system" && previous.text === event.text) continue;
+      next.push({ ...event, append: undefined });
+    } else {
+      next[index] = event.append
+        ? { ...next[index], text: `${next[index].text}${event.text}` }
+        : { ...next[index], ...event, append: undefined };
+    }
+  }
+  return next;
 }
 
 interface TerminalSession {

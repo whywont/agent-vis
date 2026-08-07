@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { cloneElement } from "react";
 import type { MouseEvent as ReactMouseEvent, ReactElement } from "react";
 import ColoredText from "@/components/ColoredText";
@@ -97,6 +97,11 @@ function DesktopTimelineForSession({
   const [chatPreferences, setChatPreferences] = useState(() => loadChatPreferences(sessionKey));
   const { visible: chatVisible, pinned: chatPinned } = chatPreferences;
   const timelineRef = useRef<HTMLDivElement>(null);
+  const timelineScrollSnapshot = useRef<{ top: number; eventKeys: string[]; headOffset: number | null }>({
+    top: 0,
+    eventKeys: [],
+    headOffset: null,
+  });
   const displayEvents = useMemo<TimelineEvent[]>(
     () => deduplicateTimelineEvents(
       events,
@@ -134,6 +139,7 @@ function DesktopTimelineForSession({
     matchTarget ? Number.POSITIVE_INFINITY : eventLimit,
     INITIAL_EVENT_LIMIT,
   );
+  const renderedEventKeys = page.rendered.map(timelineEventIdentity);
 
   useEffect(() => {
     if (!matchTarget) return;
@@ -144,6 +150,51 @@ function DesktopTimelineForSession({
     }, 80);
     return () => window.clearTimeout(timer);
   }, [matchTarget]);
+
+  useLayoutEffect(() => {
+    const panel = timelineRef.current?.closest<HTMLElement>(".timeline-panel");
+    if (!panel) return;
+    const previous = timelineScrollSnapshot.current;
+    const previousHead = previous.eventKeys[0]
+      ? timelineRef.current?.querySelector<HTMLElement>(eventSelector(previous.eventKeys[0]))
+      : null;
+    const previousHeadIndex = previous.eventKeys.length > 0
+      ? renderedEventKeys.indexOf(previous.eventKeys[0])
+      : -1;
+    const previousHeadOffset = previousHead ? contentOffset(panel, previousHead) : null;
+    const insertedAbove = previous.headOffset !== null && previousHeadOffset !== null
+      ? previousHeadOffset - previous.headOffset
+      : 0;
+    // Newest events are rendered at the top. If the user is reading older
+    // history, offset that insertion so the text under their eyes does not
+    // jump; at the top, deliberately keep the normal live-update behavior.
+    // The old head's displacement measures only content inserted before it,
+    // so an existing patch changing height cannot enter this correction.
+    if (previousHeadIndex > 0 && previous.top > 24 && insertedAbove > 0) {
+      panel.scrollTop += insertedAbove;
+    }
+    const currentHead = renderedEventKeys[0]
+      ? timelineRef.current?.querySelector<HTMLElement>(eventSelector(renderedEventKeys[0]))
+      : null;
+    timelineScrollSnapshot.current = {
+      top: panel.scrollTop,
+      eventKeys: renderedEventKeys,
+      headOffset: currentHead ? contentOffset(panel, currentHead) : null,
+    };
+  });
+
+  useEffect(() => {
+    const panel = timelineRef.current?.closest<HTMLElement>(".timeline-panel");
+    if (!panel) return;
+    const rememberPosition = () => {
+      timelineScrollSnapshot.current = {
+        ...timelineScrollSnapshot.current,
+        top: panel.scrollTop,
+      };
+    };
+    panel.addEventListener("scroll", rememberPosition, { passive: true });
+    return () => panel.removeEventListener("scroll", rememberPosition);
+  }, []);
 
   function updateChatPreferences(change: Partial<ChatPreferences>) {
     setChatPreferences((current) => {
@@ -383,6 +434,14 @@ async function copyImage(url: string) {
 
 function eventKey(event: TimelineEvent): string {
   return encodeURIComponent(timelineEventIdentity(event));
+}
+
+function eventSelector(identity: string): string {
+  return `[data-event-key="${encodeURIComponent(identity)}"]`;
+}
+
+function contentOffset(panel: HTMLElement, element: HTMLElement): number {
+  return element.getBoundingClientRect().top - panel.getBoundingClientRect().top + panel.scrollTop;
 }
 
 function eventSearchKey(event: TimelineEvent): string {

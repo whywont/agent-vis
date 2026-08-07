@@ -70,7 +70,9 @@ export default function Toolbar({
     const toolbar = toolbarRef.current;
     if (!toolbar) return;
     const observer = new ResizeObserver(([entry]) => {
-      setCompact(entry.contentRect.width < 940);
+      // The desktop side pane leaves less usable timeline width than the web
+      // layout. Collapse filters before their final control is clipped.
+      setCompact(entry.contentRect.width < 1_060);
     });
     observer.observe(toolbar);
     return () => observer.disconnect();

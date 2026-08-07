@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { AppEvent } from "@/lib/types";
-import { respondToCodexApproval } from "./desktop-api";
+import { getActiveCodexTurn, interruptCodexTurn, respondToCodexApproval } from "./desktop-api";
 import { getHarnessAdapter, type LiveProvider, type ModelOption } from "./harness-adapters";
+import type { LiveStreamEntry } from "./DesktopLiveStream";
 
 type ApprovalDecision = string | Record<string, unknown>;
 
@@ -44,10 +45,15 @@ export default function DesktopLiveConversation({
   onApprovalChange,
   onContextCompaction,
   onTimelineEvent,
+  onStreamEvent,
+  onActivity,
   tokenUsage,
   visible = true,
   pinned = false,
   onNeedsAttention,
+  initialDraft = "",
+  onInitialDraftSent,
+  onTurnCompleted,
 }: {
   provider: LiveProvider;
   sessionKey: string;
@@ -56,14 +62,19 @@ export default function DesktopLiveConversation({
   onApprovalChange?: (command: string | null) => void;
   onContextCompaction?: () => void;
   onTimelineEvent?: (event: AppEvent) => void;
+  onStreamEvent?: (event: LiveStreamEntry) => void;
+  onActivity?: () => void;
   tokenUsage?: { total: number; input: number; output: number };
   visible?: boolean;
   pinned?: boolean;
   onNeedsAttention?: () => void;
+  initialDraft?: string;
+  onInitialDraftSent?: () => void;
+  onTurnCompleted?: () => void;
 }) {
   const adapter = getHarnessAdapter(provider);
   const [state, setState] = useState<ConnectionState>("idle");
-  const [draft, setDraft] = useState("");
+  const [draft, setDraft] = useState(initialDraft);
   const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [approval, setApproval] = useState<Approval | null>(null);
@@ -75,7 +86,9 @@ export default function DesktopLiveConversation({
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [modelSelection, setModelSelection] = useState(0);
   const [modelOptions, setModelOptions] = useState<readonly ModelOption[]>([]);
+  const [interrupted, setInterrupted] = useState(false);
   const pendingSlashCommand = useRef<{ command: string; callId: string; output: string } | null>(null);
+  const connection = useRef<Promise<boolean> | null>(null);
   const slashInput = draft.startsWith("/") ? draft.slice(1).trimStart() : null;
   const slashQuery = slashInput?.split(/\s/, 1)[0].toLowerCase() ?? null;
   const matchingCommands = slashQuery === null ? [] : slashCommands.filter((command) => command.includes(slashQuery));
@@ -91,11 +104,27 @@ export default function DesktopLiveConversation({
   }, [activeTurnId, draft]);
 
   useEffect(() => {
+    // A continuation opens with a reviewable handoff draft. Attach now so the
+    // status dot reflects the real harness state before the user sends it.
+    if (initialDraft && state === "idle") void connect();
+  }, [initialDraft, state]);
+
+  useEffect(() => {
+    if (provider !== "codex") return;
+    let cancelled = false;
+    void getActiveCodexTurn(sessionKey, threadId, cwd).then(({ turnId }) => {
+      if (!cancelled && turnId) setActiveTurnId((current) => current || turnId);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [cwd, provider, sessionKey, threadId]);
+
+  useEffect(() => {
     let cancelled = false;
     let unlisten: UnlistenFn | undefined;
     if (provider === "claude-code") {
       void listen<ClaudeStreamEvent>("claude-stream-event", (event) => {
         if (event.payload.sessionKey !== sessionKey) return;
+        onActivity?.();
         const message = event.payload.message;
         if (message.type === "agent-vis/disconnected") {
           setState("error");
@@ -105,6 +134,7 @@ export default function DesktopLiveConversation({
         }
         if (message.type === "system" && message.status === "requesting") {
           setActiveTurnId("claude-turn");
+          onStreamEvent?.(streamEntry("system", "Claude is working."));
           return;
         }
         if (message.type === "system" && message.subtype === "init") {
@@ -140,6 +170,10 @@ export default function DesktopLiveConversation({
             });
           }
         }
+        if (message.type === "assistant") {
+          const output = assistantText(message);
+          if (output) onStreamEvent?.(streamEntry("assistant", output));
+        }
         if (message.type === "result") {
           const pending = pendingSlashCommand.current;
           const result = typeof message.result === "string" ? message.result.trim() : "";
@@ -153,12 +187,14 @@ export default function DesktopLiveConversation({
           }
           pendingSlashCommand.current = null;
           setActiveTurnId(null);
+          onStreamEvent?.(streamEntry("system", message.subtype === "success" ? "Claude finished." : "Claude stopped."));
           if (message.subtype !== "success") {
             setState("error");
             setError(typeof message.result === "string" ? message.result : "Claude could not complete this turn.");
           } else {
             setState("ready");
           }
+          onTurnCompleted?.();
         }
       }).then((stop) => {
         if (cancelled) stop();
@@ -171,6 +207,7 @@ export default function DesktopLiveConversation({
     }
     void listen<AppServerEvent>("codex-app-server-event", (event) => {
       if (event.payload.sessionKey !== sessionKey) return;
+      onActivity?.();
       const { message } = event.payload;
       const params = message.params || {};
       if (message.method === "agent-vis/disconnected") {
@@ -181,8 +218,26 @@ export default function DesktopLiveConversation({
       if (message.method === "turn/started") {
         const turn = params.turn as { id?: string } | undefined;
         setActiveTurnId(turn?.id || null);
+        setInterrupted(false);
+        onStreamEvent?.(streamEntry("system", "Codex is working.", `codex:turn:${turn?.id || "current"}:started`));
       }
-      if (message.method === "turn/completed") setActiveTurnId(null);
+      if (message.method === "turn/completed") {
+        setActiveTurnId(null);
+        const turn = params.turn as { id?: string; status?: string; error?: { message?: string } | string } | undefined;
+        const error = typeof turn?.error === "string"
+          ? turn.error
+          : turn?.error?.message;
+        if (turn?.status === "failed" || error) {
+          setState("error");
+          setError(error || "Codex could not complete this turn.");
+        }
+        onStreamEvent?.(streamEntry(
+          "system",
+          turn?.status === "completed" ? "Codex finished." : "Codex stopped.",
+          `codex:turn:${turn?.id || "current"}:completed`,
+        ));
+        onTurnCompleted?.();
+      }
       if (message.method === "thread/status/changed") {
         const status = params.status as { type?: string } | undefined;
         if (status?.type === "idle") setActiveTurnId(null);
@@ -190,6 +245,8 @@ export default function DesktopLiveConversation({
       if (message.method === "item/started" && isCodexCompaction(params.item)) {
         onContextCompaction?.();
       }
+      const streamEvent = codexStreamEvent(message.method, params);
+      if (streamEvent) onStreamEvent?.(streamEvent);
       if (message.method === "serverRequest/resolved") {
         setApproval(null);
         onApprovalChange?.(null);
@@ -225,22 +282,28 @@ export default function DesktopLiveConversation({
       cancelled = true;
       unlisten?.();
     };
-  }, [onApprovalChange, onContextCompaction, onTimelineEvent, provider, sessionKey]);
+  }, [onActivity, onApprovalChange, onContextCompaction, onStreamEvent, onTimelineEvent, onTurnCompleted, provider, sessionKey]);
 
   async function connect(): Promise<boolean> {
-    if (state === "connecting") return false;
-    setState("connecting");
-    setError("");
-    try {
-      await adapter.connect({ sessionKey, threadId, cwd, activeTurnId, tokenUsage });
-      setModelOptions(await adapter.models({ sessionKey, threadId, cwd, activeTurnId, tokenUsage }));
-      setState("ready");
-      return true;
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-      setState("error");
-      return false;
-    }
+    if (connection.current) return connection.current;
+    const attempt = (async () => {
+      setState("connecting");
+      setError("");
+      try {
+        await adapter.connect({ sessionKey, threadId, cwd, activeTurnId, tokenUsage });
+        setModelOptions(await adapter.models({ sessionKey, threadId, cwd, activeTurnId, tokenUsage }));
+        setState("ready");
+        return true;
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : String(reason));
+        setState("error");
+        return false;
+      } finally {
+        connection.current = null;
+      }
+    })();
+    connection.current = attempt;
+    return attempt;
   }
 
   async function submit(textOverride?: string) {
@@ -266,6 +329,7 @@ export default function DesktopLiveConversation({
     }
     try {
       const imageUrls = images.map((image) => image.url);
+      const streamInput = text || `${imageUrls.length} image attachment${imageUrls.length === 1 ? "" : "s"}`;
       const isSlashCommand = text.startsWith("/") && exactSlashCommand;
       const callId = isSlashCommand ? crypto.randomUUID() : undefined;
       if (isSlashCommand && callId) {
@@ -289,6 +353,19 @@ export default function DesktopLiveConversation({
         }
       } else {
         await adapter.sendTurn({ sessionKey, threadId, cwd, activeTurnId, tokenUsage }, text, imageUrls);
+        // Do not show a local input as delivered until the harness has accepted
+        // it; otherwise a rejected request becomes a misleading ghost entry.
+        onStreamEvent?.(streamEntry("input", streamInput));
+        if (provider === "codex" && !activeTurnId) {
+          // The app-server's turn/started notification normally replaces this
+          // immediately. It keeps Steer visibly ready if that notification is
+          // delayed; it is deliberately not passed back as a real turn ID.
+          setActiveTurnId("pending-turn");
+          setInterrupted(false);
+        }
+        // A continuation handoff is a one-time composer seed. Users often
+        // edit it before sending, so consume it after the first normal turn.
+        if (initialDraft) onInitialDraftSent?.();
         if (provider === "claude-code") {
         // Claude's stream reports completion as a result frame. Mark it busy
         // immediately so the shared status glyph cannot lag behind the send.
@@ -302,6 +379,16 @@ export default function DesktopLiveConversation({
       setState("error");
     } finally {
       setSending(false);
+    }
+  }
+
+  async function interruptActiveTurn() {
+    if (provider !== "codex" || !activeTurnId || activeTurnId === "pending-turn") return;
+    try {
+      await interruptCodexTurn(sessionKey, threadId, activeTurnId);
+      setInterrupted(true);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
     }
   }
 
@@ -369,11 +456,27 @@ export default function DesktopLiveConversation({
   return (
     <section className={`desktop-codex-live-strip${pinned ? " is-pinned" : ""}${visible ? "" : " is-hidden"}`} aria-label={`Message ${adapter.label}`}>
       <div className={`desktop-codex-live-bar${images.length ? " has-images" : ""}`}>
-        <span
-          className={`desktop-codex-live-dot ${approval ? "running" : activeTurnId ? "paused" : state}`}
-          aria-label={approval ? "Codex needs approval" : activeTurnId ? `${provider === "codex" ? "Codex" : "Claude"} working` : `${provider === "codex" ? "Codex" : "Claude"} ready`}
-          role="status"
-        />
+        {provider === "codex" && activeTurnId ? (
+          <button
+            type="button"
+            className="desktop-codex-live-interrupt"
+            onClick={() => void interruptActiveTurn()}
+            title="Stop Codex (Esc)"
+            aria-label="Stop Codex"
+          >
+            <span aria-hidden="true" />
+          </button>
+        ) : provider === "codex" && interrupted ? (
+          <span className="desktop-codex-live-resume" title="Codex turn interrupted" aria-label="Codex turn interrupted">
+            <span aria-hidden="true" />
+          </span>
+        ) : (
+          <span
+            className={`desktop-codex-live-dot ${approval ? "running" : state}`}
+            aria-label={approval ? "Codex needs approval" : `${provider === "codex" ? "Codex" : "Claude"} ready`}
+            role="status"
+          />
+        )}
         <textarea
           ref={composerRef}
           value={draft}
@@ -408,6 +511,11 @@ export default function DesktopLiveConversation({
             input.style.height = `${Math.min(input.scrollHeight, 148)}px`;
           }}
           onKeyDown={(event) => {
+            if (event.key === "Escape" && activeTurnId && provider === "codex") {
+              event.preventDefault();
+              void interruptActiveTurn();
+              return;
+            }
             if (modelPickerOpen && event.key === "ArrowDown") {
               event.preventDefault();
               setModelSelection((current) => (current + 1) % modelOptions.length);
@@ -521,6 +629,44 @@ export default function DesktopLiveConversation({
       )}
     </section>
   );
+}
+
+function streamEntry(kind: LiveStreamEntry["kind"], text: string, id: string = crypto.randomUUID()): LiveStreamEntry {
+  return { id, kind, text, ts: new Date().toISOString() };
+}
+
+function codexStreamEvent(method: string | undefined, params: Record<string, unknown>): LiveStreamEntry | null {
+  if (!method) return null;
+  const item = params.item;
+  if (method === "item/started" || method === "item/completed") {
+    const formatted = formatCodexItem(item);
+    return formatted ? streamEntry(formatted.kind, formatted.text, `codex:${formatted.id}`) : null;
+  }
+  const delta = typeof params.delta === "string" ? params.delta : "";
+  const itemId = typeof params.itemId === "string" ? params.itemId : "";
+  if (!delta || !itemId) return null;
+  if (method.includes("agentMessage")) return { ...streamEntry("assistant", delta, `codex:${itemId}`), append: true };
+  if (method.includes("reasoning")) return { ...streamEntry("reasoning", delta, `codex:${itemId}`), append: true };
+  if (method.includes("commandExecution")) return { ...streamEntry("output", delta, `codex:${itemId}`), append: true };
+  return null;
+}
+
+function formatCodexItem(item: unknown): { id: string; kind: LiveStreamEntry["kind"]; text: string } | null {
+  if (typeof item !== "object" || item === null) return null;
+  const record = item as Record<string, unknown>;
+  const id = typeof record.id === "string" ? record.id : crypto.randomUUID();
+  const type = typeof record.type === "string" ? record.type : "";
+  const text = stringValue(record.text) || stringValue(record.content) || stringValue(record.command) || stringValue(record.query);
+  if (type === "agentMessage" && text) return { id, kind: "assistant", text };
+  if (type === "reasoning" && text) return { id, kind: "reasoning", text };
+  if (type === "commandExecution") return { id, kind: "tool", text: text ? `$ ${text}` : "Running command..." };
+  if (type === "fileChange") return { id, kind: "tool", text: "Applying file changes..." };
+  if (type === "webSearch") return { id, kind: "tool", text: text ? `Searching: ${text}` : "Searching the web..." };
+  return null;
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
 }
 
 function fileAsDataUrl(file: File): Promise<string> {

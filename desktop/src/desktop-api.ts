@@ -43,6 +43,10 @@ export interface ConnectMeshPeerResponse {
   detail: string;
 }
 
+export interface SyncAllMeshPeersResponse {
+  peers: MeshPeerStatus[];
+}
+
 export interface DesktopSettings {
   appearance: DesktopAppearance;
   provider: ExplainProvider;
@@ -119,6 +123,11 @@ export function listSessions(): Promise<SessionMeta[]> {
   return invoke<SessionMeta[]>("list_sessions");
 }
 
+/** Read only the selected transcript's mtime; avoids a full session discovery scan. */
+export function getSessionModified(fileRefs: string): Promise<string> {
+  return invoke<string>("get_session_modified", { fileRefs });
+}
+
 export function searchSessions(query: string): Promise<SessionSearchResponse> {
   return invoke<SessionSearchResponse>("search_sessions", { query });
 }
@@ -170,11 +179,12 @@ export function startCodexSession(sessionKey: string, cwd: string, model: string
 export function sendCodexTurn(
   sessionKey: string,
   threadId: string,
+  turnId: string | null,
   text: string,
   imageUrls: string[],
 ): Promise<void> {
   return invoke<void>("send_codex_turn", {
-    requestData: { sessionKey, threadId, text, imageUrls },
+    requestData: { sessionKey, threadId, turnId, text, imageUrls },
   });
 }
 
@@ -204,6 +214,10 @@ export function setCodexThreadModel(sessionKey: string, threadId: string, cwd: s
 }
 
 type CodexThreadRequest = { sessionKey: string; threadId: string; cwd: string };
+
+export function getActiveCodexTurn(sessionKey: string, threadId: string, cwd: string): Promise<{ turnId: string | null }> {
+  return invoke<{ turnId: string | null }>("get_active_codex_turn", { requestData: { sessionKey, threadId, cwd } });
+}
 
 export function readCodexThreadStatus(requestData: CodexThreadRequest): Promise<Record<string, unknown>> {
   return invoke<Record<string, unknown>>("read_codex_thread_status", { requestData });
@@ -259,6 +273,10 @@ export function regenerateMeshIdentity(): Promise<MeshStatus> {
 
 export function connectMeshPeer(deviceId: string): Promise<ConnectMeshPeerResponse> {
   return invoke<ConnectMeshPeerResponse>("connect_mesh_peer", { request: { deviceId } });
+}
+
+export function syncAllMeshPeers(): Promise<SyncAllMeshPeersResponse> {
+  return invoke<SyncAllMeshPeersResponse>("sync_all_mesh_peers");
 }
 
 export function saveDesktopSettings(request: SaveDesktopSettingsRequest): Promise<DesktopSettings> {

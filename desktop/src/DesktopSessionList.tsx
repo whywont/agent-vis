@@ -29,7 +29,8 @@ interface DesktopSessionListProps {
   meshSyncReceipts: MeshSyncReceipts;
   hasConfiguredSharingDevice: boolean;
   onOpenSettings: () => void;
-  onStartSession: (provider: LiveProvider, model: string, cwd: string) => Promise<void>;
+  onStartSession: (provider: LiveProvider, model: string, cwd: string) => Promise<unknown>;
+  onContinueSyncedSession: (session: SessionMeta) => Promise<void>;
   onHideSessions: () => void;
   onSelectSession: (files: string, target: SessionMatchTarget | null) => void;
   onDragSession: (session: SessionMeta | null) => void;
@@ -84,6 +85,7 @@ export default function DesktopSessionList({
   hasConfiguredSharingDevice,
   onOpenSettings,
   onStartSession,
+  onContinueSyncedSession,
   onHideSessions,
   onSelectSession,
   onDragSession,
@@ -471,7 +473,7 @@ export default function DesktopSessionList({
                       className="desktop-session-synced"
                       title="This revision was synced to a paired device"
                     >
-                      <span aria-hidden="true">✓</span> synced
+                      synced
                     </span>
                   ) : null}
                   {project && <span className="session-project">{project}</span>}
@@ -537,7 +539,19 @@ export default function DesktopSessionList({
                         </button>
                       )}
                       {session.synced ? (
-                        <span className="session-item-dropdown-note">Read-only synced transcript</span>
+                        <button
+                          type="button"
+                          className="session-item-dropdown-btn"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setMenuOpenFor(null);
+                            void onContinueSyncedSession(session).catch((reason: unknown) => {
+                              setSessionActionError(actionError(reason));
+                            });
+                          }}
+                        >
+                          Continue on this Mac
+                        </button>
                       ) : sessionSharingMode === "selected" && hasConfiguredSharingDevice ? (
                         <button
                           type="button"

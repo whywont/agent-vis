@@ -88,7 +88,8 @@ const codexAdapter: HarnessAdapter = {
   label: "Codex",
   initialCommands: CODEX_COMMANDS,
   connect: ({ sessionKey, threadId, cwd }) => connectCodexThread(sessionKey, threadId, cwd),
-  sendTurn: ({ sessionKey, threadId }, text, imageUrls) => sendCodexTurn(sessionKey, threadId, text, imageUrls),
+  sendTurn: ({ sessionKey, threadId, activeTurnId }, text, imageUrls) =>
+    sendCodexTurn(sessionKey, threadId, activeTurnId === "pending-turn" ? null : activeTurnId, text, imageUrls),
   async models({ sessionKey, threadId, cwd }) {
     const models = await listCodexModels(sessionKey, threadId, cwd);
     return models.map((model): ModelOption => [
