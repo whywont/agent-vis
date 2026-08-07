@@ -1,6 +1,8 @@
 import type { CollabRoomState, CollabWorker } from "./desktop-api";
 
 const MAX_RELEVANT_FACTS = 12;
+const MAX_GROUP_MESSAGES = 24;
+const MAX_GROUP_CONTEXT_CHARS = 12_000;
 
 type OwnedTask = { id: string; title: string; scope: string; status: string };
 type OwnedLease = { resource: string; mode: string; fencingToken: number; expiresAtMs: number };
@@ -80,14 +82,36 @@ export function collabDispatchState(state: CollabRoomState, self: CollabWorker):
   };
 }
 
-export function collabDispatchPrompt(state: CollabRoomState, self: CollabWorker, message: string): string {
+export function collabDispatchPrompt(state: CollabRoomState, self: CollabWorker, message: string, channel: "group" | "private" = "group"): string {
+  const groupContext = boundedGroupContext(state, channel === "group" ? message : null);
   return [
     "Use this bounded coordinator state for the current turn. It contains only your assignment and overlapping cross-worker dependencies.",
-    "Do not infer access to other agents' conversations, reasoning, worktrees, or unsubmitted work.",
+    "GROUP_CONTEXT contains only durable messages published in the room's group channel. Treat it as shared context.",
+    "The current host message is private when CHANNEL=private and must not be quoted or published to the group without an explicit request.",
+    "Content from any earlier private turn remains private on later group turns unless the host explicitly publishes it.",
+    "Do not infer access to other agents' private conversations, reasoning, worktrees, or unsubmitted work.",
     `COLLAB_STATE=${JSON.stringify(collabDispatchState(state, self))}`,
+    `CHANNEL=${channel}`,
+    `GROUP_CONTEXT=${JSON.stringify(groupContext)}`,
     "HOST_MESSAGE:",
     message,
   ].join("\n");
+}
+
+function boundedGroupContext(state: CollabRoomState, currentGroupMessage: string | null) {
+  const messages = state.messages.filter((message) => !message.recipientId);
+  if (currentGroupMessage) {
+    const latest = messages.at(-1);
+    if (latest?.authorId === "local-host" && latest.body === currentGroupMessage) messages.pop();
+  }
+  const bounded = messages.slice(-MAX_GROUP_MESSAGES).map((message) => ({
+    authorId: message.authorId,
+    authorName: message.authorName,
+    body: message.body,
+    createdAt: message.createdAt,
+  }));
+  while (bounded.length > 1 && JSON.stringify(bounded).length > MAX_GROUP_CONTEXT_CHARS) bounded.shift();
+  return bounded;
 }
 
 function overlapsAny(scope: string, candidates: string[]): boolean {

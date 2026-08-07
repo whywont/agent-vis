@@ -12,6 +12,7 @@ import {
   getCollabRoomState,
   integrateCollabChange,
   postCollabAgentMessage,
+  postCollabDirectMessage,
   postCollabMessage,
   releaseCollabLease,
   renewCollabLease,
@@ -44,12 +45,14 @@ type AgentStreamEntry = {
 
 export default function DesktopCollabRoom({
   session,
-  selectedWorkerId,
-  onSelectedWorkerChange,
+  openWorkerIds,
+  activeWorkerId,
+  onWorkerViewChange,
 }: {
   session: SessionMeta;
-  selectedWorkerId: string | null;
-  onSelectedWorkerChange: (workerId: string | null) => void;
+  openWorkerIds: string[];
+  activeWorkerId: string | null;
+  onWorkerViewChange: (openWorkerIds: string[], activeWorkerId: string | null) => void;
 }) {
   const roomRef = session.file;
   const [state, setState] = useState<CollabRoomState | null>(null);
@@ -57,6 +60,7 @@ export default function DesktopCollabRoom({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [groupDraft, setGroupDraft] = useState("");
+  const [directDrafts, setDirectDrafts] = useState<Record<string, string>>({});
   const [coordinationOpen, setCoordinationOpen] = useState(false);
   const [workerName, setWorkerName] = useState("");
   const [provider, setProvider] = useState("codex");
@@ -66,9 +70,10 @@ export default function DesktopCollabRoom({
   const [leaseResource, setLeaseResource] = useState("");
   const [submissionTitle, setSubmissionTitle] = useState("");
   const [submissionSummary, setSubmissionSummary] = useState("");
-  const [streams, setStreams] = useState<Record<string, AgentStreamEntry[]>>({});
+  const [, setStreams] = useState<Record<string, AgentStreamEntry[]>>({});
   const stateRef = useRef<CollabRoomState | null>(null);
   const responseBuffers = useRef(new Map<string, string>());
+  const pendingChannels = useRef(new Map<string, Array<"group" | "private">>());
   const reconnectAttempts = useRef(new Set<string>());
 
   const updateState = useCallback((next: CollabRoomState) => {
@@ -150,10 +155,14 @@ export default function DesktopCollabRoom({
     const workerForSession = (sessionKey: string) => stateRef.current?.workers.find((worker) => worker.sessionKey === sessionKey);
     const recordReply = async (sessionKey: string, text: string) => {
       const worker = workerForSession(sessionKey);
+      const channels = pendingChannels.current.get(sessionKey) || [];
+      const channel = channels.shift() || "private";
+      if (channels.length) pendingChannels.current.set(sessionKey, channels);
+      else pendingChannels.current.delete(sessionKey);
       const reply = text.trim();
       if (!worker || !reply) return;
       try {
-        const next = await postCollabAgentMessage(roomRef, worker, reply, false);
+        const next = await postCollabAgentMessage(roomRef, worker, reply, channel === "private");
         if (!cancelled) updateState(next);
       } catch (nextError) {
         if (!cancelled) setError(errorText(nextError));
@@ -226,7 +235,10 @@ export default function DesktopCollabRoom({
     return () => window.clearTimeout(timer);
   }, [startWorker, state]);
 
-  const selectedWorker = state?.workers.find((worker) => worker.id === selectedWorkerId) || null;
+  const openWorkers = openWorkerIds.flatMap((workerId) => {
+    const worker = state?.workers.find((candidate) => candidate.id === workerId);
+    return worker ? [worker] : [];
+  });
   const groupMessages = state?.messages.filter((item) => !item.recipientId) || [];
   const workerNames = useMemo(() => new Map(state?.workers.map((worker) => [worker.id, worker.name]) || []), [state?.workers]);
 
@@ -242,13 +254,22 @@ export default function DesktopCollabRoom({
     finally { setBusy(false); }
   }
 
-  async function sendToWorker(worker: CollabWorker, body: string) {
+  async function sendToWorker(worker: CollabWorker, body: string, channel: "group" | "private", roomState = stateRef.current) {
     if (!worker.sessionKey || !worker.threadId) throw new Error(`${worker.name} is not running.`);
-    const roomState = stateRef.current;
     if (!roomState) throw new Error("Collaboration state is unavailable.");
-    const prompt = collabDispatchPrompt(roomState, worker, body);
-    if (worker.provider === "codex") await sendCodexTurn(worker.sessionKey, worker.threadId, null, prompt, []);
-    else await sendClaudeTurn(worker.sessionKey, prompt, []);
+    const prompt = collabDispatchPrompt(roomState, worker, body, channel);
+    const channels = pendingChannels.current.get(worker.sessionKey) || [];
+    pendingChannels.current.set(worker.sessionKey, [...channels, channel]);
+    try {
+      if (worker.provider === "codex") await sendCodexTurn(worker.sessionKey, worker.threadId, null, prompt, []);
+      else await sendClaudeTurn(worker.sessionKey, prompt, []);
+    } catch (nextError) {
+      const pending = pendingChannels.current.get(worker.sessionKey) || [];
+      pending.pop();
+      if (pending.length) pendingChannels.current.set(worker.sessionKey, pending);
+      else pendingChannels.current.delete(worker.sessionKey);
+      throw nextError;
+    }
   }
 
   async function sendGroup(event: FormEvent) {
@@ -262,11 +283,37 @@ export default function DesktopCollabRoom({
       updateState(next);
       setGroupDraft("");
       const running = next.workers.filter((worker) => worker.runtimeStatus === "running" && supportsRuntime(worker));
-      const results = await Promise.allSettled(running.map((worker) => sendToWorker(worker, body)));
+      const results = await Promise.allSettled(running.map((worker) => sendToWorker(worker, body, "group", next)));
       const failures = results.filter((result) => result.status === "rejected") as PromiseRejectedResult[];
       if (failures.length) setError(failures.map((failure) => errorText(failure.reason)).join("\n"));
     } catch (nextError) { setError(errorText(nextError)); }
     finally { setBusy(false); }
+  }
+
+  async function sendDirect(event: FormEvent, worker: CollabWorker) {
+    event.preventDefault();
+    const body = (directDrafts[worker.id] || "").trim();
+    if (!body) return;
+    setBusy(true);
+    setError("");
+    try {
+      const next = await postCollabDirectMessage(roomRef, worker.id, body);
+      updateState(next);
+      setDirectDrafts((current) => ({ ...current, [worker.id]: "" }));
+      if (supportsRuntime(worker)) await sendToWorker(worker, body, "private", next);
+    } catch (nextError) { setError(errorText(nextError)); }
+    finally { setBusy(false); }
+  }
+
+  function closeWorker(workerId: string) {
+    const next = openWorkerIds.filter((id) => id !== workerId);
+    const nextActive = activeWorkerId === workerId ? next.at(-1) || null : activeWorkerId;
+    onWorkerViewChange(next, nextActive);
+  }
+
+  function activateWorker(workerId: string) {
+    const next = openWorkerIds.includes(workerId) ? openWorkerIds : [...openWorkerIds, workerId].slice(-2);
+    onWorkerViewChange(next, workerId);
   }
 
   async function addWorker(event: FormEvent) {
@@ -278,13 +325,14 @@ export default function DesktopCollabRoom({
     if (worker && supportsRuntime(worker)) await startWorker(worker);
   }
 
-  return <section className={`desktop-collab-room desktop-collab-chat-layout${selectedWorker ? " direct-open" : ""}`}>
+  return <section className={`desktop-collab-room desktop-collab-chat-layout${openWorkers.length ? " direct-open" : ""}${openWorkers.length > 1 ? " multi-direct-open" : ""}`}>
     <button className="desktop-collab-coordination-fallback" type="button" onClick={() => setCoordinationOpen((open) => !open)}>Coordination</button>
     {error && <div className="desktop-collab-error" role="alert">{error}</div>}
     <div className="desktop-collab-conversations">
       <ConversationPane online={state.workers.filter((worker) => worker.runtimeStatus === "running").length} messages={groupMessages} draft={groupDraft} onDraft={setGroupDraft} onSubmit={sendGroup} busy={busy} placeholder="Message the room..." />
-      <aside className="desktop-collab-agent-rail">
-        {selectedWorker ? <DirectPane worker={selectedWorker} stream={streams[selectedWorker.id] || []} onClose={() => onSelectedWorkerChange(null)} onStart={() => void startWorker(selectedWorker)} busy={busy} /> : <AgentRoster workers={state.workers} workerName={workerName} setWorkerName={setWorkerName} provider={provider} setProvider={setProvider} onAddWorker={addWorker} onSelect={onSelectedWorkerChange} onStart={(worker) => void startWorker(worker)} busy={busy} />}
+      <aside className={`desktop-collab-agent-rail${openWorkers.length > 1 ? " multi" : ""}`}>
+        {openWorkers.length > 0 && <div className="desktop-collab-open-agent-panes">{openWorkers.map((worker) => <DirectPane key={worker.id} worker={worker} active={worker.id === activeWorkerId} messages={state.messages.filter((message) => (message.authorId === "local-host" && message.recipientId === worker.id) || (message.authorId === worker.id && message.recipientId === "local-host"))} draft={directDrafts[worker.id] || ""} onDraft={(value) => setDirectDrafts((current) => ({ ...current, [worker.id]: value }))} onSubmit={(event) => void sendDirect(event, worker)} onActivate={() => activateWorker(worker.id)} onPublish={(message) => void mutate(() => postCollabAgentMessage(roomRef, worker, message.body, false))} onClose={() => closeWorker(worker.id)} onStart={() => void startWorker(worker)} busy={busy} />)}</div>}
+        {openWorkers.length < 2 && <AgentRoster workers={state.workers} workerName={workerName} setWorkerName={setWorkerName} provider={provider} setProvider={setProvider} onAddWorker={addWorker} onSelect={activateWorker} onStart={(worker) => void startWorker(worker)} busy={busy} />}
       </aside>
     </div>
     {coordinationOpen && <div className="desktop-collab-coordination-layer" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setCoordinationOpen(false); }}><CoordinationDrawer onClose={() => setCoordinationOpen(false)} state={state} busy={busy} workerNames={workerNames} taskTitle={taskTitle} setTaskTitle={setTaskTitle} taskScope={taskScope} setTaskScope={setTaskScope} leaseWorker={selectedLeaseWorker} setLeaseWorker={setLeaseWorker} leaseResource={leaseResource} setLeaseResource={setLeaseResource} submissionTitle={submissionTitle} setSubmissionTitle={setSubmissionTitle} submissionSummary={submissionSummary} setSubmissionSummary={setSubmissionSummary} onCreateTask={(event) => { event.preventDefault(); void mutate(() => createCollabTask(roomRef, taskTitle, taskScope)).then((ok) => { if (ok) { setTaskTitle(""); setTaskScope(""); } }); }} onClaimTask={(taskId, workerId) => void mutate(() => claimCollabTask(roomRef, taskId, workerId))} onAcquireLease={(event) => { event.preventDefault(); void mutate(() => acquireCollabLease(roomRef, selectedLeaseWorker, null, leaseResource, "exclusive", 900)).then((ok) => { if (ok) setLeaseResource(""); }); }} onRenewLease={(lease) => void mutate(() => renewCollabLease(roomRef, lease))} onReleaseLease={(lease) => void mutate(() => releaseCollabLease(roomRef, lease))} onSubmitChange={(event) => { event.preventDefault(); if (!selectedLeaseWorker) return; void mutate(() => submitCollabChange(roomRef, selectedLeaseWorker, submissionTitle, submissionSummary, state.leases)).then((ok) => { if (ok) { setSubmissionTitle(""); setSubmissionSummary(""); } }); }} onReview={(id, decision) => void mutate(() => reviewCollabChange(roomRef, id, decision, decision === "approved" ? "Approved by host" : "Changes requested"))} onIntegrate={(id) => void mutate(() => integrateCollabChange(roomRef, id))} /></div>}
@@ -295,8 +343,8 @@ function ConversationPane({ online, messages, draft, onDraft, onSubmit, busy, pl
   return <main className="desktop-collab-conversation group"><header><strong># group chat</strong><span>{online} online</span></header><div className="desktop-collab-thread">{messages.map((message) => <article key={message.id} className={message.authorId === "local-host" ? "host" : "agent"}><header><b>{message.authorName}</b><time>{formatTimestamp(message.createdAt)}</time></header><p>{message.body}</p></article>)}{!messages.length && <p className="empty">Start the group conversation.</p>}</div><form onSubmit={onSubmit}><input value={draft} onChange={(event) => onDraft(event.target.value)} placeholder={placeholder} required /><button disabled={busy}>Send</button></form></main>;
 }
 
-function DirectPane({ worker, stream, onClose, onStart, busy }: { worker: CollabWorker; stream: AgentStreamEntry[]; onClose: () => void; onStart: () => void; busy: boolean }) {
-  return <aside className="desktop-collab-direct"><header><div><i className={`runtime ${worker.runtimeStatus}`} /><strong>{worker.name}</strong><span>{worker.provider} / {runtimeLabel(worker)}</span></div><button type="button" onClick={onClose}>x</button></header>{worker.runtimeStatus !== "running" && supportsRuntime(worker) && <button className="start-agent" type="button" onClick={onStart} disabled={busy || worker.runtimeStatus === "starting"}>Start agent</button>}<section className="desktop-collab-agent-stream"><header>Live stream</header>{stream.map((entry) => <article key={entry.id} className={`kind-${entry.kind}`}><b>{entry.kind}</b><pre>{entry.text}</pre></article>)}{!stream.length && <p className="empty">Reasoning and tool activity appear here during a turn.</p>}</section></aside>;
+function DirectPane({ worker, active, messages, draft, onDraft, onSubmit, onActivate, onPublish, onClose, onStart, busy }: { worker: CollabWorker; active: boolean; messages: CollabRoomState["messages"]; draft: string; onDraft: (value: string) => void; onSubmit: (event: FormEvent) => void; onActivate: () => void; onPublish: (message: CollabRoomState["messages"][number]) => void; onClose: () => void; onStart: () => void; busy: boolean }) {
+  return <aside className={`desktop-collab-direct${active ? " active" : ""}`} onMouseDown={onActivate}><header><div><i className={`runtime ${worker.runtimeStatus}`} /><strong>{worker.name}</strong><span>{worker.provider} / private</span></div><button type="button" onClick={(event) => { event.stopPropagation(); onClose(); }} aria-label={`Close ${worker.name} chat`}>x</button></header>{worker.runtimeStatus !== "running" && supportsRuntime(worker) && <button className="start-agent" type="button" onClick={onStart} disabled={busy || worker.runtimeStatus === "starting"}>Start agent</button>}<section className="desktop-collab-private-thread"><header>Private chat</header>{messages.map((message) => <article key={message.id} className={message.authorId === "local-host" ? "host" : "agent"}><header><b>{message.authorName}</b><time>{formatTimestamp(message.createdAt)}</time>{message.authorId === worker.id && <button type="button" onClick={() => onPublish(message)}>Publish to group</button>}</header><p>{message.body}</p></article>)}{!messages.length && <p className="empty">Messages here stay between you and {worker.name}.</p>}</section><form onSubmit={onSubmit}><input value={draft} onChange={(event) => onDraft(event.target.value)} placeholder={`Message ${worker.name} privately...`} required /><button disabled={busy || (supportsRuntime(worker) && worker.runtimeStatus !== "running")}>Send</button></form></aside>;
 }
 
 function AgentRoster({ workers, workerName, setWorkerName, provider, setProvider, onAddWorker, onSelect, onStart, busy }: { workers: CollabWorker[]; workerName: string; setWorkerName: (value: string) => void; provider: string; setProvider: (value: string) => void; onAddWorker: (event: FormEvent) => void; onSelect: (workerId: string) => void; onStart: (worker: CollabWorker) => void; busy: boolean }) {

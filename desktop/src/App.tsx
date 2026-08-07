@@ -59,7 +59,7 @@ export default function App() {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [collabRooms, setCollabRooms] = useState<SessionMeta[]>([]);
   const [collabMode, setCollabMode] = useState(false);
-  const [selectedCollabWorkerId, setSelectedCollabWorkerId] = useState<string | null>(null);
+  const [collabWorkerViews, setCollabWorkerViews] = useState<Record<string, { openWorkerIds: string[]; activeWorkerId: string | null }>>({});
   const [selected, setSelected] = useState<SessionMeta | null>(null);
   const [splitSession, setSplitSession] = useState<SessionMeta | null>(null);
   const [draggedSession, setDraggedSession] = useState<SessionMeta | null>(null);
@@ -325,7 +325,6 @@ export default function App() {
     const room = await createCollabRoom(cwd);
     setCollabRooms((current) => [room, ...current.filter((candidate) => candidate.id !== room.id)]);
     setCollabMode(true);
-    setSelectedCollabWorkerId(null);
     setShowSettings(false);
     setActiveTab("session");
     setMatchTarget(null);
@@ -346,12 +345,10 @@ export default function App() {
     setSplitSession(null);
     setMatchTarget(null);
     setTerminalOpen(false);
-    setSelectedCollabWorkerId(null);
   }
 
   function goHome() {
     setCollabMode(false);
-    setSelectedCollabWorkerId(null);
     setShowSettings(false);
     setSelected(null);
     setSplitSession(null);
@@ -413,13 +410,32 @@ export default function App() {
               {collabMode ? <DesktopCollabSidebar
                 rooms={collabRooms}
                 selectedRoom={selected?.source === "collab" ? selected : null}
-                selectedWorkerId={selectedCollabWorkerId}
-                onSelectRoom={(room) => { setSelected(room); setSelectedCollabWorkerId(null); }}
-                onSelectWorker={(room, workerId) => { setSelected(room); setSelectedCollabWorkerId(workerId); }}
+                openWorkerIds={selected?.source === "collab" ? collabWorkerViews[selected.id]?.openWorkerIds || [] : []}
+                activeWorkerId={selected?.source === "collab" ? collabWorkerViews[selected.id]?.activeWorkerId || null : null}
+                onSelectRoom={(room) => {
+                  setSelected(room);
+                  setCollabWorkerViews((current) => ({
+                    ...current,
+                    [room.id]: { openWorkerIds: current[room.id]?.openWorkerIds || [], activeWorkerId: null },
+                  }));
+                }}
+                onSelectWorker={(room, workerId) => {
+                  setSelected(room);
+                  setCollabWorkerViews((current) => {
+                    const openWorkerIds = (current[room.id]?.openWorkerIds || []).filter((id) => id !== workerId);
+                    return { ...current, [room.id]: { openWorkerIds: [...openWorkerIds, workerId].slice(-2), activeWorkerId: workerId } };
+                  });
+                }}
                 onCreateRoom={() => void openCollab()}
+                onHide={() => setSessionSidebarOpen(false)}
                 onExit={goHome}
                 onRoomDeleted={(room) => {
                   setCollabRooms((current) => current.filter((candidate) => candidate.id !== room.id));
+                  setCollabWorkerViews((current) => {
+                    const next = { ...current };
+                    delete next[room.id];
+                    return next;
+                  });
                   if (selected?.id === room.id) setSelected(null);
                 }}
               /> : <DesktopSessionList
@@ -482,10 +498,10 @@ export default function App() {
             <button
               className="desktop-panel-reopen desktop-session-reopen"
               onClick={() => setSessionSidebarOpen(true)}
-              title="Show sessions"
-              aria-label="Show sessions sidebar"
+              title={collabMode ? "Show custom sessions" : "Show sessions"}
+              aria-label={collabMode ? "Show custom sessions sidebar" : "Show sessions sidebar"}
             >
-              <span>sessions</span>
+              <span>{collabMode ? "collab" : "sessions"}</span>
               <b>&#8250;</b>
             </button>
           )}
@@ -519,8 +535,12 @@ export default function App() {
           ) : selected.source === "collab" ? (
             <DesktopCollabWorkspace
               room={selected}
-              selectedWorkerId={selectedCollabWorkerId}
-              onSelectedWorkerChange={setSelectedCollabWorkerId}
+              openWorkerIds={collabWorkerViews[selected.id]?.openWorkerIds || []}
+              activeWorkerId={collabWorkerViews[selected.id]?.activeWorkerId || null}
+              onWorkerViewChange={(openWorkerIds, activeWorkerId) => setCollabWorkerViews((current) => ({
+                ...current,
+                [selected.id]: { openWorkerIds, activeWorkerId },
+              }))}
             />
           ) : isTranscriptSession(selected) ? (
             <DesktopSessionWorkspace

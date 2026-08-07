@@ -26,7 +26,10 @@ const state: CollabRoomState = {
     { id: "change-b", workerId: "worker-b", title: "Timeline", summary: "", baseCommit: "abc", changedPaths: ["desktop/src/DesktopTimeline.tsx"], status: "review", reviewerId: null, reviewNote: "", createdAt: "", updatedAt: "", integratedAt: null },
     { id: "change-c", workerId: "worker-c", title: "Mesh", summary: "", baseCommit: "abc", changedPaths: ["desktop/src-tauri/src/mesh.rs"], status: "approved", reviewerId: null, reviewNote: "", createdAt: "", updatedAt: "", integratedAt: null },
   ],
-  messages: [{ id: "secret", authorId: "worker-b", authorName: "Beta", body: "private transcript text", createdAt: "", recipientId: null }],
+  messages: [
+    { id: "group", authorId: "worker-b", authorName: "Beta", body: "shared timeline status", createdAt: "", recipientId: null },
+    { id: "secret", authorId: "worker-b", authorName: "Beta", body: "private transcript text", createdAt: "", recipientId: "local-host" },
+  ],
 };
 
 describe("collab dispatch state", () => {
@@ -49,9 +52,17 @@ describe("collab dispatch state", () => {
     expect(snapshot.dependencies).toEqual({ claims: [], leases: [], changes: [] });
   });
 
-  it("keeps the host message outside the state and excludes room history", () => {
+  it("includes bounded group history while excluding private transcripts", () => {
     const prompt = collabDispatchPrompt(state, alpha, "Inspect the timeline.");
     expect(prompt).toContain("HOST_MESSAGE:\nInspect the timeline.");
+    expect(prompt).toContain("shared timeline status");
+    expect(prompt).not.toContain("private transcript text");
+  });
+
+  it("marks private turns without sharing their message in group context", () => {
+    const prompt = collabDispatchPrompt(state, alpha, "Keep this between us.", "private");
+    expect(prompt).toContain("CHANNEL=private");
+    expect(prompt).toContain("HOST_MESSAGE:\nKeep this between us.");
     expect(prompt).not.toContain("private transcript text");
   });
 });

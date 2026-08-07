@@ -3,18 +3,21 @@ import DesktopCollabRoom from "./DesktopCollabRoom";
 
 export default function DesktopCollabWorkspace({
   room,
-  selectedWorkerId,
-  onSelectedWorkerChange,
+  openWorkerIds,
+  activeWorkerId,
+  onWorkerViewChange,
 }: {
   room: SessionMeta;
-  selectedWorkerId: string | null;
-  onSelectedWorkerChange: (workerId: string | null) => void;
+  openWorkerIds: string[];
+  activeWorkerId: string | null;
+  onWorkerViewChange: (openWorkerIds: string[], activeWorkerId: string | null) => void;
 }) {
   return (
     <DesktopCollabRoom
       session={room}
-      selectedWorkerId={selectedWorkerId}
-      onSelectedWorkerChange={onSelectedWorkerChange}
+      openWorkerIds={openWorkerIds}
+      activeWorkerId={activeWorkerId}
+      onWorkerViewChange={onWorkerViewChange}
     />
   );
 }
