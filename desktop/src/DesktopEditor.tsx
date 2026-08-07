@@ -9,7 +9,8 @@ import { markdown } from "@codemirror/lang-markdown";
 import { bracketMatching, HighlightStyle, indentOnInput, syntaxHighlighting } from "@codemirror/language";
 import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
-import { explainDiff, listWorkspaceFiles, readWorkspaceFile, saveWorkspaceFile, type WorkspaceTreeEntry } from "./desktop-api";
+import { explainDiff, listWorkspaceFiles, readWorkspaceFile, saveWorkspaceFile, stopTerminal, type WorkspaceTreeEntry } from "./desktop-api";
+import DesktopTerminal from "./DesktopTerminal";
 
 interface TreeNode { children: Map<string, TreeNode>; path?: string; }
 interface ExplainTarget { startLine: number; endLine: number; text: string; top: number; }
@@ -76,6 +77,13 @@ function fileIcon(name: string): string {
   return "·";
 }
 
+function expandedWithParents(current: Set<string>, filepath: string): Set<string> {
+  const next = new Set(current);
+  const parts = filepath.split("/");
+  for (let index = 1; index < parts.length; index += 1) next.add(parts.slice(0, index).join("/"));
+  return next;
+}
+
 function languageForPath(path: string) {
   if (/\.(ts|tsx|js|jsx|mjs|cjs)$/.test(path)) return javascript({ jsx: /\.(tsx|jsx)$/.test(path), typescript: /\.(ts|tsx)$/.test(path) });
   if (/\.(json|jsonc)$/.test(path)) return json();
@@ -83,6 +91,21 @@ function languageForPath(path: string) {
   if (/\.(html|htm|svg)$/.test(path)) return html();
   if (/\.(md|mdx)$/.test(path)) return markdown();
   return [];
+}
+
+function editorTerminalId(workspaceRoot: string): string {
+  // Native terminal IDs allow only letters, numbers, hyphens, underscores, and colons.
+  let hash = 0;
+  for (const character of workspaceRoot) hash = ((hash << 5) - hash + character.charCodeAt(0)) | 0;
+  return `editor-${(hash >>> 0).toString(36)}`;
+}
+
+function SplitTerminalGlyph() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM12 5v14M8 9h1M15 15h1" /></svg>;
+}
+
+function TerminalGlyph() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 5 6 7-6 7M13 19h6" /></svg>;
 }
 
 function explainTargetForView(view: EditorView, hostElement: HTMLDivElement | null): ExplainTarget | null {
@@ -101,7 +124,7 @@ function explainTargetForView(view: EditorView, hostElement: HTMLDivElement | nu
   };
 }
 
-export default function DesktopEditor({ workspaceRoot }: { workspaceRoot: string }) {
+export default function DesktopEditor({ workspaceRoot, navigation }: { workspaceRoot: string; navigation?: { path: string; requestId: number } | null }) {
   const [files, setFiles] = useState<WorkspaceTreeEntry[]>([]);
   const [activePath, setActivePath] = useState<string | null>(null);
   const [content, setContent] = useState("");
@@ -116,6 +139,11 @@ export default function DesktopEditor({ workspaceRoot }: { workspaceRoot: string
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [explaining, setExplaining] = useState(false);
+  const [terminalOpen, setTerminalOpen] = useState(false);
+  const [terminalHeight, setTerminalHeight] = useState(140);
+  const [terminalPanes, setTerminalPanes] = useState<string[]>([]);
+  const [activeTerminalPane, setActiveTerminalPane] = useState<string | null>(null);
+  const [terminalSplit, setTerminalSplit] = useState(false);
   const contentRef = useRef(content);
   const savedContentRef = useRef(savedContent);
   const activePathRef = useRef(activePath);
@@ -126,6 +154,7 @@ export default function DesktopEditor({ workspaceRoot }: { workspaceRoot: string
   const editorViewRef = useRef<EditorView | null>(null);
   const dirty = content !== savedContent;
   const tree = useMemo(() => makeTree(files), [files]);
+  const terminalId = useMemo(() => editorTerminalId(workspaceRoot), [workspaceRoot]);
 
   useEffect(() => { contentRef.current = content; }, [content]);
   useEffect(() => { savedContentRef.current = savedContent; }, [savedContent]);
@@ -173,9 +202,19 @@ export default function DesktopEditor({ workspaceRoot }: { workspaceRoot: string
 
   useEffect(() => {
     if (activePath || !files[0]) return;
-    const timer = window.setTimeout(() => setActivePath(files[0].path), 0);
+    const requested = navigation?.path && files.some((file) => file.path === navigation.path) ? navigation.path : files[0].path;
+    const timer = window.setTimeout(() => setActivePath(requested), 0);
     return () => window.clearTimeout(timer);
-  }, [activePath, files]);
+  }, [activePath, files, navigation]);
+
+  useEffect(() => {
+    if (!navigation || !files.some((file) => file.path === navigation.path)) return;
+    const timer = window.setTimeout(() => {
+      setActivePath(navigation.path);
+      setExpandedDirectories((current) => expandedWithParents(current, navigation.path));
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [files, navigation]);
 
   useEffect(() => {
     if (!activePath) return;
@@ -251,6 +290,50 @@ export default function DesktopEditor({ workspaceRoot }: { workspaceRoot: string
     });
   }
 
+  function resizeTerminal(event: React.MouseEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const startY = event.clientY;
+    const startHeight = terminalHeight;
+    function onMove(moveEvent: MouseEvent) {
+      setTerminalHeight(Math.max(140, Math.min(600, startHeight + startY - moveEvent.clientY)));
+    }
+    function onUp() {
+      document.body.classList.remove("resizing");
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    }
+    document.body.classList.add("resizing");
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }
+
+  function openTerminal() {
+    if (!terminalPanes.length) {
+      setTerminalPanes([terminalId]);
+      setActiveTerminalPane(terminalId);
+    }
+    setTerminalOpen(true);
+  }
+
+  function addTerminalPane() {
+    const paneId = `${terminalId}-pane-${crypto.randomUUID().replaceAll("-", "")}`;
+    setTerminalPanes((current) => [...current, paneId]);
+    setActiveTerminalPane(paneId);
+  }
+
+  function closeTerminalPane() {
+    const paneId = activeTerminalPane || terminalPanes[0];
+    if (!paneId) return;
+    void stopTerminal(paneId).catch(() => {});
+    setTerminalPanes((current) => {
+      const next = current.filter((currentId) => currentId !== paneId);
+      setActiveTerminalPane(next[0] || null);
+      if (next.length < 2) setTerminalSplit(false);
+      if (!next.length) setTerminalOpen(false);
+      return next;
+    });
+  }
+
   function trackLine(event: React.MouseEvent<HTMLDivElement>) {
     const view = editorViewRef.current;
     if (!view) return;
@@ -274,16 +357,51 @@ export default function DesktopEditor({ workspaceRoot }: { workspaceRoot: string
         </div>
       </aside>
       <div className="desktop-editor-explorer-resize" ref={explorerResizeRef} />
-      <div className="desktop-editor-main">
-        <header className="desktop-editor-tabbar">
-          <span className="desktop-editor-tab" title={activePath || undefined}>{activePath ? <>{fileIcon(activePath)} {activePath.split("/").pop()}{dirty ? " •" : ""}</> : "No file selected"}</span>
-          <button type="button" className="desktop-editor-save" disabled={!dirty || saving} onClick={() => void save()}>{saving ? "Saving..." : "Save"}</button>
-        </header>
-        {activePath && loadedPath === activePath ? (
-          <div className="desktop-editor-code-wrap" ref={editorHostRef} onMouseMove={trackLine} onMouseLeave={() => setExplainTarget(null)}>
-            {explainTarget && <button type="button" className="desktop-editor-explain-line" style={{ top: explainTarget.top }} onMouseDown={(event) => event.preventDefault()} onClick={() => void explainSelection(explainTarget)} title={explainTarget.startLine === explainTarget.endLine ? `Explain line ${explainTarget.startLine}` : `Explain lines ${explainTarget.startLine}-${explainTarget.endLine}`} aria-label="Explain selected code">✦</button>}
-          </div>
-        ) : <div className="desktop-editor-empty">Choose a file from the explorer.</div>}
+      <div className="desktop-editor-column">
+        <div className="desktop-editor-main">
+          <header className="desktop-editor-tabbar">
+            <span className="desktop-editor-tab" title={activePath || undefined}>{activePath ? <>{fileIcon(activePath)} {activePath.split("/").pop()}{dirty ? " •" : ""}</> : "No file selected"}</span>
+            <button type="button" className="desktop-editor-save" disabled={!dirty || saving} onClick={() => void save()}>{saving ? "Saving..." : "Save"}</button>
+            <button type="button" className={`desktop-editor-terminal-toggle${terminalOpen ? " active" : ""}`} onClick={() => terminalOpen ? setTerminalOpen(false) : openTerminal()} aria-expanded={terminalOpen} title={terminalOpen ? "Close editor terminal" : "Open editor terminal"}>
+              Terminal
+            </button>
+          </header>
+          {activePath && loadedPath === activePath ? (
+            <div className="desktop-editor-code-wrap" ref={editorHostRef} onMouseMove={trackLine} onMouseLeave={() => setExplainTarget(null)}>
+              {explainTarget && <button type="button" className="desktop-editor-explain-line" style={{ top: explainTarget.top }} onMouseDown={(event) => event.preventDefault()} onClick={() => void explainSelection(explainTarget)} title={explainTarget.startLine === explainTarget.endLine ? `Explain line ${explainTarget.startLine}` : `Explain lines ${explainTarget.startLine}-${explainTarget.endLine}`} aria-label="Explain selected code">✦</button>}
+            </div>
+          ) : <div className="desktop-editor-empty">Choose a file from the explorer.</div>}
+        </div>
+        {terminalOpen && (
+          <section className="desktop-terminal-panel desktop-editor-terminal" style={{ height: terminalHeight }} aria-label="Editor terminal">
+            <div className="desktop-terminal-resize-handle" onMouseDown={resizeTerminal} title="Drag to resize terminal" />
+            <header className="desktop-terminal-panel-header">
+              <button type="button" className="desktop-terminal-panel-tab active" title="Editor terminal" aria-label="Editor terminal"><TerminalGlyph /></button>
+              {terminalPanes.map((paneId, index) => (
+                <button type="button" className={`desktop-terminal-pane-tab${paneId === activeTerminalPane ? " active" : ""}`} key={paneId} onClick={() => setActiveTerminalPane(paneId)} title={`Terminal ${index + 1}`}>{index + 1}</button>
+              ))}
+              <button type="button" className="desktop-terminal-add" onClick={addTerminalPane} title="New terminal" aria-label="New terminal">+</button>
+              <button type="button" className={`desktop-terminal-split${terminalSplit ? " active" : ""}`} onClick={() => setTerminalSplit((current) => !current)} disabled={terminalPanes.length < 2} title={terminalSplit ? "Show one terminal" : "Split terminals"} aria-label={terminalSplit ? "Show one terminal" : "Split terminals"}><SplitTerminalGlyph /></button>
+              <button type="button" className="desktop-terminal-close" onClick={closeTerminalPane} aria-label="Close editor terminal" title="Close terminal">×</button>
+            </header>
+            <div className={`desktop-terminal-pane-grid active${terminalSplit ? " split" : ""}`}>
+              {terminalPanes.map((paneId) => (
+                <DesktopTerminal
+                  active={terminalSplit || paneId === activeTerminalPane}
+                  key={paneId}
+                  sessionCwd={workspaceRoot}
+                  sessionId="editor"
+                  sessionSource="codex"
+                  terminalId={paneId}
+                  panelHeight={terminalHeight}
+                  prefillResume={false}
+                  paneCount={terminalSplit ? terminalPanes.length : 1}
+                  stopOnUnmount
+                />
+              ))}
+            </div>
+          </section>
+        )}
       </div>
       <aside className={`desktop-editor-explain${explainOpen ? " open" : ""}`}>
         <button type="button" className="desktop-editor-explain-toggle" onClick={() => setExplainOpen((current) => !current)} aria-expanded={explainOpen} title={explainOpen ? "Close Explain with AI" : "Open Explain with AI"}>

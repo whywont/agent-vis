@@ -11,8 +11,9 @@ import DesktopTimeline from "./DesktopTimeline";
 import DesktopTerminal from "./DesktopTerminal";
 import DesktopLiveConversation from "./DesktopLiveConversation";
 import DesktopLiveStream, { type LiveStreamEntry } from "./DesktopLiveStream";
-import { getGitBranch, readSession, stopTerminal } from "./desktop-api";
+import { getGitBranch, readSession, resolveWorkspaceFilepaths, stopTerminal } from "./desktop-api";
 import { startWindowDrag } from "./window-drag";
+import { workspaceRelativePath } from "./workspace-path";
 
 // CodeMirror is only needed for the editor tab, keeping normal transcript loads light.
 const DesktopEditor = lazy(() => import("./DesktopEditor"));
@@ -59,6 +60,7 @@ export default function DesktopSessionDetail({
   const [branchCopied, setBranchCopied] = useState(false);
   const [filePanelOpen, setFilePanelOpen] = useState(true);
   const [filePanelView, setFilePanelView] = useState<"patches" | "stream">("patches");
+  const [editorNavigation, setEditorNavigation] = useState<{ path: string; requestId: number } | null>(null);
   const [liveStream, setLiveStream] = useState<{ scope: string; entries: LiveStreamEntry[] }>({ scope: "", entries: [] });
   // Match the resize floor so opening a terminal never takes more room than
   // the user can immediately reclaim.
@@ -277,6 +279,16 @@ export default function DesktopSessionDetail({
   const handleApprovalChange = useCallback((command: string | null) => {
     setApprovalCommand(command);
   }, []);
+  const openTimelineFileInEditor = useCallback(async (filepath: string) => {
+    try {
+      const [resolved] = await resolveWorkspaceFilepaths(cwd, [filepath]);
+      if (!resolved) return;
+      setEditorNavigation({ path: workspaceRelativePath(resolved, cwd), requestId: Date.now() });
+      onActiveTabChange("editor");
+    } catch {
+      // The timeline remains usable if the file was removed or the workspace changed.
+    }
+  }, [cwd, onActiveTabChange]);
   const handleContextCompaction = useCallback(() => {
     setEvents((current) => [
       ...current,
@@ -490,7 +502,7 @@ export default function DesktopSessionDetail({
         <DesktopFilesCanvas events={events} sessionCwd={cwd} />
       ) : activeTab === "editor" && !splitView && !transcriptOnly ? (
         <Suspense fallback={<div className="desktop-detail-state">Loading editor...</div>}>
-          <DesktopEditor workspaceRoot={cwd} />
+          <DesktopEditor workspaceRoot={cwd} navigation={editorNavigation} />
         </Suspense>
       ) : (
         <div className="detail-body">
@@ -594,6 +606,7 @@ export default function DesktopSessionDetail({
               />
             ) : undefined}
             onOpenTerminal={splitView || transcriptOnly ? undefined : onTerminalOpen}
+            onOpenFile={splitView || transcriptOnly ? undefined : openTimelineFileInEditor}
             terminalDisabled={splitView || transcriptOnly}
           />
         </div>

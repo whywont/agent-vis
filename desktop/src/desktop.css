@@ -1752,11 +1752,14 @@ body.resizing .desktop-collab-column-resize::after { background: rgba(224,184,92
 .desktop-editor-directory { cursor: pointer; color: var(--text); font-weight: 600; }
 .desktop-editor-directory:hover { background: var(--bg-hover); }
 .desktop-editor-directory span { color: var(--text-dim); font-size: 13px; }
-.desktop-editor-main { display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: #161616; }
-.desktop-editor-tabbar { display: flex; align-items: center; height: 40px; border-bottom: 1px solid var(--border); background: linear-gradient(100deg, #1d1d1d, #171717); }
+.desktop-editor-column { display: flex; min-width: 0; min-height: 0; flex-direction: column; gap: 6px; overflow: hidden; }
+.desktop-editor-main { display: flex; min-width: 0; min-height: 0; flex: 1; flex-direction: column; overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: #161616; }
+.desktop-editor-tabbar { display: flex; align-items: center; height: 40px; background: linear-gradient(100deg, #1d1d1d, #171717); }
 .desktop-editor-tab { align-self: stretch; display: flex; align-items: center; min-width: 0; max-width: calc(100% - 78px); padding: 0 15px; border-right: 1px solid var(--border); border-top: 2px solid var(--accent); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
-.desktop-editor-save { margin-left: auto; margin-right: 9px; padding: 5px 9px; border: 1px solid var(--accent-dim); border-radius: 3px; background: rgba(var(--accent-rgb), .1); color: var(--accent); cursor: pointer; font: 10px var(--font-mono); }
+.desktop-editor-save { margin-left: auto; margin-right: 7px; padding: 5px 9px; border: 1px solid var(--accent-dim); border-radius: 3px; background: rgba(var(--accent-rgb), .1); color: var(--accent); cursor: pointer; font: 10px var(--font-mono); }
 .desktop-editor-save:disabled { opacity: .35; cursor: default; }
+.desktop-editor-terminal-toggle { margin-right: 9px; padding: 5px 9px; border: 1px solid var(--border-light); border-radius: 3px; background: transparent; color: var(--text-muted); cursor: pointer; font: 10px var(--font-mono); }
+.desktop-editor-terminal-toggle:hover, .desktop-editor-terminal-toggle.active { border-color: var(--accent-dim); background: rgba(var(--accent-rgb), .1); color: var(--accent); }
 .desktop-editor-code-wrap { position: relative; min-width: 0; min-height: 0; flex: 1; overflow: hidden; }
 .desktop-editor-code-wrap .cm-editor { height: 100%; outline: 0; font: 12px/20px var(--font-mono); }
 .desktop-editor-code-wrap .cm-scroller { overflow: auto; font-family: inherit; }
@@ -1789,6 +1792,14 @@ body.resizing .desktop-collab-column-resize::after { background: rgba(224,184,92
 .desktop-editor-explain-content { height: calc(100% - 40px); overflow: auto; }
 .desktop-editor-explanation { padding: 14px; color: var(--text); white-space: pre-wrap; font: 12px/1.65 var(--font-sans); }
 .desktop-editor-error { margin: 0 14px 14px; padding: 9px; border: 1px solid rgba(212, 106, 106, .4); border-radius: 4px; color: var(--red); background: var(--red-dim); font: 11px/1.45 var(--font-mono); }
+.desktop-editor-terminal { box-sizing: border-box; height: 140px; flex-shrink: 0; margin: 0; }
+.desktop-editor-terminal .desktop-terminal-panel-header,
+.desktop-editor-terminal .desktop-terminal-panel-header:active { cursor: default; }
+.desktop-editor-terminal .desktop-terminal-panel-tab { cursor: default; }
+.desktop-editor-terminal .desktop-terminal-panel-tab:active { cursor: default; }
+.desktop-editor-terminal .desktop-terminal-resize-handle { z-index: 20; }
+.desktop-editor-terminal-body { position: relative; min-height: 0; flex: 1; overflow: hidden; }
+.desktop-editor-terminal-body .desktop-terminal-container { padding: 8px 12px; }
 
 .desktop-settings-page {
   width: min(860px, 100%);
@@ -2024,10 +2035,19 @@ body.resizing .desktop-collab-column-resize::after { background: rgba(224,184,92
 .desktop-diff-path {
   flex: 1;
   min-width: 0;
+  padding: 0;
   overflow: hidden;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.desktop-diff-path:hover:not(:disabled) { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.desktop-diff-path:disabled { cursor: default; }
 
 .desktop-diff-actions {
   display: flex;

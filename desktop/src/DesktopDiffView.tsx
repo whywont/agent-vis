@@ -50,10 +50,12 @@ export default function DesktopDiffView({
   patch,
   contextText,
   workspaceRoot,
+  onOpenFile,
 }: {
   patch: string;
   contextText?: string;
   workspaceRoot: string;
+  onOpenFile?: (filepath: string) => void;
 }) {
   const blocks = useMemo(() => parseDiff(patch), [patch]);
   if (!patch) return <em>no patch content</em>;
@@ -75,6 +77,7 @@ export default function DesktopDiffView({
             contextText={contextText}
             workspaceRoot={workspaceRoot}
             explanationKey={explanationKey}
+            onOpenFile={onOpenFile}
             key={explanationKey}
           />
         );
@@ -88,11 +91,13 @@ function DesktopDiffBlock({
   contextText,
   workspaceRoot,
   explanationKey,
+  onOpenFile,
 }: {
   block: DiffBlock;
   contextText?: string;
   workspaceRoot: string;
   explanationKey: string;
+  onOpenFile?: (filepath: string) => void;
 }) {
   const detailedExplanationKey = detailedDiffExplanationKey(explanationKey);
   const [copied, setCopied] = useState(false);
@@ -240,7 +245,7 @@ function DesktopDiffBlock({
     <div className="diff-block">
       <div className="diff-file-header">
         <span className={`diff-file-action action-${block.action}`}>{block.action}</span>
-        <span className="desktop-diff-path">{block.filepath}</span>
+        <button type="button" className="desktop-diff-path" disabled={!onOpenFile || block.action === "delete"} onClick={() => onOpenFile?.(block.filepath)} title={block.action === "delete" ? `${block.filepath} was deleted` : `Open ${block.filepath} in Editor`}>{block.filepath}</button>
         <div className="desktop-diff-actions">
           {editError && <span className="diff-edit-error" title={editError}>{editError}</span>}
           {editing ? (

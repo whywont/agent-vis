@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import "@xterm/xterm/css/xterm.css";
-import { resizeTerminal, startTerminal, writeTerminal } from "./desktop-api";
+import { resizeTerminal, startTerminal, stopTerminal, writeTerminal } from "./desktop-api";
 
 interface TerminalOutput {
   terminalId: string;
@@ -17,6 +17,7 @@ export default function DesktopTerminal({
   active,
   prefillResume,
   paneCount,
+  stopOnUnmount = false,
 }: {
   sessionCwd: string;
   sessionId: string;
@@ -26,6 +27,8 @@ export default function DesktopTerminal({
   active: boolean;
   prefillResume: boolean;
   paneCount: number;
+  /** Editor-owned terminals end when their dock closes. */
+  stopOnUnmount?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<import("@xterm/xterm").Terminal | null>(null);
@@ -49,7 +52,7 @@ export default function DesktopTerminal({
       const size = `${terminal.cols}:${terminal.rows}`;
       if (started && size !== lastSize) {
         lastSize = size;
-        void resizeTerminal(terminalId, terminal.cols, terminal.rows);
+        void resizeTerminal(terminalId, terminal.cols, terminal.rows).catch(() => {});
       }
     }
 
@@ -139,10 +142,11 @@ export default function DesktopTerminal({
       terminal?.dispose();
       terminalRef.current = null;
       fitAddonRef.current = null;
+      if (stopOnUnmount) void stopTerminal(terminalId).catch(() => {});
       // The session owner stops this terminal on an explicit close. This
       // cleanup also runs during Vite HMR, where killing Codex would be wrong.
     };
-  }, [prefillResume, sessionCwd, sessionId, sessionSource, terminalId]);
+  }, [prefillResume, sessionCwd, sessionId, sessionSource, stopOnUnmount, terminalId]);
 
   useLayoutEffect(() => {
     if (!active) return;
@@ -158,7 +162,7 @@ export default function DesktopTerminal({
       fitAddon.fit();
       terminal.refresh(0, terminal.rows - 1);
       terminal.focus();
-      void resizeTerminal(terminalIdRef.current, terminal.cols, terminal.rows);
+      void resizeTerminal(terminalIdRef.current, terminal.cols, terminal.rows).catch(() => {});
       return true;
     }
     // Session-owned canvases can reactivate after the dock's portal and width
