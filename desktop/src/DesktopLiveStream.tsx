@@ -51,7 +51,7 @@ export default function DesktopLiveStream({
       {entries.length ? entries.map((entry) => (
         <div className={`desktop-live-stream-line kind-${entry.kind}`} key={entry.id}>
           <b><span>{labels[entry.kind]}</span><time>{formatTime(entry.ts)}</time></b>
-          <pre>{entry.text}</pre>
+          <pre title={entry.kind === "tool" ? entry.text : undefined}>{entry.kind === "tool" ? shortToolCall(entry.text) : entry.text}</pre>
         </div>
       )) : <div className="desktop-live-stream-empty">Live bridge output appears here.</div>}
     </div>
@@ -83,6 +83,15 @@ export default function DesktopLiveStream({
       </button>}
     </aside>
   </>;
+}
+
+function shortToolCall(text: string): string {
+  const lines = text.split("\n");
+  const firstTwoLines = lines.slice(0, 2);
+  const maxCharacters = 180;
+  const visible = firstTwoLines.join("\n");
+  if (lines.length <= 2 && visible.length <= maxCharacters) return visible;
+  return `${visible.slice(0, maxCharacters - 1).trimEnd()}...`;
 }
 
 function currentSessionState(entries: LiveStreamEntry[]): "Working" | "Idle" | "Stopped" {
