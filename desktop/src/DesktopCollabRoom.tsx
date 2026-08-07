@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { SessionMeta } from "@/lib/types";
 import { collabDispatchPrompt } from "./collab-state";
@@ -70,8 +70,10 @@ export default function DesktopCollabRoom({
   const [leaseResource, setLeaseResource] = useState("");
   const [submissionTitle, setSubmissionTitle] = useState("");
   const [submissionSummary, setSubmissionSummary] = useState("");
+  const [groupColumnWidth, setGroupColumnWidth] = useState<number | null>(null);
   const [, setStreams] = useState<Record<string, AgentStreamEntry[]>>({});
   const stateRef = useRef<CollabRoomState | null>(null);
+  const conversationsRef = useRef<HTMLDivElement>(null);
   const responseBuffers = useRef(new Map<string, string>());
   const pendingChannels = useRef(new Map<string, Array<"group" | "private">>());
   const reconnectAttempts = useRef(new Set<string>());
@@ -316,6 +318,28 @@ export default function DesktopCollabRoom({
     onWorkerViewChange(next, workerId);
   }
 
+  function resizeConversationColumns(event: React.MouseEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    const conversations = conversationsRef.current;
+    if (!conversations) return;
+    event.preventDefault();
+    const bounds = conversations.getBoundingClientRect();
+    const handleWidth = 6;
+    const minimumColumnWidth = Math.min(360, Math.max(240, (bounds.width - handleWidth) * 0.35));
+    document.body.classList.add("resizing");
+    function onMove(moveEvent: MouseEvent) {
+      const available = bounds.width - handleWidth;
+      setGroupColumnWidth(Math.max(minimumColumnWidth, Math.min(available - minimumColumnWidth, moveEvent.clientX - bounds.left)));
+    }
+    function onUp() {
+      document.body.classList.remove("resizing");
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    }
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }
+
   async function addWorker(event: FormEvent) {
     event.preventDefault();
     const known = new Set(stateRef.current?.workers.map((worker) => worker.id) || []);
@@ -328,8 +352,9 @@ export default function DesktopCollabRoom({
   return <section className={`desktop-collab-room desktop-collab-chat-layout${openWorkers.length ? " direct-open" : ""}${openWorkers.length > 1 ? " multi-direct-open" : ""}`}>
     <button className="desktop-collab-coordination-fallback" type="button" onClick={() => setCoordinationOpen((open) => !open)}>Coordination</button>
     {error && <div className="desktop-collab-error" role="alert">{error}</div>}
-    <div className="desktop-collab-conversations">
+    <div className="desktop-collab-conversations" ref={conversationsRef} style={groupColumnWidth === null ? undefined : { "--desktop-collab-group-width": `${groupColumnWidth}px` } as CSSProperties}>
       <ConversationPane online={state.workers.filter((worker) => worker.runtimeStatus === "running").length} messages={groupMessages} draft={groupDraft} onDraft={setGroupDraft} onSubmit={sendGroup} busy={busy} placeholder="Message the room..." />
+      <div className="desktop-collab-column-resize" role="separator" aria-label="Resize group and private chats" aria-orientation="vertical" onMouseDown={resizeConversationColumns} />
       <aside className={`desktop-collab-agent-rail${openWorkers.length > 1 ? " multi" : ""}`}>
         {openWorkers.length > 0 && <div className="desktop-collab-open-agent-panes">{openWorkers.map((worker) => <DirectPane key={worker.id} worker={worker} active={worker.id === activeWorkerId} messages={state.messages.filter((message) => (message.authorId === "local-host" && message.recipientId === worker.id) || (message.authorId === worker.id && message.recipientId === "local-host"))} draft={directDrafts[worker.id] || ""} onDraft={(value) => setDirectDrafts((current) => ({ ...current, [worker.id]: value }))} onSubmit={(event) => void sendDirect(event, worker)} onActivate={() => activateWorker(worker.id)} onPublish={(message) => void mutate(() => postCollabAgentMessage(roomRef, worker, message.body, false))} onClose={() => closeWorker(worker.id)} onStart={() => void startWorker(worker)} busy={busy} />)}</div>}
         {openWorkers.length < 2 && <AgentRoster workers={state.workers} workerName={workerName} setWorkerName={setWorkerName} provider={provider} setProvider={setProvider} onAddWorker={addWorker} onSelect={activateWorker} onStart={(worker) => void startWorker(worker)} busy={busy} />}
@@ -340,11 +365,11 @@ export default function DesktopCollabRoom({
 }
 
 function ConversationPane({ online, messages, draft, onDraft, onSubmit, busy, placeholder }: { online: number; messages: CollabRoomState["messages"]; draft: string; onDraft: (value: string) => void; onSubmit: (event: FormEvent) => void; busy: boolean; placeholder: string }) {
-  return <main className="desktop-collab-conversation group"><header><strong># group chat</strong><span>{online} online</span></header><div className="desktop-collab-thread">{messages.map((message) => <article key={message.id} className={message.authorId === "local-host" ? "host" : "agent"}><header><b>{message.authorName}</b><time>{formatTimestamp(message.createdAt)}</time></header><p>{message.body}</p></article>)}{!messages.length && <p className="empty">Start the group conversation.</p>}</div><form onSubmit={onSubmit}><input value={draft} onChange={(event) => onDraft(event.target.value)} placeholder={placeholder} required /><button disabled={busy}>Send</button></form></main>;
+  return <main className="desktop-collab-conversation group"><header><strong># group chat</strong><span>{online} online</span></header><div className="desktop-collab-thread">{messages.map((message) => <article key={message.id} className={message.authorId === "local-host" ? "host" : "agent"}><header><b style={agentNameStyle(message.authorId)}>{message.authorName}</b><time>{formatTimestamp(message.createdAt)}</time></header><p>{message.body}</p></article>)}{!messages.length && <p className="empty">Start the group conversation.</p>}</div><form onSubmit={onSubmit}><input value={draft} onChange={(event) => onDraft(event.target.value)} placeholder={placeholder} required /><button disabled={busy}>Send</button></form></main>;
 }
 
 function DirectPane({ worker, active, messages, draft, onDraft, onSubmit, onActivate, onPublish, onClose, onStart, busy }: { worker: CollabWorker; active: boolean; messages: CollabRoomState["messages"]; draft: string; onDraft: (value: string) => void; onSubmit: (event: FormEvent) => void; onActivate: () => void; onPublish: (message: CollabRoomState["messages"][number]) => void; onClose: () => void; onStart: () => void; busy: boolean }) {
-  return <aside className={`desktop-collab-direct${active ? " active" : ""}`} onMouseDown={onActivate}><header><div><i className={`runtime ${worker.runtimeStatus}`} /><strong>{worker.name}</strong><span>{worker.provider} / private</span></div><button type="button" onClick={(event) => { event.stopPropagation(); onClose(); }} aria-label={`Close ${worker.name} chat`}>x</button></header>{worker.runtimeStatus !== "running" && supportsRuntime(worker) && <button className="start-agent" type="button" onClick={onStart} disabled={busy || worker.runtimeStatus === "starting"}>Start agent</button>}<section className="desktop-collab-private-thread"><header>Private chat</header>{messages.map((message) => <article key={message.id} className={message.authorId === "local-host" ? "host" : "agent"}><header><b>{message.authorName}</b><time>{formatTimestamp(message.createdAt)}</time>{message.authorId === worker.id && <button type="button" onClick={() => onPublish(message)}>Publish to group</button>}</header><p>{message.body}</p></article>)}{!messages.length && <p className="empty">Messages here stay between you and {worker.name}.</p>}</section><form onSubmit={onSubmit}><input value={draft} onChange={(event) => onDraft(event.target.value)} placeholder={`Message ${worker.name} privately...`} required /><button disabled={busy || (supportsRuntime(worker) && worker.runtimeStatus !== "running")}>Send</button></form></aside>;
+  return <aside className={`desktop-collab-direct${active ? " active" : ""}`} onMouseDown={onActivate}><header><div><i className={`runtime ${worker.runtimeStatus}`} /><strong style={agentNameStyle(worker.id)}>{worker.name}</strong><span>{worker.provider} / private</span></div><button type="button" onClick={(event) => { event.stopPropagation(); onClose(); }} aria-label={`Close ${worker.name} chat`}>x</button></header>{worker.runtimeStatus !== "running" && supportsRuntime(worker) && <button className="start-agent" type="button" onClick={onStart} disabled={busy || worker.runtimeStatus === "starting"}>Start agent</button>}<section className="desktop-collab-private-thread"><header>Private chat</header>{messages.map((message) => <article key={message.id} className={message.authorId === "local-host" ? "host" : "agent"}><header><b style={agentNameStyle(message.authorId)}>{message.authorName}</b><time>{formatTimestamp(message.createdAt)}</time>{message.authorId === worker.id && <button type="button" onClick={() => onPublish(message)}>Publish to group</button>}</header><p>{message.body}</p></article>)}{!messages.length && <p className="empty">Messages here stay between you and {worker.name}.</p>}</section><form onSubmit={onSubmit}><input value={draft} onChange={(event) => onDraft(event.target.value)} placeholder={`Message ${worker.name} privately...`} required /><button disabled={busy || (supportsRuntime(worker) && worker.runtimeStatus !== "running")}>Send</button></form></aside>;
 }
 
 function AgentRoster({ workers, workerName, setWorkerName, provider, setProvider, onAddWorker, onSelect, onStart, busy }: { workers: CollabWorker[]; workerName: string; setWorkerName: (value: string) => void; provider: string; setProvider: (value: string) => void; onAddWorker: (event: FormEvent) => void; onSelect: (workerId: string) => void; onStart: (worker: CollabWorker) => void; busy: boolean }) {
@@ -364,6 +389,13 @@ type CoordinationProps = {
 
 function supportsRuntime(worker: CollabWorker) { return worker.provider === "codex" || worker.provider === "claude"; }
 function runtimeLabel(worker: CollabWorker) { return supportsRuntime(worker) ? worker.runtimeStatus : worker.provider === "human" ? "person" : "adapter needed"; }
+function agentNameStyle(authorId: string): CSSProperties | undefined {
+  if (authorId === "local-host") return undefined;
+  const colors = ["#4ec9b0", "#dcdcaa", "#c586c0", "#ce9178", "#9cdcfe", "#b5cea8", "#d7a7ff", "#f2c97d"];
+  let hash = 0;
+  for (const character of authorId) hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
+  return { color: colors[hash % colors.length] };
+}
 function errorText(error: unknown) { return error instanceof Error ? error.message : String(error); }
 function formatTimestamp(value: string) { const date = new Date(value); return Number.isNaN(date.valueOf()) ? value : date.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); }
 function codexAgentText(item: unknown) { if (typeof item !== "object" || item === null) return ""; const record = item as Record<string, unknown>; return record.type === "agentMessage" && typeof record.text === "string" ? record.text.trim() : ""; }
