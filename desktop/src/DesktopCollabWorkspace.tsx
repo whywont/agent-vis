@@ -11,14 +11,10 @@ export default function DesktopCollabWorkspace({
   onSelectedWorkerChange: (workerId: string | null) => void;
 }) {
   return (
-    <section className="desktop-collab-workspace">
-      <div className="desktop-collab-workspace-body">
-        <DesktopCollabRoom
-          session={room}
-          selectedWorkerId={selectedWorkerId}
-          onSelectedWorkerChange={onSelectedWorkerChange}
-        />
-      </div>
-    </section>
+    <DesktopCollabRoom
+      session={room}
+      selectedWorkerId={selectedWorkerId}
+      onSelectedWorkerChange={onSelectedWorkerChange}
+    />
   );
 }

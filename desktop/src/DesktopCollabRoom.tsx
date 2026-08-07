@@ -215,7 +215,10 @@ export default function DesktopCollabRoom({
   useEffect(() => {
     if (!state) return;
     const reconnectable = state.workers.filter((worker) =>
-      worker.runtimeStatus === "running" && supportsRuntime(worker) && !reconnectAttempts.current.has(worker.id));
+      supportsRuntime(worker)
+      && Boolean(worker.sessionKey && worker.threadId)
+      && (worker.runtimeStatus === "running" || worker.runtimeStatus === "error")
+      && !reconnectAttempts.current.has(worker.id));
     if (!reconnectable.length) return;
     const timer = window.setTimeout(() => {
       for (const worker of reconnectable) void startWorker(worker);
