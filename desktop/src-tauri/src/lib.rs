@@ -14,10 +14,10 @@ use claude_stream::{
     connect_claude_thread, send_claude_turn, start_claude_session, ClaudeStreamState,
 };
 use codex_app_server::{
-    compact_codex_thread, connect_codex_thread, interrupt_codex_turn, list_codex_mcp_servers,
-    list_codex_models, list_codex_skills, read_codex_thread_status, respond_to_codex_approval,
-    send_codex_turn, set_codex_thread_model, start_codex_review, start_codex_session,
-    CodexAppServerState,
+    compact_codex_thread, connect_codex_thread, get_active_codex_turn, interrupt_codex_turn,
+    list_codex_mcp_servers, list_codex_models, list_codex_skills, read_codex_thread_status,
+    respond_to_codex_approval, send_codex_turn, set_codex_thread_model, start_codex_review,
+    start_codex_session, CodexAppServerState,
 };
 use explain::explain_diff;
 use mesh::{
@@ -75,6 +75,7 @@ pub fn run() {
             resize_terminal,
             stop_terminal,
             connect_codex_thread,
+            get_active_codex_turn,
             start_codex_session,
             send_codex_turn,
             compact_codex_thread,

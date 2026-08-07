@@ -36,6 +36,7 @@ struct CodexAppServerConnection {
 struct CodexConnectionLifecycle {
     initialized: bool,
     resumed_thread_id: Option<String>,
+    active_turn_id: Option<String>,
     instruction_sources: HashMap<String, Vec<String>>,
 }
 
@@ -94,6 +95,12 @@ pub(crate) struct NewCodexSessionRequest {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct NewCodexSession {
     id: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ActiveCodexTurn {
+    turn_id: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -203,6 +210,7 @@ fn start_connection(
                     }
                 }
             }
+            update_active_turn(&reader_connection, &message);
             emit_event(&app, &session_key, message);
         }
         emit_event(
@@ -212,6 +220,34 @@ fn start_connection(
         );
     });
     Ok(connection)
+}
+
+fn update_active_turn(connection: &CodexAppServerConnection, message: &Value) {
+    let method = message.get("method").and_then(Value::as_str);
+    let params = message.get("params").unwrap_or(&Value::Null);
+    let Ok(mut lifecycle) = connection.lifecycle.lock() else {
+        return;
+    };
+    match method {
+        Some("turn/started") => {
+            lifecycle.active_turn_id = params
+                .get("turn")
+                .and_then(|turn| turn.get("id"))
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+        }
+        Some("turn/completed") => lifecycle.active_turn_id = None,
+        Some("thread/status/changed")
+            if params
+                .get("status")
+                .and_then(|status| status.get("type"))
+                .and_then(Value::as_str)
+                == Some("idle") =>
+        {
+            lifecycle.active_turn_id = None;
+        }
+        _ => {}
+    }
 }
 
 fn resolve_codex_executable() -> String {
@@ -434,7 +470,7 @@ pub(crate) fn send_codex_turn(
         request(
             &connection,
             "turn/steer",
-            json!({ "threadId": request_data.thread_id, "turnId": turn_id, "input": input }),
+            json!({ "threadId": request_data.thread_id, "expectedTurnId": turn_id, "input": input }),
         )?;
     } else {
         request(
@@ -526,6 +562,28 @@ pub(crate) fn read_codex_thread_status(
         "rollout": read_rollout_status(&request_data.thread_id),
         "instructionSources": instruction_sources,
     }))
+}
+
+#[tauri::command]
+pub(crate) fn get_active_codex_turn(
+    state: State<'_, CodexAppServerState>,
+    request_data: CodexThreadRequest,
+) -> Result<ActiveCodexTurn, String> {
+    let connections = state
+        .connections
+        .lock()
+        .map_err(|_| "Codex app-server state is unavailable.".to_owned())?;
+    let Some(connection) = connections.get(&request_data.session_key) else {
+        return Ok(ActiveCodexTurn { turn_id: None });
+    };
+    let lifecycle = connection
+        .lifecycle
+        .lock()
+        .map_err(|_| "Codex app-server lifecycle state is unavailable.".to_owned())?;
+    let turn_id = (lifecycle.resumed_thread_id.as_deref() == Some(request_data.thread_id.as_str()))
+        .then(|| lifecycle.active_turn_id.clone())
+        .flatten();
+    Ok(ActiveCodexTurn { turn_id })
 }
 
 #[tauri::command]

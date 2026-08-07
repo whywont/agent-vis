@@ -215,6 +215,10 @@ export function setCodexThreadModel(sessionKey: string, threadId: string, cwd: s
 
 type CodexThreadRequest = { sessionKey: string; threadId: string; cwd: string };
 
+export function getActiveCodexTurn(sessionKey: string, threadId: string, cwd: string): Promise<{ turnId: string | null }> {
+  return invoke<{ turnId: string | null }>("get_active_codex_turn", { requestData: { sessionKey, threadId, cwd } });
+}
+
 export function readCodexThreadStatus(requestData: CodexThreadRequest): Promise<Record<string, unknown>> {
   return invoke<Record<string, unknown>>("read_codex_thread_status", { requestData });
 }

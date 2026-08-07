@@ -54,7 +54,7 @@ export default function DesktopSessionDetail({
   const [branchCopied, setBranchCopied] = useState(false);
   const [filePanelOpen, setFilePanelOpen] = useState(true);
   const [filePanelView, setFilePanelView] = useState<"patches" | "stream">("patches");
-  const [liveStream, setLiveStream] = useState<LiveStreamEntry[]>([]);
+  const [liveStream, setLiveStream] = useState<{ scope: string; entries: LiveStreamEntry[] }>({ scope: "", entries: [] });
   // Match the resize floor so opening a terminal never takes more room than
   // the user can immediately reclaim.
   const [terminalHeight, setTerminalHeight] = useState(140);
@@ -72,6 +72,9 @@ export default function DesktopSessionDetail({
   const fileTreeRef = useRef<HTMLDivElement>(null);
   const resizeHandleRef = useRef<HTMLDivElement>(null);
   const jumpRequestId = useRef(0);
+  const pendingLiveStreamRef = useRef<LiveStreamEntry[]>([]);
+  const liveStreamFlushTimer = useRef<number | null>(null);
+  const liveStreamEpochRef = useRef(0);
   const files = session.files?.join(",") || session.file;
   const transcriptOnly = Boolean(session.synced);
 
@@ -97,6 +100,21 @@ export default function DesktopSessionDetail({
       cancelled = true;
     };
   }, [files, initialEvents, isNewSession, session.modified, session.timestamp, session.id, session.cwd, session.model, session.source]);
+
+  const liveStreamScope = `${session.source}:${session.id}:${session.file}`;
+
+  useEffect(() => {
+    pendingLiveStreamRef.current = [];
+    liveStreamEpochRef.current += 1;
+    if (liveStreamFlushTimer.current !== null) {
+      window.clearTimeout(liveStreamFlushTimer.current);
+      liveStreamFlushTimer.current = null;
+    }
+  }, [liveStreamScope]);
+
+  useEffect(() => () => {
+    if (liveStreamFlushTimer.current !== null) window.clearTimeout(liveStreamFlushTimer.current);
+  }, []);
 
   useEffect(() => {
     const panel = fileTreeRef.current;
@@ -268,22 +286,23 @@ export default function DesktopSessionDetail({
     setEvents((current) => [...current, event]);
   }, []);
   const handleLiveStreamEvent = useCallback((event: LiveStreamEntry) => {
-    setLiveStream((current) => {
-      const index = current.findIndex((entry) => entry.id === event.id);
-      if (index < 0) {
-        const previous = current.at(-1);
-        // Lifecycle frames are sometimes repeated by a harness. Treat adjacent
-        // identical status as one portable stream entry, regardless of source.
-        if (event.kind === "system" && previous?.kind === "system" && previous.text === event.text) return current;
-        return [...current, { ...event, append: undefined }];
-      }
-      const next = [...current];
-      next[index] = event.append
-        ? { ...next[index], text: `${next[index].text}${event.text}` }
-        : { ...next[index], ...event, append: undefined };
-      return next;
-    });
-  }, []);
+    // App-server notifications can arrive token-by-token. Redraw the whole
+    // split view at a bounded rate so Stream cannot slow an active turn.
+    const epoch = liveStreamEpochRef.current;
+    pendingLiveStreamRef.current.push(event);
+    if (liveStreamFlushTimer.current !== null) return;
+    liveStreamFlushTimer.current = window.setTimeout(() => {
+      liveStreamFlushTimer.current = null;
+      // A queued bridge notification belongs to the selection that produced
+      // it. Never let it repopulate a newly selected session's Stream/card.
+      if (epoch !== liveStreamEpochRef.current) return;
+      const queued = pendingLiveStreamRef.current.splice(0);
+      if (queued.length) setLiveStream((current) => ({
+        scope: liveStreamScope,
+        entries: mergeLiveStreamEntries(current.scope === liveStreamScope ? current.entries : [], queued),
+      }));
+    }, 160);
+  }, [liveStreamScope]);
   const handleLiveTurnCompleted = useCallback(() => {
     window.dispatchEvent(new Event("live-session-turn-completed"));
   }, []);
@@ -501,8 +520,8 @@ export default function DesktopSessionDetail({
                 {filePanelView === "patches" ? (
                   <DesktopFileTree events={events} sessionCwd={cwd} onJumpToPatch={jumpToPatch} />
                 ) : (
-                  <DesktopLiveStream
-                    entries={liveStream}
+                <DesktopLiveStream
+                    entries={liveStream.scope === liveStreamScope ? liveStream.entries : []}
                     events={events}
                     sessionCwd={cwd}
                     branch={branch}
@@ -533,7 +552,7 @@ export default function DesktopSessionDetail({
               : matchTarget)}
             liveConversation={!transcriptOnly && (session.source === "codex" || session.source === "claude-code") ? (
               <DesktopLiveConversation
-                key={`${session.source}:${session.id}`}
+                key={liveStreamScope}
                 provider={session.source}
                 sessionKey={liveSessionKey || `${session.source}:${session.id}`}
                 threadId={session.id}
@@ -667,6 +686,24 @@ function mergeContinuationEvents(imported: AppEvent[], local: AppEvent[]): AppEv
     .map(timelineEventIdentity));
   const additions = local.filter((event) => event.kind !== "session_start" && !identities.has(timelineEventIdentity(event)));
   return [...imported, ...additions].sort((left, right) => Date.parse(left.ts) - Date.parse(right.ts));
+}
+
+function mergeLiveStreamEntries(current: LiveStreamEntry[], incoming: LiveStreamEntry[]): LiveStreamEntry[] {
+  const next = [...current];
+  for (const event of incoming) {
+    const index = next.findIndex((entry) => entry.id === event.id);
+    if (index < 0) {
+      const previous = next.at(-1);
+      // Lifecycle frames are sometimes duplicated by the harness.
+      if (event.kind === "system" && previous?.kind === "system" && previous.text === event.text) continue;
+      next.push({ ...event, append: undefined });
+    } else {
+      next[index] = event.append
+        ? { ...next[index], text: `${next[index].text}${event.text}` }
+        : { ...next[index], ...event, append: undefined };
+    }
+  }
+  return next;
 }
 
 interface TerminalSession {

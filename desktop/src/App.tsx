@@ -38,7 +38,7 @@ import {
 import { buildSessionHandoff, continuationModel } from "./session-handoff";
 
 const SESSION_POLL_INTERVAL_MS = 5000;
-const LIVE_SESSION_REFRESH_DEBOUNCE_MS = 450;
+const LIVE_SESSION_REFRESH_DEBOUNCE_MS = 2_000;
 
 export interface SessionMatchTarget {
   eventTs: string;

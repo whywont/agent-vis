@@ -37,7 +37,7 @@ export default function DesktopLiveStream({
 }) {
   const streamRef = useRef<HTMLDivElement>(null);
   const currentState = currentSessionState(entries);
-  const latestTool = [...entries].reverse().find((entry) => entry.kind === "tool");
+  const latestTool = latestRequestTool(entries, events);
   const changedFiles = changedRequestFiles(entries, events, sessionCwd);
   const usage = latestUsage(events);
 
@@ -58,7 +58,7 @@ export default function DesktopLiveStream({
     <aside className="desktop-current-session" aria-label="Current request">
       <header>Current request</header>
       <div className={`desktop-current-session-state is-${currentState.toLowerCase()}`}><i aria-hidden="true" />{currentState}</div>
-      {latestTool && <div className="desktop-current-session-row"><span>Latest tool</span><code>{latestTool.text.replace(/^\$\s*/, "")}</code></div>}
+      {latestTool && <div className="desktop-current-session-row"><span>Latest tool</span><code>{latestTool}</code></div>}
       <div className="desktop-current-session-row">
         <span>Files touched</span>
         {changedFiles.length ? <ul>{changedFiles.map((file) => <li key={file}>{file}</li>)}</ul> : <em>None yet</em>}
@@ -90,6 +90,19 @@ function currentSessionState(entries: LiveStreamEntry[]): "Working" | "Idle" | "
   if (status.includes("working")) return "Working";
   if (status.includes("stopped") || status.includes("failed")) return "Stopped";
   return "Idle";
+}
+
+function latestRequestTool(entries: LiveStreamEntry[], events: AppEvent[]): string | null {
+  // Live bridge frames arrive before the JSONL reader sees them. Once a
+  // transcript is loaded, use its tool history instead of retaining a tool
+  // from whichever session happened to stream most recently.
+  const latestInput = [...entries].reverse().find((entry) => entry.kind === "input")?.ts;
+  const latestUserMessage = [...events].reverse().find((event) => event.kind === "user_message")?.ts;
+  const requestStartedAt = latestInput || latestUserMessage;
+  const fromTranscript = [...events].reverse().find((event) => event.kind === "shell_command"
+    && (!requestStartedAt || Date.parse(event.ts) >= Date.parse(requestStartedAt)));
+  if (fromTranscript?.kind === "shell_command") return fromTranscript.cmd.replace(/^\$\s*/, "");
+  return [...entries].reverse().find((entry) => entry.kind === "tool")?.text.replace(/^\$\s*/, "") || null;
 }
 
 function changedRequestFiles(

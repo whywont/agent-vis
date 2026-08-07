@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { AppEvent } from "@/lib/types";
-import { interruptCodexTurn, respondToCodexApproval } from "./desktop-api";
+import { getActiveCodexTurn, interruptCodexTurn, respondToCodexApproval } from "./desktop-api";
 import { getHarnessAdapter, type LiveProvider, type ModelOption } from "./harness-adapters";
 import type { LiveStreamEntry } from "./DesktopLiveStream";
 
@@ -108,6 +108,15 @@ export default function DesktopLiveConversation({
     // status dot reflects the real harness state before the user sends it.
     if (initialDraft && state === "idle") void connect();
   }, [initialDraft, state]);
+
+  useEffect(() => {
+    if (provider !== "codex") return;
+    let cancelled = false;
+    void getActiveCodexTurn(sessionKey, threadId, cwd).then(({ turnId }) => {
+      if (!cancelled && turnId) setActiveTurnId((current) => current || turnId);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [cwd, provider, sessionKey, threadId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -320,7 +329,7 @@ export default function DesktopLiveConversation({
     }
     try {
       const imageUrls = images.map((image) => image.url);
-      onStreamEvent?.(streamEntry("input", text || `${imageUrls.length} image attachment${imageUrls.length === 1 ? "" : "s"}`));
+      const streamInput = text || `${imageUrls.length} image attachment${imageUrls.length === 1 ? "" : "s"}`;
       const isSlashCommand = text.startsWith("/") && exactSlashCommand;
       const callId = isSlashCommand ? crypto.randomUUID() : undefined;
       if (isSlashCommand && callId) {
@@ -344,6 +353,9 @@ export default function DesktopLiveConversation({
         }
       } else {
         await adapter.sendTurn({ sessionKey, threadId, cwd, activeTurnId, tokenUsage }, text, imageUrls);
+        // Do not show a local input as delivered until the harness has accepted
+        // it; otherwise a rejected request becomes a misleading ghost entry.
+        onStreamEvent?.(streamEntry("input", streamInput));
         if (provider === "codex" && !activeTurnId) {
           // The app-server's turn/started notification normally replaces this
           // immediately. It keeps Steer visibly ready if that notification is
