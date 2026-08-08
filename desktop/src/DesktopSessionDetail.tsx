@@ -11,7 +11,7 @@ import DesktopTimeline from "./DesktopTimeline";
 import DesktopTerminal from "./DesktopTerminal";
 import DesktopLiveConversation from "./DesktopLiveConversation";
 import DesktopLiveStream, { type LiveStreamEntry } from "./DesktopLiveStream";
-import { getGitBranch, readSession, resolveWorkspaceFilepaths, stopTerminal } from "./desktop-api";
+import { captureSessionHistory, getGitBranch, readSession, resolveWorkspaceFilepaths, stopTerminal } from "./desktop-api";
 import { startWindowDrag } from "./window-drag";
 import { workspaceRelativePath } from "./workspace-path";
 
@@ -321,8 +321,9 @@ export default function DesktopSessionDetail({
     }, 160);
   }, [liveStreamScope]);
   const handleLiveTurnCompleted = useCallback(() => {
+    if (liveSessionKey) void captureSessionHistory(liveSessionKey).catch(() => {});
     window.dispatchEvent(new Event("live-session-turn-completed"));
-  }, []);
+  }, [liveSessionKey]);
   const tokenUsage = useMemo(() => {
     const latest = [...events].reverse().find((event) => event.kind === "token_usage");
     return latest?.kind === "token_usage"
@@ -499,10 +500,10 @@ export default function DesktopSessionDetail({
       ) : error ? (
         <div className="desktop-detail-state error">{error}</div>
       ) : activeTab === "files" && !splitView && !transcriptOnly ? (
-        <DesktopFilesCanvas events={events} sessionCwd={cwd} />
+        <DesktopFilesCanvas events={events} sessionCwd={cwd} threadId={id} />
       ) : activeTab === "editor" && !splitView && !transcriptOnly ? (
         <Suspense fallback={<div className="desktop-detail-state">Loading editor...</div>}>
-          <DesktopEditor workspaceRoot={cwd} navigation={editorNavigation} />
+          <DesktopEditor workspaceRoot={cwd} navigation={editorNavigation} threadId={id} />
         </Suspense>
       ) : (
         <div className="detail-body">

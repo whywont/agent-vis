@@ -51,11 +51,13 @@ export default function DesktopDiffView({
   contextText,
   workspaceRoot,
   onOpenFile,
+  snapshotContent,
 }: {
   patch: string;
   contextText?: string;
   workspaceRoot: string;
   onOpenFile?: (filepath: string) => void;
+  snapshotContent?: string | null;
 }) {
   const blocks = useMemo(() => parseDiff(patch), [patch]);
   if (!patch) return <em>no patch content</em>;
@@ -78,6 +80,7 @@ export default function DesktopDiffView({
             workspaceRoot={workspaceRoot}
             explanationKey={explanationKey}
             onOpenFile={onOpenFile}
+            snapshotContent={snapshotContent}
             key={explanationKey}
           />
         );
@@ -92,12 +95,14 @@ function DesktopDiffBlock({
   workspaceRoot,
   explanationKey,
   onOpenFile,
+  snapshotContent,
 }: {
   block: DiffBlock;
   contextText?: string;
   workspaceRoot: string;
   explanationKey: string;
   onOpenFile?: (filepath: string) => void;
+  snapshotContent?: string | null;
 }) {
   const detailedExplanationKey = detailedDiffExplanationKey(explanationKey);
   const [copied, setCopied] = useState(false);
@@ -121,7 +126,9 @@ function DesktopDiffBlock({
 
   async function loadCurrentFile(): Promise<string> {
     if (fullContent !== null) return fullContent;
-    const content = await readWorkspaceFile(workspaceRoot, block.filepath);
+    const content = snapshotContent !== undefined
+      ? snapshotContent ?? ""
+      : await readWorkspaceFile(workspaceRoot, block.filepath);
     setFullContent(content);
     return content;
   }
@@ -259,7 +266,7 @@ function DesktopDiffBlock({
             </>
           ) : (
             <>
-              {block.action !== "delete" && (
+              {(block.action !== "delete" || snapshotContent !== undefined) && (
                 <button className={`diff-view-toggle${showFull ? " active" : ""}`} disabled={loadingFile} onClick={() => void toggleFull()}>
                   {loadingFile ? "loading..." : showFull ? "diff only" : "full file"}
                 </button>
@@ -267,7 +274,7 @@ function DesktopDiffBlock({
               <button className="diff-explain-btn" disabled={explaining} onClick={() => void explain()}>
                 {explaining ? "explaining..." : "explain"}
               </button>
-              {block.action !== "delete" && (
+              {block.action !== "delete" && snapshotContent === undefined && (
                 <button className="diff-copy-path-btn" title="Edit file" disabled={loadingFile} onClick={() => void openEditor()}>
                   <PencilIcon />
                 </button>

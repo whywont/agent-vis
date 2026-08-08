@@ -11,6 +11,8 @@ import {
   listSessions,
   listCollabRooms,
   readSession,
+  bindSessionHistory,
+  startSessionHistory,
   startClaudeSession,
   startCodexSession,
   syncAllMeshPeers,
@@ -292,9 +294,11 @@ export default function App() {
   ) {
     const requestedId = crypto.randomUUID();
     const sessionKey = `${provider}:${requestedId}`;
+    await startSessionHistory(sessionKey, cwd).catch(() => 0);
     const id = provider === "codex"
       ? (await startCodexSession(sessionKey, cwd, model)).id
       : await startClaudeSession(sessionKey, requestedId, cwd, model);
+    await bindSessionHistory(sessionKey, id).catch(() => {});
     const now = new Date().toISOString();
     const next: SessionMeta = {
       file: `live:${provider}:${id}`,

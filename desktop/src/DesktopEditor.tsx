@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { EditorState } from "@codemirror/state";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { EditorState, RangeSetBuilder } from "@codemirror/state";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { css } from "@codemirror/lang-css";
 import { html } from "@codemirror/lang-html";
@@ -7,13 +8,54 @@ import { javascript } from "@codemirror/lang-javascript";
 import { json } from "@codemirror/lang-json";
 import { markdown } from "@codemirror/lang-markdown";
 import { bracketMatching, HighlightStyle, indentOnInput, syntaxHighlighting } from "@codemirror/language";
-import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers } from "@codemirror/view";
+import { Decoration, drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers, WidgetType } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
-import { explainDiff, listWorkspaceFiles, readWorkspaceFile, saveWorkspaceFile, stopTerminal, type WorkspaceTreeEntry } from "./desktop-api";
+import { formatTime } from "@/utils/format";
+import { explainDiff, listWorkspaceFiles, readSessionFileHistory, readWorkspaceFile, saveWorkspaceFile, stopTerminal, type SessionFileVersion, type WorkspaceTreeEntry } from "./desktop-api";
 import DesktopTerminal from "./DesktopTerminal";
+import { snapshotHistoryOverlay, type HistoryOverlay } from "./editor-file-history";
 
 interface TreeNode { children: Map<string, TreeNode>; path?: string; }
 interface ExplainTarget { startLine: number; endLine: number; text: string; top: number; }
+
+class PatchLinesWidget extends WidgetType {
+  constructor(private readonly removedLines: string[], private readonly addedLines: string[]) { super(); }
+
+  toDOM() {
+    const wrapper = document.createElement("div");
+    wrapper.className = "desktop-editor-history-patch";
+    for (const line of this.removedLines) {
+      const row = document.createElement("div");
+      row.className = "removed";
+      row.textContent = `- ${line}`;
+      wrapper.append(row);
+    }
+    for (const line of this.addedLines) {
+      const row = document.createElement("div");
+      row.className = "added";
+      row.textContent = `+ ${line}`;
+      wrapper.append(row);
+    }
+    return wrapper;
+  }
+}
+
+function historyDecorations(state: EditorState, overlay: HistoryOverlay) {
+  const decorations: Array<{ from: number; decoration: Decoration }> = [];
+  for (const lineNumber of overlay.addedLines) {
+    if (lineNumber < 1 || lineNumber > state.doc.lines) continue;
+    const line = state.doc.line(lineNumber);
+    decorations.push({ from: line.from, decoration: Decoration.line({ class: "desktop-editor-history-added" }) });
+  }
+  for (const block of overlay.changeBlocks) {
+    const line = state.doc.line(Math.max(1, Math.min(state.doc.lines, block.beforeLine)));
+    decorations.push({ from: line.from, decoration: Decoration.widget({ widget: new PatchLinesWidget(block.removedLines, block.addedLines), side: -1, block: true }) });
+  }
+  decorations.sort((left, right) => left.from - right.from || left.decoration.startSide - right.decoration.startSide);
+  const builder = new RangeSetBuilder<Decoration>();
+  for (const item of decorations) builder.add(item.from, item.from, item.decoration);
+  return builder.finish();
+}
 
 // A restrained VS Code Dark+ inspired palette; avoid CodeMirror's purple fallback.
 const editorHighlightStyle = HighlightStyle.define([
@@ -124,7 +166,11 @@ function explainTargetForView(view: EditorView, hostElement: HTMLDivElement | nu
   };
 }
 
-export default function DesktopEditor({ workspaceRoot, navigation }: { workspaceRoot: string; navigation?: { path: string; requestId: number } | null }) {
+export default function DesktopEditor({ workspaceRoot, navigation, threadId }: {
+  workspaceRoot: string;
+  navigation?: { path: string; requestId: number } | null;
+  threadId: string;
+}) {
   const [files, setFiles] = useState<WorkspaceTreeEntry[]>([]);
   const [activePath, setActivePath] = useState<string | null>(null);
   const [content, setContent] = useState("");
@@ -144,6 +190,10 @@ export default function DesktopEditor({ workspaceRoot, navigation }: { workspace
   const [terminalPanes, setTerminalPanes] = useState<string[]>([]);
   const [activeTerminalPane, setActiveTerminalPane] = useState<string | null>(null);
   const [terminalSplit, setTerminalSplit] = useState(false);
+  const [historyVisible, setHistoryVisible] = useState(false);
+  const [historySelection, setHistorySelection] = useState<{ path: string; index: number } | null>(null);
+  const [historyVersions, setHistoryVersions] = useState<SessionFileVersion[]>([]);
+  const [historyRefresh, setHistoryRefresh] = useState(0);
   const contentRef = useRef(content);
   const savedContentRef = useRef(savedContent);
   const activePathRef = useRef(activePath);
@@ -155,6 +205,18 @@ export default function DesktopEditor({ workspaceRoot, navigation }: { workspace
   const dirty = content !== savedContent;
   const tree = useMemo(() => makeTree(files), [files]);
   const terminalId = useMemo(() => editorTerminalId(workspaceRoot), [workspaceRoot]);
+  const selectedHistoryIndex = historySelection?.path === activePath ? historySelection.index : null;
+  const selectedHistory = selectedHistoryIndex === null ? null : historyVersions[selectedHistoryIndex] ?? null;
+  const historySnapshot = useMemo(() => selectedHistory ? {
+    content: selectedHistory.content ?? "",
+    overlay: snapshotHistoryOverlay(
+      selectedHistoryIndex && selectedHistoryIndex > 0 ? historyVersions[selectedHistoryIndex - 1]?.content ?? null : null,
+      selectedHistory.content,
+    ),
+  } : null, [historyVersions, selectedHistory, selectedHistoryIndex]);
+  const historySlots = historyVersions.length + 1;
+  const activeHistorySlot = selectedHistoryIndex === null ? 0 : historyVersions.length - selectedHistoryIndex;
+  const hasRecordedHistory = historyVersions.length > 1 || historyVersions.some((version) => !version.baseline);
 
   useEffect(() => { contentRef.current = content; }, [content]);
   useEffect(() => { savedContentRef.current = savedContent; }, [savedContent]);
@@ -210,6 +272,7 @@ export default function DesktopEditor({ workspaceRoot, navigation }: { workspace
   useEffect(() => {
     if (!navigation || !files.some((file) => file.path === navigation.path)) return;
     const timer = window.setTimeout(() => {
+      setHistorySelection(null);
       setActivePath(navigation.path);
       setExpandedDirectories((current) => expandedWithParents(current, navigation.path));
     }, 0);
@@ -231,6 +294,29 @@ export default function DesktopEditor({ workspaceRoot, navigation }: { workspace
     });
     return () => { cancelled = true; };
   }, [activePath, workspaceRoot]);
+
+  useEffect(() => {
+    if (!activePath) return;
+    let cancelled = false;
+    void readSessionFileHistory(threadId, activePath).then((versions) => {
+      if (!cancelled) setHistoryVersions(versions);
+    }).catch(() => {
+      if (!cancelled) setHistoryVersions([]);
+    });
+    return () => { cancelled = true; };
+  }, [activePath, historyRefresh, threadId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: UnlistenFn | undefined;
+    void listen<{ sessionKey: string }>("session-history-updated", () => {
+      if (!cancelled) setHistoryRefresh((current) => current + 1);
+    }).then((stop) => {
+      if (cancelled) stop();
+      else unlisten = stop;
+    });
+    return () => { cancelled = true; unlisten?.(); };
+  }, []);
 
   const save = useCallback(async () => {
     const path = activePathRef.current;
@@ -256,15 +342,20 @@ export default function DesktopEditor({ workspaceRoot, navigation }: { workspace
 
   useEffect(() => {
     if (!activePath || loadedPath !== activePath || !editorHostRef.current) return;
+    const displayedContent = historySnapshot?.content ?? content;
+    const readOnly = Boolean(historySnapshot);
+    const baseState = EditorState.create({ doc: displayedContent });
+    const overlayExtension = historySnapshot ? EditorView.decorations.of(historyDecorations(baseState, historySnapshot.overlay)) : [];
     const view = new EditorView({
       state: EditorState.create({
-        doc: content,
+        doc: displayedContent,
         extensions: [
           history(), drawSelection(), indentOnInput(), bracketMatching(), highlightActiveLine(), highlightActiveLineGutter(),
           syntaxHighlighting(editorHighlightStyle, { fallback: true }), lineNumbers(), languageForPath(activePath),
-          keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab, { key: "Mod-s", run: () => { void save(); return true; } }]),
+          EditorState.readOnly.of(readOnly), EditorView.editable.of(!readOnly), overlayExtension,
+          keymap.of(readOnly ? [] : [...defaultKeymap, ...historyKeymap, indentWithTab, { key: "Mod-s", run: () => { void save(); return true; } }]),
           EditorView.updateListener.of((update) => {
-            if (update.docChanged) setContent(update.state.doc.toString());
+            if (!readOnly && update.docChanged) setContent(update.state.doc.toString());
             if (update.selectionSet) window.requestAnimationFrame(() => setExplainTarget(explainTargetForView(view, editorHostRef.current)));
           }),
         ],
@@ -275,10 +366,26 @@ export default function DesktopEditor({ workspaceRoot, navigation }: { workspace
     return () => { editorViewRef.current = null; view.destroy(); };
     // The CodeMirror document owns edits after it is created; recreate only for another file.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activePath, loadedPath, save]);
+  }, [activePath, historySnapshot, loadedPath, save]);
 
   function openFile(path: string) {
-    if (path === activePath || !dirty || window.confirm("Discard unsaved edits and open another file?")) setActivePath(path);
+    if (path === activePath) {
+      setHistorySelection(null);
+      setHistoryVisible(false);
+      return;
+    }
+    if (!dirty || window.confirm("Discard unsaved edits and open another file?")) {
+      setHistorySelection(null);
+      setHistoryVisible(false);
+      setActivePath(path);
+    }
+  }
+
+  function selectHistorySlot(slot: number) {
+    const nextSlot = Math.max(0, Math.min(historySlots - 1, slot));
+    setHistorySelection(nextSlot === 0 || !activePath
+      ? null
+      : { path: activePath, index: historyVersions.length - nextSlot });
   }
 
   function toggleDirectory(path: string) {
@@ -360,15 +467,29 @@ export default function DesktopEditor({ workspaceRoot, navigation }: { workspace
       <div className="desktop-editor-column">
         <div className="desktop-editor-main">
           <header className="desktop-editor-tabbar">
-            <span className="desktop-editor-tab" title={activePath || undefined}>{activePath ? <>{fileIcon(activePath)} {activePath.split("/").pop()}{dirty ? " •" : ""}</> : "No file selected"}</span>
-            <button type="button" className="desktop-editor-save" disabled={!dirty || saving} onClick={() => void save()}>{saving ? "Saving..." : "Save"}</button>
+            <button type="button" className={`desktop-editor-tab${selectedHistory ? "" : " active"}`} title={activePath || undefined} onClick={() => selectHistorySlot(0)} disabled={!activePath}>
+              {activePath ? <>{fileIcon(activePath)} {activePath.split("/").pop()}{dirty ? " •" : ""}</> : "No file selected"}
+            </button>
+            <button type="button" className="desktop-editor-save" disabled={Boolean(selectedHistory) || !dirty || saving} onClick={() => void save()}>{saving ? "Saving..." : "Save"}</button>
+            {hasRecordedHistory && <button type="button" className={`desktop-editor-history-toggle${historyVisible ? " active" : ""}`} onClick={() => { setHistoryVisible((current) => !current); if (historyVisible) selectHistorySlot(0); }} aria-expanded={historyVisible} title={`${historyVisible ? "Hide" : "Show"} recorded file versions`}>History</button>}
             <button type="button" className={`desktop-editor-terminal-toggle${terminalOpen ? " active" : ""}`} onClick={() => terminalOpen ? setTerminalOpen(false) : openTerminal()} aria-expanded={terminalOpen} title={terminalOpen ? "Close editor terminal" : "Open editor terminal"}>
               Terminal
             </button>
           </header>
+          {historyVisible && hasRecordedHistory && <div className="desktop-editor-version-strip">
+            <button type="button" className={!selectedHistory ? "active" : ""} onClick={() => selectHistorySlot(0)}>current</button>
+            {[...historyVersions].reverse().map((version, reverseIndex) => {
+              const index = historyVersions.length - reverseIndex - 1;
+              return <button type="button" className={selectedHistoryIndex === index ? "active" : ""} key={`${version.version}:${version.timestamp}`} onClick={() => setHistorySelection(activePath ? { path: activePath, index } : null)} title={`Recorded file from ${formatTime(version.timestamp)}`}>{version.baseline ? "start" : formatTime(version.timestamp)}</button>;
+            })}
+            <div className="desktop-editor-version-cycle" aria-label="Cycle file versions">
+              <button type="button" onClick={() => selectHistorySlot(activeHistorySlot + 1)} disabled={activeHistorySlot >= historySlots - 1} title="Older version" aria-label="Older version">‹</button>
+              <button type="button" onClick={() => selectHistorySlot(activeHistorySlot - 1)} disabled={activeHistorySlot === 0} title="Newer version" aria-label="Newer version">›</button>
+            </div>
+          </div>}
           {activePath && loadedPath === activePath ? (
             <div className="desktop-editor-code-wrap" ref={editorHostRef} onMouseMove={trackLine} onMouseLeave={() => setExplainTarget(null)}>
-              {explainTarget && <button type="button" className="desktop-editor-explain-line" style={{ top: explainTarget.top }} onMouseDown={(event) => event.preventDefault()} onClick={() => void explainSelection(explainTarget)} title={explainTarget.startLine === explainTarget.endLine ? `Explain line ${explainTarget.startLine}` : `Explain lines ${explainTarget.startLine}-${explainTarget.endLine}`} aria-label="Explain selected code">✦</button>}
+              {!selectedHistory && explainTarget && <button type="button" className="desktop-editor-explain-line" style={{ top: explainTarget.top }} onMouseDown={(event) => event.preventDefault()} onClick={() => void explainSelection(explainTarget)} title={explainTarget.startLine === explainTarget.endLine ? `Explain line ${explainTarget.startLine}` : `Explain lines ${explainTarget.startLine}-${explainTarget.endLine}`} aria-label="Explain selected code">✦</button>}
             </div>
           ) : <div className="desktop-editor-empty">Choose a file from the explorer.</div>}
         </div>

@@ -1755,7 +1755,20 @@ body.resizing .desktop-collab-column-resize::after { background: rgba(224,184,92
 .desktop-editor-column { display: flex; min-width: 0; min-height: 0; flex-direction: column; gap: 6px; overflow: hidden; }
 .desktop-editor-main { display: flex; min-width: 0; min-height: 0; flex: 1; flex-direction: column; overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: #161616; }
 .desktop-editor-tabbar { display: flex; align-items: center; height: 40px; background: linear-gradient(100deg, #1d1d1d, #171717); }
-.desktop-editor-tab { align-self: stretch; display: flex; align-items: center; min-width: 0; max-width: calc(100% - 78px); padding: 0 15px; border-right: 1px solid var(--border); border-top: 2px solid var(--accent); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.desktop-editor-tab { align-self: stretch; display: flex; min-width: 140px; max-width: 230px; align-items: center; padding: 0 15px; overflow: hidden; border: 0; border-right: 1px solid var(--border); border-top: 2px solid transparent; background: transparent; color: var(--text-muted); cursor: pointer; font: 11px var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.desktop-editor-tab.active { border-top-color: var(--accent); background: #161616; color: var(--text); }
+.desktop-editor-tab:disabled { cursor: default; }
+.desktop-editor-history-toggle { flex-shrink: 0; margin-right: 7px; padding: 5px 9px; border: 1px solid var(--border-light); border-radius: 3px; background: transparent; color: var(--text-muted); cursor: pointer; font: 10px var(--font-mono); }
+.desktop-editor-history-toggle:hover, .desktop-editor-history-toggle.active { border-color: var(--accent-dim); background: rgba(var(--accent-rgb), .08); color: var(--accent); }
+.desktop-editor-version-strip { display: flex; min-height: 34px; flex-shrink: 0; align-items: stretch; overflow-x: auto; overflow-y: hidden; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); background: #141414; scrollbar-color: var(--border-light) transparent; scrollbar-width: thin; }
+.desktop-editor-version-strip > button { min-width: max-content; padding: 0 11px; border: 0; border-right: 1px solid var(--border); border-bottom: 2px solid transparent; background: transparent; color: var(--text-dim); cursor: pointer; font: 9px var(--font-mono); }
+.desktop-editor-version-strip > button:hover { background: var(--bg-hover); color: var(--text); }
+.desktop-editor-version-strip > button.active { border-bottom-color: var(--accent); background: #191919; color: var(--accent); }
+.desktop-editor-version-cycle { display: flex; min-width: max-content; flex-shrink: 0; margin-left: auto; padding: 5px 7px; }
+.desktop-editor-version-cycle button { width: 23px; height: 24px; padding: 0; border: 1px solid var(--border-light); background: transparent; color: var(--text-muted); cursor: pointer; font: 16px/1 var(--font-mono); }
+.desktop-editor-version-cycle button + button { border-left: 0; }
+.desktop-editor-version-cycle button:hover:not(:disabled) { border-color: var(--accent-dim); color: var(--accent); }
+.desktop-editor-version-cycle button:disabled { cursor: default; opacity: .3; }
 .desktop-editor-save { margin-left: auto; margin-right: 7px; padding: 5px 9px; border: 1px solid var(--accent-dim); border-radius: 3px; background: rgba(var(--accent-rgb), .1); color: var(--accent); cursor: pointer; font: 10px var(--font-mono); }
 .desktop-editor-save:disabled { opacity: .35; cursor: default; }
 .desktop-editor-terminal-toggle { margin-right: 9px; padding: 5px 9px; border: 1px solid var(--border-light); border-radius: 3px; background: transparent; color: var(--text-muted); cursor: pointer; font: 10px var(--font-mono); }
@@ -1771,6 +1784,11 @@ body.resizing .desktop-collab-column-resize::after { background: rgba(224,184,92
 .desktop-editor-code-wrap .cm-line { padding: 0; }
 .desktop-editor-code-wrap .cm-selectionBackground,
 .desktop-editor-code-wrap .cm-content ::selection { background: rgba(var(--accent-rgb), .22) !important; }
+.desktop-editor-code-wrap .cm-line.desktop-editor-history-added { background: rgba(75, 150, 92, .17); box-shadow: inset 3px 0 rgba(83, 184, 106, .72); }
+.desktop-editor-history-patch { border-top: 1px solid rgba(199, 82, 82, .16); border-bottom: 1px solid rgba(199, 82, 82, .16); white-space: pre; font: 12px/20px var(--font-mono); }
+.desktop-editor-history-patch div { padding: 0 18px 0 62px; }
+.desktop-editor-history-patch .removed { background: rgba(145, 55, 55, .15); color: #d7958e; }
+.desktop-editor-history-patch .added { background: rgba(75, 150, 92, .17); color: #8ecb9b; }
 .desktop-editor-explorer-resize { position: relative; width: 6px; cursor: col-resize; }
 .desktop-editor-explorer-resize::before { position: absolute; top: 0; bottom: 0; left: 50%; width: 1px; content: ""; background: transparent; transform: translateX(-50%); }
 .desktop-editor-explorer-resize:hover::before,

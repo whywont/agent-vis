@@ -7,6 +7,7 @@ mod mesh;
 mod search;
 mod secrets;
 mod semantic;
+mod session_history;
 mod sessions;
 mod settings;
 mod terminal;
@@ -32,6 +33,9 @@ use mesh::{
     connect_mesh_peer, get_mesh_status, regenerate_mesh_identity, sync_all_mesh_peers, MeshState,
 };
 use search::{search_sessions, SearchIndexState};
+use session_history::{
+    bind_session_history, capture_session_history, read_session_file_history, start_session_history,
+};
 use sessions::{delete_session, get_session_modified, list_sessions, read_session_records};
 use settings::{
     get_desktop_appearance, get_desktop_settings, get_session_sharing_settings,
@@ -78,6 +82,10 @@ pub fn run() {
             delete_session,
             search_sessions,
             read_session_records,
+            start_session_history,
+            bind_session_history,
+            capture_session_history,
+            read_session_file_history,
             get_desktop_settings,
             get_session_sharing_settings,
             get_desktop_appearance,

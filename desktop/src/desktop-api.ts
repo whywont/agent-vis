@@ -350,6 +350,29 @@ export function startCodexSession(sessionKey: string, cwd: string, model: string
   return invoke<NewCodexSession>("start_codex_session", { requestData: { sessionKey, cwd, model } });
 }
 
+export interface SessionFileVersion {
+  version: number;
+  timestamp: string;
+  content: string | null;
+  baseline: boolean;
+}
+
+export function startSessionHistory(sessionKey: string, workspaceRoot: string): Promise<number> {
+  return invoke<number>("start_session_history", { sessionKey, workspaceRoot });
+}
+
+export function bindSessionHistory(sessionKey: string, threadId: string): Promise<void> {
+  return invoke<void>("bind_session_history", { request: { sessionKey, threadId } });
+}
+
+export function captureSessionHistory(sessionKey: string, timestamp?: string): Promise<number> {
+  return invoke<number>("capture_session_history", { request: { sessionKey, timestamp } });
+}
+
+export function readSessionFileHistory(threadId: string, filepath: string): Promise<SessionFileVersion[]> {
+  return invoke<SessionFileVersion[]>("read_session_file_history", { request: { threadId, filepath } });
+}
+
 export function sendCodexTurn(
   sessionKey: string,
   threadId: string,

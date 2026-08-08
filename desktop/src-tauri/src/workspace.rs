@@ -7,8 +7,8 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 pub(crate) const MAX_EDIT_FILE_BYTES: u64 = 8 * 1024 * 1024;
-const MAX_WORKSPACE_FILES: usize = 10_000;
-const MAX_WORKSPACE_DEPTH: usize = 32;
+pub(crate) const MAX_WORKSPACE_FILES: usize = 10_000;
+pub(crate) const MAX_WORKSPACE_DEPTH: usize = 32;
 
 fn authorized_workspace_roots(app: &tauri::AppHandle) -> Result<HashSet<PathBuf>, String> {
     let mut roots = trusted_workspace_roots()?;
@@ -48,7 +48,7 @@ pub(crate) struct ListWorkspaceFilesRequest {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WorkspaceTreeEntry {
-    path: String,
+    pub(crate) path: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -169,7 +169,7 @@ pub(crate) fn list_workspace_files(
     Ok(files)
 }
 
-fn collect_workspace_files(
+pub(crate) fn collect_workspace_files(
     root: &Path,
     directory: &Path,
     depth: usize,

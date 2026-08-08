@@ -147,6 +147,9 @@ fn start_connection(
         for line in BufReader::new(stdout).lines() {
             let Ok(line) = line else { break };
             if let Ok(message) = serde_json::from_str::<Value>(&line) {
+                if message.get("type").and_then(Value::as_str) == Some("result") {
+                    crate::session_history::capture_session_history_now(&app, &session_key);
+                }
                 emit_event(&app, &session_key, message);
             }
         }

@@ -57,6 +57,7 @@ dependencies = [
  "security-framework",
  "serde",
  "serde_json",
+ "sha2",
  "snow",
  "tauri",
  "tauri-build",

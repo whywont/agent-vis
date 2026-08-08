@@ -213,6 +213,17 @@ fn start_connection(
                 }
             }
             update_active_turn(&reader_connection, &message);
+            let method = message.get("method").and_then(Value::as_str);
+            let completed_file_change = method == Some("item/completed")
+                && message
+                    .get("params")
+                    .and_then(|params| params.get("item"))
+                    .and_then(|item| item.get("type"))
+                    .and_then(Value::as_str)
+                    == Some("fileChange");
+            if completed_file_change || method == Some("turn/completed") {
+                crate::session_history::capture_session_history_now(&app, &session_key);
+            }
             emit_event(&app, &session_key, message);
         }
         emit_event(
