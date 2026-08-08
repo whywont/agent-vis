@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import type { AppEvent, FileChangeEvent, TranscriptSessionMeta } from "@/lib/types";
+import type { AppEvent, FileChangeEvent, SessionMeta, TranscriptSessionMeta } from "@/lib/types";
 import { timelineEventIdentity } from "@/lib/timeline-events";
 import type { SessionMatchTarget } from "./App";
 import { formatTime } from "@/utils/format";
@@ -35,6 +35,9 @@ export default function DesktopSessionDetail({
   initialEvents,
   onLiveActivity,
   onContinuationDraftSent,
+  relatedSessions,
+  onOpenSession,
+  onSplitSession,
 }: {
   session: TranscriptSessionMeta;
   sessionName: string | null;
@@ -51,6 +54,9 @@ export default function DesktopSessionDetail({
   initialEvents?: AppEvent[];
   onLiveActivity?: () => void;
   onContinuationDraftSent?: () => void;
+  relatedSessions: SessionMeta[];
+  onOpenSession: (sessionId: string) => void;
+  onSplitSession: (sessionId: string) => void;
 }) {
   const isNewSession = session.file.startsWith("live:");
   const [events, setEvents] = useState<AppEvent[]>(() => initialEvents || (isNewSession ? [sessionStartEvent(session)] : []));
@@ -66,6 +72,24 @@ export default function DesktopSessionDetail({
   // Match the resize floor so opening a terminal never takes more room than
   // the user can immediately reclaim.
   const [terminalHeight, setTerminalHeight] = useState(140);
+  const subagentEvents = useMemo<AppEvent[]>(() => relatedSessions
+    .filter((candidate) => candidate.parentSessionId === session.id)
+    .map((candidate) => ({
+      kind: "subagent_spawn" as const,
+      ts: candidate.timestamp || candidate.modified,
+      sessionId: candidate.id,
+      agentPath: candidate.agentPath,
+      agentNickname: candidate.agentNickname,
+      agentDepth: candidate.agentDepth ?? 1,
+      agentStatus: candidate.agentStatus,
+    })), [relatedSessions, session.id]);
+  const timelineEvents = useMemo(() => [...events, ...subagentEvents].sort((left, right) => {
+    if (left.kind === "session_start") return -1;
+    if (right.kind === "session_start") return 1;
+    const leftTime = Date.parse(left.ts || "");
+    const rightTime = Date.parse(right.ts || "");
+    return (Number.isNaN(leftTime) ? 0 : leftTime) - (Number.isNaN(rightTime) ? 0 : rightTime);
+  }), [events, subagentEvents]);
   const [terminalPlacement, setTerminalPlacement] = useState<"bottom" | "sessions">("bottom");
   const [terminalDockBounds, setTerminalDockBounds] = useState<CSSProperties | null>(null);
   const [terminals, setTerminals] = useState<TerminalSession[]>([]);
@@ -462,6 +486,7 @@ export default function DesktopSessionDetail({
           </button>
           <span className="meta-tag">{cwd.replace(/^\/(?:Users|home)\/[^/]+/, "~")}</span>
           <span className="meta-tag">{formatTime(timestamp)}</span>
+          {session.parentSessionId && <button className="desktop-parent-session-link" type="button" onClick={() => onOpenSession(session.parentSessionId!)}>← parent</button>}
         </div>
         <div className="desktop-header-tabs" aria-label="Session views">
           <button
@@ -593,7 +618,7 @@ export default function DesktopSessionDetail({
             </button>
           ) : null}
           <DesktopTimeline
-            events={events}
+            events={timelineEvents}
             sessionCwd={cwd}
             sessionKey={`${session.source}:${session.id}`}
             matchTarget={approvalTimelineTarget || (fileTimelineSelection?.baseTarget === matchTarget
@@ -620,6 +645,8 @@ export default function DesktopSessionDetail({
             onOpenTerminal={splitView || transcriptOnly ? undefined : onTerminalOpen}
             onOpenFile={splitView || transcriptOnly ? undefined : openTimelineFileInEditor}
             terminalDisabled={splitView || transcriptOnly}
+            onOpenSubagent={onOpenSession}
+            onSplitSubagent={onSplitSession}
           />
         </div>
       )}

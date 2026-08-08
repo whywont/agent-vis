@@ -580,6 +580,15 @@ export default function App() {
                   return remaining;
                 });
               }}
+              sessions={sessions}
+              onOpenSession={(sessionId) => {
+                const target = sessions.find((session) => session.id === sessionId);
+                if (target) selectSession(sessionFiles(target), null);
+              }}
+              onSplitSession={(sessionId) => {
+                const target = sessions.find((session) => session.id === sessionId);
+                if (target) addSplitSession(sessionFiles(target));
+              }}
             />
           ) : null}
         </main>

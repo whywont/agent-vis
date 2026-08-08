@@ -1,4 +1,4 @@
-import type { AppEvent, TranscriptSessionMeta } from "@/lib/types";
+import type { AppEvent, SessionMeta, TranscriptSessionMeta } from "@/lib/types";
 import type { SessionMatchTarget } from "./App";
 import DesktopSessionDetail from "./DesktopSessionDetail";
 
@@ -19,6 +19,9 @@ export default function DesktopSessionWorkspace({
   initialEvents,
   onLiveActivity,
   onContinuationDraftSent,
+  sessions,
+  onOpenSession,
+  onSplitSession,
 }: {
   primary: TranscriptSessionMeta;
   secondary: TranscriptSessionMeta | null;
@@ -36,6 +39,9 @@ export default function DesktopSessionWorkspace({
   initialEvents?: AppEvent[];
   onLiveActivity?: () => void;
   onContinuationDraftSent?: () => void;
+  sessions: SessionMeta[];
+  onOpenSession: (sessionId: string) => void;
+  onSplitSession: (sessionId: string) => void;
 }) {
   const split = Boolean(secondary);
   return (
@@ -58,6 +64,9 @@ export default function DesktopSessionWorkspace({
           initialEvents={initialEvents}
           onLiveActivity={onLiveActivity}
           onContinuationDraftSent={onContinuationDraftSent}
+          relatedSessions={sessions}
+          onOpenSession={onOpenSession}
+          onSplitSession={onSplitSession}
         />
       </div>
       {secondary && (
@@ -73,6 +82,9 @@ export default function DesktopSessionWorkspace({
             onTerminalOpen={() => onTerminalOpen(secondary)}
             onTerminalClose={onTerminalClose}
             matchTarget={null}
+            relatedSessions={sessions}
+            onOpenSession={onOpenSession}
+            onSplitSession={onSplitSession}
           />
         </div>
       )}

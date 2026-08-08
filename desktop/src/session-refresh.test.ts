@@ -39,6 +39,10 @@ describe("desktop session refresh", () => {
     expect(sessionListsEqual(next, [...next])).toBe(true);
   });
 
+  it("detects newly discovered sub-agent relationship metadata", () => {
+    expect(sessionListsEqual([session()], [session({ parentSessionId: "parent", agentNickname: "Linnaeus", agentStatus: "complete" })])).toBe(false);
+  });
+
   it("reconciles the selected session with refreshed metadata", () => {
     const selected = session();
     const refreshed = session({ modified: "2026-08-02T00:00:06Z" });

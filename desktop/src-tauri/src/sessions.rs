@@ -28,6 +28,11 @@ pub(crate) struct SessionMeta {
     pub(crate) cli_version: String,
     pub(crate) source: &'static str,
     pub(crate) project: Option<String>,
+    pub(crate) parent_session_id: Option<String>,
+    pub(crate) agent_path: Option<String>,
+    pub(crate) agent_nickname: Option<String>,
+    pub(crate) agent_depth: Option<u64>,
+    pub(crate) agent_status: Option<String>,
     #[serde(default)]
     pub(crate) synced: bool,
 }
@@ -45,6 +50,16 @@ struct SyncedSessionManifest {
     cli_version: String,
     source: String,
     project: Option<String>,
+    #[serde(default)]
+    parent_session_id: Option<String>,
+    #[serde(default)]
+    agent_path: Option<String>,
+    #[serde(default)]
+    agent_nickname: Option<String>,
+    #[serde(default)]
+    agent_depth: Option<u64>,
+    #[serde(default)]
+    agent_status: Option<String>,
 }
 
 impl SyncedSessionManifest {
@@ -60,6 +75,11 @@ impl SyncedSessionManifest {
             cli_version: session.cli_version.clone(),
             source: session.source.to_owned(),
             project: session.project.clone(),
+            parent_session_id: session.parent_session_id.clone(),
+            agent_path: session.agent_path.clone(),
+            agent_nickname: session.agent_nickname.clone(),
+            agent_depth: session.agent_depth,
+            agent_status: session.agent_status.clone(),
         }
     }
 
@@ -80,6 +100,11 @@ impl SyncedSessionManifest {
             cli_version: self.cli_version,
             source,
             project: self.project,
+            parent_session_id: self.parent_session_id,
+            agent_path: self.agent_path,
+            agent_nickname: self.agent_nickname,
+            agent_depth: self.agent_depth,
+            agent_status: self.agent_status,
             synced: true,
         })
     }
@@ -201,6 +226,47 @@ fn read_last_claude_timestamp(path: &Path) -> Option<String> {
     None
 }
 
+fn read_last_codex_agent_status(path: &Path) -> Option<String> {
+    let mut file = File::open(path).ok()?;
+    let mut offset = file.metadata().ok()?.len();
+    let mut leading_fragment = Vec::new();
+    const CHUNK_SIZE: usize = 64 * 1024;
+
+    while offset > 0 {
+        let read_size = usize::try_from(offset.min(CHUNK_SIZE as u64)).ok()?;
+        offset -= read_size as u64;
+        file.seek(SeekFrom::Start(offset)).ok()?;
+        let mut chunk = vec![0; read_size];
+        file.read_exact(&mut chunk).ok()?;
+        chunk.extend_from_slice(&leading_fragment);
+        let mut lines = chunk.split(|byte| *byte == b'\n');
+        leading_fragment = lines.next().unwrap_or_default().to_vec();
+        for line in lines.rev() {
+            if let Some(status) = codex_agent_status_from_line(line) {
+                return Some(status);
+            }
+        }
+    }
+    codex_agent_status_from_line(&leading_fragment)
+}
+
+fn codex_agent_status_from_line(line: &[u8]) -> Option<String> {
+    let value = serde_json::from_slice::<Value>(line).ok()?;
+    if value.get("type").and_then(Value::as_str) != Some("event_msg") {
+        return None;
+    }
+    match value
+        .get("payload")
+        .and_then(|payload| payload.get("type"))
+        .and_then(Value::as_str)
+    {
+        Some("task_complete") => Some("complete".to_owned()),
+        Some("task_started") => Some("running".to_owned()),
+        Some("turn_aborted") => Some("interrupted".to_owned()),
+        _ => None,
+    }
+}
+
 fn collect_codex(dir: &Path, root: &Path, output: &mut Vec<SessionMeta>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
@@ -226,6 +292,10 @@ fn collect_codex(dir: &Path, root: &Path, output: &mut Vec<SessionMeta>) {
             continue;
         };
         let payload = meta.get("payload").unwrap_or(&meta);
+        let spawn = payload
+            .get("source")
+            .and_then(|value| value.get("subagent"))
+            .and_then(|value| value.get("thread_spawn"));
         let Ok(stat) = path.metadata() else { continue };
         let file = path
             .strip_prefix(root)
@@ -250,6 +320,19 @@ fn collect_codex(dir: &Path, root: &Path, output: &mut Vec<SessionMeta>) {
             cli_version: json_string(payload, "cli_version"),
             source: "codex",
             project: None,
+            parent_session_id: spawn
+                .map(|value| json_string(value, "parent_thread_id"))
+                .filter(|value| !value.is_empty()),
+            agent_path: spawn
+                .map(|value| json_string(value, "agent_path"))
+                .filter(|value| !value.is_empty()),
+            agent_nickname: spawn
+                .map(|value| json_string(value, "agent_nickname"))
+                .filter(|value| !value.is_empty()),
+            agent_depth: spawn
+                .and_then(|value| value.get("depth"))
+                .and_then(Value::as_u64),
+            agent_status: spawn.and_then(|_| read_last_codex_agent_status(&path)),
             synced: false,
         });
     }
@@ -307,6 +390,11 @@ fn collect_claude(root: &Path, output: &mut Vec<SessionMeta>) {
                 cli_version: json_string(&meta, "version"),
                 source: "claude-code",
                 project: (!project_name.is_empty()).then_some(project_name.clone()),
+                parent_session_id: None,
+                agent_path: None,
+                agent_nickname: None,
+                agent_depth: None,
+                agent_status: None,
                 synced: false,
             });
         }
@@ -915,6 +1003,11 @@ mod tests {
             cli_version: String::new(),
             source: "codex",
             project: None,
+            parent_session_id: None,
+            agent_path: None,
+            agent_nickname: None,
+            agent_depth: None,
+            agent_status: None,
             synced: false,
         }];
 
@@ -1004,6 +1097,54 @@ mod tests {
 
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].timestamp, "2026-08-02T00:00:00Z");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn codex_session_preserves_subagent_thread_spawn_relationship() {
+        let root = temp_dir("codex-subagent-meta");
+        let path = root.join("child.jsonl");
+        fs::write(
+            &path,
+            concat!(
+                "{\"type\":\"session_meta\",\"timestamp\":\"2026-08-08T00:00:00Z\",\"payload\":{",
+                "\"id\":\"child\",\"cwd\":\"/repo\",\"source\":{\"subagent\":{\"thread_spawn\":{",
+                "\"parent_thread_id\":\"parent\",\"depth\":2,",
+                "\"agent_path\":\"/root/lead_review\",\"agent_nickname\":\"Linnaeus\"}}}}}\n"
+            ),
+        )
+        .unwrap();
+
+        let mut sessions = Vec::new();
+        collect_codex(&root, &root, &mut sessions);
+
+        assert_eq!(sessions[0].parent_session_id.as_deref(), Some("parent"));
+        assert_eq!(sessions[0].agent_path.as_deref(), Some("/root/lead_review"));
+        assert_eq!(sessions[0].agent_nickname.as_deref(), Some("Linnaeus"));
+        assert_eq!(sessions[0].agent_depth, Some(2));
+        assert_eq!(sessions[0].agent_status, None);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn codex_subagent_uses_latest_task_lifecycle_status() {
+        let root = temp_dir("codex-subagent-status");
+        let path = root.join("child.jsonl");
+        fs::write(
+            &path,
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"child\",\"cwd\":\"/repo\",",
+                "\"source\":{\"subagent\":{\"thread_spawn\":{\"parent_thread_id\":\"parent\"}}}}}\n",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\"}}\n",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\"}}\n"
+            ),
+        )
+        .unwrap();
+
+        let mut sessions = Vec::new();
+        collect_codex(&root, &root, &mut sessions);
+
+        assert_eq!(sessions[0].agent_status.as_deref(), Some("complete"));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1132,6 +1273,11 @@ mod tests {
             cli_version: "1.0".to_owned(),
             source: "codex",
             project: Some("workspace".to_owned()),
+            parent_session_id: None,
+            agent_path: None,
+            agent_nickname: None,
+            agent_depth: None,
+            agent_status: None,
             synced: false,
         }
     }

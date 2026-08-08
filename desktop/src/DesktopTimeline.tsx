@@ -51,6 +51,8 @@ export default function DesktopTimeline({
   onOpenTerminal,
   onOpenFile,
   terminalDisabled,
+  onOpenSubagent,
+  onSplitSubagent,
 }: {
   events: AppEvent[];
   sessionCwd: string;
@@ -64,8 +66,10 @@ export default function DesktopTimeline({
   onOpenTerminal?: () => void;
   onOpenFile?: (filepath: string) => void;
   terminalDisabled?: boolean;
+  onOpenSubagent?: (sessionId: string) => void;
+  onSplitSubagent?: (sessionId: string) => void;
 }) {
-  return <DesktopTimelineForSession key={sessionKey} events={events} sessionCwd={sessionCwd} sessionKey={sessionKey} matchTarget={matchTarget} liveConversation={liveConversation} onOpenTerminal={onOpenTerminal} onOpenFile={onOpenFile} terminalDisabled={terminalDisabled} />;
+  return <DesktopTimelineForSession key={sessionKey} events={events} sessionCwd={sessionCwd} sessionKey={sessionKey} matchTarget={matchTarget} liveConversation={liveConversation} onOpenTerminal={onOpenTerminal} onOpenFile={onOpenFile} terminalDisabled={terminalDisabled} onOpenSubagent={onOpenSubagent} onSplitSubagent={onSplitSubagent} />;
 }
 
 function DesktopTimelineForSession({
@@ -77,6 +81,8 @@ function DesktopTimelineForSession({
   onOpenTerminal,
   onOpenFile,
   terminalDisabled,
+  onOpenSubagent,
+  onSplitSubagent,
 }: {
   events: AppEvent[];
   sessionCwd: string;
@@ -90,6 +96,8 @@ function DesktopTimelineForSession({
   onOpenTerminal?: () => void;
   onOpenFile?: (filepath: string) => void;
   terminalDisabled?: boolean;
+  onOpenSubagent?: (sessionId: string) => void;
+  onSplitSubagent?: (sessionId: string) => void;
 }) {
   const [filterPreferences, setFilterPreferences] = useState<TimelineFilterPreferences>(() =>
     loadTimelineFilterPreferences(sessionKey)
@@ -263,6 +271,8 @@ function DesktopTimelineForSession({
             matchRequestKey={targetMatchesEvent(matchTarget, event) ? targetRequestKey(matchTarget) : null}
             expanded={expandedEvents.has(timelineEventIdentity(event)) || autoExpandedAgentEvent === timelineEventIdentity(event)}
             onOpenFile={onOpenFile}
+            onOpenSubagent={onOpenSubagent}
+            onSplitSubagent={onSplitSubagent}
             onExpandedChange={(nextExpanded) => {
               const identity = timelineEventIdentity(event);
               if (!nextExpanded && autoExpandedAgentEvent === identity) setDismissedAutoExpandedAgentEvent(identity);
@@ -304,6 +314,8 @@ function DesktopTimelineEntry({
   matchRequestKey,
   expanded,
   onOpenFile,
+  onOpenSubagent,
+  onSplitSubagent,
   onExpandedChange,
 }: {
   event: TimelineEvent;
@@ -313,6 +325,8 @@ function DesktopTimelineEntry({
   matchRequestKey: string | null;
   expanded: boolean;
   onOpenFile?: (filepath: string) => void;
+  onOpenSubagent?: (sessionId: string) => void;
+  onSplitSubagent?: (sessionId: string) => void;
   onExpandedChange: (expanded: boolean) => void;
 }) {
   const [dismissedMatchRequest, setDismissedMatchRequest] = useState<string | null>(null);
@@ -362,6 +376,16 @@ function DesktopTimelineEntry({
         <time>{formatTime(event.ts)}</time>
       </div>
     );
+  }
+
+  if (event.kind === "subagent_spawn") {
+    return <div className="desktop-subagent-spawn" data-event-key={eventKey(event)} data-event-search-key={eventSearchKey(event)}>
+      <span className="desktop-subagent-spawn-mark">agent</span>
+      <div><strong>{event.agentNickname || event.agentPath?.split("/").filter(Boolean).at(-1) || event.sessionId.slice(0, 12)}</strong><small>{event.agentPath || `depth ${event.agentDepth}`}{event.agentStatus ? ` · ${event.agentStatus}` : ""}</small></div>
+      <time>{formatTime(event.ts)}</time>
+      <button type="button" onClick={() => onOpenSubagent?.(event.sessionId)}>Open transcript</button>
+      <button type="button" onClick={() => onSplitSubagent?.(event.sessionId)}>Open split</button>
+    </div>;
   }
 
   const style = entryStyle(event);
@@ -483,6 +507,9 @@ function entryStyle(event: Exclude<TimelineEvent, { kind: "token_usage" }>) {
   if (event.kind === "context_compaction") {
     return { className: "context-compaction", badge: "badge-context-compaction", label: "context" };
   }
+  if (event.kind === "subagent_spawn") {
+    return { className: "subagent-spawn", badge: "badge-agent", label: "agent" };
+  }
   return ({
     user_message: { className: "user-msg", badge: "badge-user", label: "user" },
     agent_message: { className: "agent-msg", badge: "badge-agent", label: "agent" },
@@ -497,5 +524,6 @@ function summary(event: Exclude<TimelineEvent, { kind: "token_usage" }>): string
   if (event.kind === "shell_command") return truncate(event.cmd, 120);
   if (event.kind === "tool_output") return truncate(event.output, 120);
   if (event.kind === "context_compaction") return "Context compacted - agent is resuming with a handoff summary";
+  if (event.kind === "subagent_spawn") return `Spawned ${event.agentNickname || event.agentPath || event.sessionId}`;
   return truncate(event.text, 120);
 }

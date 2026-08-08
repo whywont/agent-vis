@@ -20,7 +20,7 @@ export function visibleTimelineEvents(
       ? showTokenUsage
       // Context compaction explains a pause in a live session, so it is a
       // system status rather than another filterable transcript category.
-      : event.kind === "context_compaction" || activeFilters.has(event.kind)
+      : event.kind === "context_compaction" || event.kind === "subagent_spawn" || activeFilters.has(event.kind)
   ));
 }
 
