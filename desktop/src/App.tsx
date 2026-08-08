@@ -289,6 +289,7 @@ export default function App() {
   async function startSession(
     provider: LiveProvider,
     model: string,
+    effort: string,
     cwd: string,
     replacedSession?: SessionMeta,
   ) {
@@ -296,8 +297,8 @@ export default function App() {
     const sessionKey = `${provider}:${requestedId}`;
     await startSessionHistory(sessionKey, cwd).catch(() => 0);
     const id = provider === "codex"
-      ? (await startCodexSession(sessionKey, cwd, model)).id
-      : await startClaudeSession(sessionKey, requestedId, cwd, model);
+      ? (await startCodexSession(sessionKey, cwd, model, effort)).id
+      : await startClaudeSession(sessionKey, requestedId, cwd, model, effort);
     await bindSessionHistory(sessionKey, id).catch(() => {});
     const now = new Date().toISOString();
     const next: SessionMeta = {
@@ -368,6 +369,7 @@ export default function App() {
     const { session: local } = await startSession(
       session.source,
       continuationModel(session),
+      "default",
       cwd,
       session,
     );

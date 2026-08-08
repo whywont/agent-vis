@@ -143,6 +143,8 @@ export interface CollabWorker {
   id: string;
   name: string;
   provider: string;
+  model: string;
+  effort: string;
   role: string;
   worktreePath: string;
   branch: string;
@@ -213,8 +215,8 @@ export function getCollabRoomState(roomRef: string): Promise<CollabRoomState> {
   return invoke<CollabRoomState>("get_collab_room_state", { roomRef });
 }
 
-export function addCollabWorker(roomRef: string, name: string, provider: string, role: string): Promise<CollabRoomState> {
-  return invoke<CollabRoomState>("add_collab_worker", { request: { roomRef, name, provider, role } });
+export function addCollabWorker(roomRef: string, name: string, provider: string, model: string, effort: string, role: string): Promise<CollabRoomState> {
+  return invoke<CollabRoomState>("add_collab_worker", { request: { roomRef, name, provider, model, effort, role } });
 }
 
 export function createCollabTask(roomRef: string, title: string, scope: string): Promise<CollabRoomState> {
@@ -346,8 +348,8 @@ export interface NewCodexSession {
   id: string;
 }
 
-export function startCodexSession(sessionKey: string, cwd: string, model: string): Promise<NewCodexSession> {
-  return invoke<NewCodexSession>("start_codex_session", { requestData: { sessionKey, cwd, model } });
+export function startCodexSession(sessionKey: string, cwd: string, model: string, effort = ""): Promise<NewCodexSession> {
+  return invoke<NewCodexSession>("start_codex_session", { requestData: { sessionKey, cwd, model, effort: effort === "default" ? "" : effort } });
 }
 
 export interface SessionFileVersion {
@@ -395,6 +397,8 @@ export interface CodexModel {
   displayName?: string;
   description?: string;
   isDefault?: boolean;
+  defaultReasoningEffort?: string;
+  supportedReasoningEfforts?: Array<{ reasoningEffort: string; description: string }>;
 }
 
 export async function listCodexModels(sessionKey: string, threadId: string, cwd: string): Promise<CodexModel[]> {
@@ -444,8 +448,8 @@ export function connectClaudeThread(sessionKey: string, threadId: string, cwd: s
   return invoke<void>("connect_claude_thread", { requestData: { sessionKey, threadId, cwd } });
 }
 
-export function startClaudeSession(sessionKey: string, threadId: string, cwd: string, model: string): Promise<string> {
-  return invoke<string>("start_claude_session", { requestData: { sessionKey, threadId, cwd, model } });
+export function startClaudeSession(sessionKey: string, threadId: string, cwd: string, model: string, effort = ""): Promise<string> {
+  return invoke<string>("start_claude_session", { requestData: { sessionKey, threadId, cwd, model, effort: effort === "default" ? "" : effort } });
 }
 
 export function sendClaudeTurn(sessionKey: string, text: string, imageUrls: string[]): Promise<void> {

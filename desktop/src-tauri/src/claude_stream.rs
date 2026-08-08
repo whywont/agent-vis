@@ -57,6 +57,7 @@ pub(crate) struct NewClaudeSessionRequest {
     thread_id: String,
     cwd: String,
     model: Option<String>,
+    effort: Option<String>,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -102,6 +103,7 @@ fn start_connection(
     new_thread_id: Option<&str>,
     cwd: &str,
     model: Option<&str>,
+    effort: Option<&str>,
 ) -> Result<Arc<ClaudeStreamConnection>, String> {
     let mut command = Command::new(claude_executable());
     command.current_dir(cwd).args([
@@ -123,6 +125,9 @@ fn start_connection(
         command.args(["--session-id", thread_id]);
         if let Some(model) = model.filter(|model| !model.is_empty() && *model != "default") {
             command.args(["--model", model]);
+        }
+        if let Some(effort) = effort.filter(|effort| !effort.is_empty() && *effort != "default") {
+            command.args(["--effort", effort]);
         }
     }
     let mut child = command
@@ -184,6 +189,7 @@ fn connection_for(
         None,
         &request.cwd,
         None,
+        None,
     )?;
     connections.insert(request.session_key.clone(), Arc::clone(&connection));
     Ok(connection)
@@ -210,6 +216,7 @@ pub(crate) fn start_claude_session(
         Some(&request_data.thread_id),
         &request_data.cwd,
         request_data.model.as_deref(),
+        request_data.effort.as_deref(),
     )?;
     connections.insert(session_key.clone(), connection);
     Ok(request_data.thread_id)

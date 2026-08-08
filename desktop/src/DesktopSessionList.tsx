@@ -5,7 +5,7 @@ import { formatDate, formatTime } from "@/utils/format";
 import type { SessionMatchTarget } from "./App";
 import { chooseWorkspaceDirectory, readSession, searchSessions, type SessionSearchResponse } from "./desktop-api";
 import { listCodexModels } from "./desktop-api";
-import { CLAUDE_MODEL_OPTIONS, type LiveProvider, type ModelOption } from "./harness-adapters";
+import { CLAUDE_EFFORT_OPTIONS, CLAUDE_MODEL_OPTIONS, type EffortOption, type LiveProvider, type ModelOption } from "./harness-adapters";
 import type { SessionSharingMode } from "./desktop-api";
 import { MAX_SESSION_ALIAS_LENGTH, sessionAlias, type SessionAliases } from "./session-aliases";
 import { loadPinnedSessions, savePinnedSessions } from "./session-pins";
@@ -29,7 +29,7 @@ interface DesktopSessionListProps {
   meshSyncReceipts: MeshSyncReceipts;
   hasConfiguredSharingDevice: boolean;
   onOpenSettings: () => void;
-  onStartSession: (provider: LiveProvider, model: string, cwd: string) => Promise<unknown>;
+  onStartSession: (provider: LiveProvider, model: string, effort: string, cwd: string) => Promise<unknown>;
   onContinueSyncedSession: (session: SessionMeta) => Promise<void>;
   onHideSessions: () => void;
   onSelectSession: (files: string, target: SessionMatchTarget | null) => void;
@@ -104,6 +104,8 @@ export default function DesktopSessionList({
   const [newSessionProvider, setNewSessionProvider] = useState<LiveProvider | null>(null);
   const [newSessionModel, setNewSessionModel] = useState<string | null>(null);
   const [newSessionModels, setNewSessionModels] = useState<readonly ModelOption[]>([]);
+  const [newSessionModelEfforts, setNewSessionModelEfforts] = useState<Record<string, readonly EffortOption[]>>({});
+  const [newSessionEffort, setNewSessionEffort] = useState<string | null>(null);
   const [newSessionLoading, setNewSessionLoading] = useState(false);
   const [newSessionError, setNewSessionError] = useState("");
   const [menuOpenFor, setMenuOpenFor] = useState<string | null>(null);
@@ -336,6 +338,8 @@ export default function DesktopSessionList({
             newSessionProvider={newSessionProvider}
             newSessionModel={newSessionModel}
             newSessionModels={newSessionModels}
+            newSessionModelEfforts={newSessionModelEfforts}
+            newSessionEffort={newSessionEffort}
             newSessionLoading={newSessionLoading}
             newSessionError={newSessionError}
             onNewSession={() => {
@@ -343,14 +347,18 @@ export default function DesktopSessionList({
               setNewSessionProvider(null);
               setNewSessionModel(null);
               setNewSessionModels([]);
+              setNewSessionModelEfforts({});
+              setNewSessionEffort(null);
               setNewSessionError("");
             }}
             onChooseHarness={(provider) => {
               setNewSessionProvider(provider);
               setNewSessionModel(null);
+              setNewSessionEffort(null);
               setNewSessionError("");
               if (provider === "claude-code") {
                 setNewSessionModels(CLAUDE_MODEL_OPTIONS);
+                setNewSessionModelEfforts(Object.fromEntries(CLAUDE_MODEL_OPTIONS.map(([model]) => [model, CLAUDE_EFFORT_OPTIONS])));
                 return;
               }
               setNewSessionLoading(true);
@@ -362,6 +370,13 @@ export default function DesktopSessionList({
                     model.description || model.displayName || (model.isDefault ? "Codex default" : "Codex model"),
                   ]).filter(([id]) => Boolean(id));
                   setNewSessionModels(options.length ? options : [["", "Codex default"]]);
+                  setNewSessionModelEfforts(Object.fromEntries(models.map((model) => [
+                    model.id || model.model || "",
+                    [
+                      ["default", `Use ${model.defaultReasoningEffort || "the model"} default`],
+                      ...(model.supportedReasoningEfforts || []).map((option): EffortOption => [option.reasoningEffort, option.description]),
+                    ],
+                  ])));
                 })
                 .catch((reason: unknown) => {
                   setNewSessionError(actionError(reason));
@@ -370,12 +385,13 @@ export default function DesktopSessionList({
                 .finally(() => setNewSessionLoading(false));
             }}
             onChooseModel={(model) => setNewSessionModel(model)}
+            onChooseEffort={(effort) => setNewSessionEffort(effort)}
             currentSessionCwd={currentSessionCwd}
             onUseCurrentDirectory={(cwd) => {
-              if (!newSessionProvider || newSessionModel === null) return;
+              if (!newSessionProvider || newSessionModel === null || newSessionEffort === null) return;
               setNewSessionLoading(true);
               setNewSessionError("");
-              void onStartSession(newSessionProvider, newSessionModel, cwd)
+              void onStartSession(newSessionProvider, newSessionModel, newSessionEffort, cwd)
                 .then(() => {
                   setNewSessionOpen(false);
                   setNewSessionProvider(null);
@@ -385,11 +401,11 @@ export default function DesktopSessionList({
                 .finally(() => setNewSessionLoading(false));
             }}
             onChooseDirectory={() => {
-              if (!newSessionProvider || newSessionModel === null) return;
+              if (!newSessionProvider || newSessionModel === null || newSessionEffort === null) return;
               setNewSessionLoading(true);
               setNewSessionError("");
               void chooseWorkspaceDirectory()
-                .then((cwd) => cwd ? onStartSession(newSessionProvider, newSessionModel, cwd) : undefined)
+                .then((cwd) => cwd ? onStartSession(newSessionProvider, newSessionModel, newSessionEffort, cwd) : undefined)
                 .then(() => {
                   setNewSessionOpen(false);
                   setNewSessionProvider(null);
@@ -843,11 +859,14 @@ function SessionUtilityActions({
   newSessionProvider,
   newSessionModel,
   newSessionModels,
+  newSessionModelEfforts,
+  newSessionEffort,
   newSessionLoading,
   newSessionError,
   onNewSession,
   onChooseHarness,
   onChooseModel,
+  onChooseEffort,
   currentSessionCwd,
   onUseCurrentDirectory,
   onChooseDirectory,
@@ -859,11 +878,14 @@ function SessionUtilityActions({
   newSessionProvider: LiveProvider | null;
   newSessionModel: string | null;
   newSessionModels: readonly ModelOption[];
+  newSessionModelEfforts: Record<string, readonly EffortOption[]>;
+  newSessionEffort: string | null;
   newSessionLoading: boolean;
   newSessionError: string;
   onNewSession: () => void;
   onChooseHarness: (provider: LiveProvider) => void;
   onChooseModel: (model: string) => void;
+  onChooseEffort: (effort: string) => void;
   currentSessionCwd: string | null;
   onUseCurrentDirectory: (cwd: string) => void;
   onChooseDirectory: () => void;
@@ -909,6 +931,15 @@ function SessionUtilityActions({
                   </button>
                 ))}
                 {newSessionError && <em>{newSessionError}</em>}
+              </>
+            ) : newSessionEffort === null ? (
+              <>
+                <header>Choose reasoning effort</header>
+                {(newSessionModelEfforts[newSessionModel] || [["default", "Use the provider default"]]).map(([effort, description]) => (
+                  <button type="button" key={effort} onClick={() => onChooseEffort(effort)}>
+                    <code>{effort}</code><small>{description}</small>
+                  </button>
+                ))}
               </>
             ) : (
               <>

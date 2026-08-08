@@ -3,7 +3,7 @@ import { collabDispatchPrompt, collabDispatchState } from "./collab-state";
 import type { CollabRoomState, CollabWorker } from "./desktop-api";
 
 const alpha: CollabWorker = {
-  id: "worker-a", name: "Alpha", provider: "codex", role: "agent worker",
+  id: "worker-a", name: "Alpha", provider: "codex", model: "gpt-5", effort: "high", role: "agent worker",
   worktreePath: "/tmp/alpha", branch: "agent-vis/alpha", createdAt: "",
   sessionKey: "alpha-session", threadId: "alpha-thread", runtimeStatus: "running", runtimeError: "",
 };

@@ -24,6 +24,8 @@ pub(crate) struct CollabWorker {
     id: String,
     name: String,
     provider: String,
+    model: String,
+    effort: String,
     role: String,
     worktree_path: String,
     branch: String,
@@ -106,6 +108,8 @@ pub(crate) struct AddWorkerRequest {
     room_ref: String,
     name: String,
     provider: String,
+    model: String,
+    effort: String,
     role: String,
 }
 
@@ -283,6 +287,7 @@ fn open_database(room: &CollabRoomContext) -> Result<Connection, String> {
              INSERT OR IGNORE INTO coordinator_meta(id, next_fencing_token) VALUES (1, 1);
              CREATE TABLE IF NOT EXISTS workers (
                id TEXT PRIMARY KEY, name TEXT NOT NULL, provider TEXT NOT NULL, role TEXT NOT NULL,
+               model TEXT NOT NULL DEFAULT '', effort TEXT NOT NULL DEFAULT '',
                worktree_path TEXT NOT NULL UNIQUE, branch TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL
              );
              CREATE TABLE IF NOT EXISTS tasks (
@@ -345,6 +350,8 @@ fn ensure_worker_runtime_columns(connection: &Connection) -> Result<(), String> 
         ("thread_id", "TEXT"),
         ("runtime_status", "TEXT NOT NULL DEFAULT 'offline'"),
         ("runtime_error", "TEXT NOT NULL DEFAULT ''"),
+        ("model", "TEXT NOT NULL DEFAULT ''"),
+        ("effort", "TEXT NOT NULL DEFAULT ''"),
     ] {
         if !columns.contains(name) {
             connection
@@ -401,21 +408,23 @@ fn load_state(room: &CollabRoomContext) -> Result<CollabRoomState, String> {
 }
 
 fn query_workers(connection: &Connection) -> Result<Vec<CollabWorker>, String> {
-    let mut statement = connection.prepare("SELECT id,name,provider,role,worktree_path,branch,created_at,session_key,thread_id,runtime_status,runtime_error FROM workers ORDER BY created_at").map_err(|error| error.to_string())?;
+    let mut statement = connection.prepare("SELECT id,name,provider,model,effort,role,worktree_path,branch,created_at,session_key,thread_id,runtime_status,runtime_error FROM workers ORDER BY created_at").map_err(|error| error.to_string())?;
     let rows = statement
         .query_map([], |row| {
             Ok(CollabWorker {
                 id: row.get(0)?,
                 name: row.get(1)?,
                 provider: row.get(2)?,
-                role: row.get(3)?,
-                worktree_path: row.get(4)?,
-                branch: row.get(5)?,
-                created_at: row.get(6)?,
-                session_key: row.get(7)?,
-                thread_id: row.get(8)?,
-                runtime_status: row.get(9)?,
-                runtime_error: row.get(10)?,
+                model: row.get(3)?,
+                effort: row.get(4)?,
+                role: row.get(5)?,
+                worktree_path: row.get(6)?,
+                branch: row.get(7)?,
+                created_at: row.get(8)?,
+                session_key: row.get(9)?,
+                thread_id: row.get(10)?,
+                runtime_status: row.get(11)?,
+                runtime_error: row.get(12)?,
             })
         })
         .map_err(|error| error.to_string())?
@@ -524,6 +533,8 @@ fn worker_exists(transaction: &Transaction<'_>, worker_id: &str) -> Result<bool,
 fn add_worker(room: &CollabRoomContext, request: AddWorkerRequest) -> Result<(), String> {
     let name = validate_text(&request.name, "Worker name", false)?;
     let provider = validate_identifier(&request.provider, "Worker provider")?;
+    let model = validate_text(&request.model, "Worker model", true)?;
+    let effort = validate_text(&request.effort, "Worker effort", true)?;
     let role = validate_text(&request.role, "Worker role", false)?;
     let id = unique_id("worker");
     let branch = format!("agent-vis/{}/{}", room.id, id);
@@ -544,8 +555,8 @@ fn add_worker(room: &CollabRoomContext, request: AddWorkerRequest) -> Result<(),
     let created_at = now_iso();
     let connection = open_database(room)?;
     if let Err(error) = connection.execute(
-        "INSERT INTO workers(id,name,provider,role,worktree_path,branch,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7)",
-        params![id, name, provider, role, worktree.to_string_lossy(), branch, created_at],
+        "INSERT INTO workers(id,name,provider,model,effort,role,worktree_path,branch,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+        params![id, name, provider, model, effort, role, worktree.to_string_lossy(), branch, created_at],
     ) {
         let _ = Command::new("git").args(["worktree", "remove", "--force"]).arg(&worktree).current_dir(&room.cwd).status();
         return Err(error.to_string());
@@ -1125,6 +1136,8 @@ mod tests {
                 room_ref: "collab:test-room".to_owned(),
                 name: "Writer".to_owned(),
                 provider: "codex".to_owned(),
+                model: "gpt-5".to_owned(),
+                effort: "high".to_owned(),
                 role: "contributor".to_owned(),
             },
         )
