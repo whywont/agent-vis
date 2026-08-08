@@ -68,6 +68,8 @@ export interface FileChangeEvent {
   files: FileInfo[];
   callId?: string;
   toolName?: string;
+  /** How strongly the transcript proves that this tool changed the file. */
+  attribution?: "tool_completed" | "tool_requested" | "legacy";
 }
 
 export interface ShellCommandEvent {

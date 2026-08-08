@@ -50,6 +50,11 @@ describe("extractPatchFiles", () => {
     const patch = "diff --git a/foo b/foo\n--- a/foo\n+++ b/foo";
     expect(extractPatchFiles(patch)).toEqual([]);
   });
+
+  it("requires patch headers to occupy their own line", () => {
+    const patch = 'const sample = "*** Update File: /repo/src/app.ts\\n-old\\n+new";';
+    expect(extractPatchFiles(patch)).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -216,6 +221,31 @@ describe("parseEvent - context compaction", () => {
 });
 
 describe("parseEvent — event_msg patch_apply_end", () => {
+  it("parses authoritative completed file changes from current Codex rollouts", () => {
+    const result = parseEvent({
+      timestamp: "2026-08-08T04:46:07Z",
+      type: "event_msg",
+      payload: {
+        type: "item_completed",
+        item: {
+          type: "FileChange",
+          id: "exec-file-change",
+          changes: {
+            "/repo/src/parser.ts": { type: "update", unified_diff: "@@\n-old\n+new" },
+          },
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      kind: "file_change",
+      callId: "exec-file-change",
+      toolName: "apply_patch",
+      attribution: "tool_completed",
+      files: [{ action: "update", path: "/repo/src/parser.ts" }],
+    });
+  });
+
   it("parses structured patches emitted by newer Codex models", () => {
     const obj = {
       timestamp: "2026-07-17T01:22:22Z",
@@ -234,6 +264,7 @@ describe("parseEvent — event_msg patch_apply_end", () => {
     expect(parseEvent(obj)).toMatchObject({
       kind: "file_change",
       callId: "exec-structured-patch",
+      attribution: "tool_completed",
       files: [
         { action: "add", path: "src/new.ts" },
         { action: "update", path: "src/existing.ts" },
@@ -328,6 +359,52 @@ describe("parseEvent — response_item exec_command", () => {
 });
 
 describe("parseEvent — response_item exec wrapper", () => {
+  it("extracts a patch passed through a local variable in the current exec wrapper", () => {
+    const patch = [
+      "*** Begin Patch",
+      hdr("Add", "src/testing.ts"),
+      "+export const tested = true;",
+      "*** End Patch",
+    ].join("\n");
+    const obj = {
+      timestamp: "2026-08-08T04:00:00Z",
+      type: "response_item",
+      payload: {
+        type: "custom_tool_call",
+        name: "exec",
+        call_id: "wrapped-patch",
+        input: `const patch = ${JSON.stringify(patch)};\ntext(await tools.apply_patch(patch));`,
+      },
+    };
+
+    expect(parseEvent(obj)).toMatchObject({
+      kind: "file_change",
+      patch,
+      files: [{ action: "add", path: "src/testing.ts" }],
+      callId: "wrapped-patch",
+      toolName: "apply_patch",
+    });
+  });
+
+  it("extracts an inline patch from the current exec wrapper", () => {
+    const patch = `${hdr("Update", "src/existing.ts")}\n-old\n+new`;
+    const obj = {
+      timestamp: "2026-08-08T04:00:00Z",
+      type: "response_item",
+      payload: {
+        type: "custom_tool_call",
+        name: "exec",
+        call_id: "inline-patch",
+        input: `text(await tools.apply_patch(${JSON.stringify(patch)}));`,
+      },
+    };
+
+    expect(parseEvent(obj)).toMatchObject({
+      kind: "file_change",
+      files: [{ action: "update", path: "src/existing.ts" }],
+    });
+  });
+
   it("extracts nested terminal commands from the current Codex exec wrapper", () => {
     const obj = {
       timestamp: "2024-01-01T00:06:00Z",

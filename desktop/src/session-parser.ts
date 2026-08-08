@@ -52,7 +52,7 @@ export class SessionRecordParser {
   }
 
   finish(): AppEvent[] {
-    const events = this.events;
+    const events = removeRequestedPatchDuplicates(this.events);
 
     deduplicateUserMessages(events);
     deduplicateAgentMessages(events);
@@ -72,6 +72,29 @@ export class SessionRecordParser {
         return (Number.isNaN(leftTime) ? 0 : leftTime) - (Number.isNaN(rightTime) ? 0 : rightTime);
       });
   }
+}
+
+function removeRequestedPatchDuplicates(events: AppEvent[]): AppEvent[] {
+  const completed = events.filter((event): event is Extract<AppEvent, { kind: "file_change" }> =>
+    event.kind === "file_change" && event.attribution === "tool_completed",
+  );
+  if (!completed.length) return events;
+  return events.filter((event) => {
+    if (event.kind !== "file_change" || event.attribution !== "tool_requested") return true;
+    const eventTime = Date.parse(event.ts || "");
+    const signature = fileChangeSignature(event);
+    return !completed.some((candidate) => {
+      const candidateTime = Date.parse(candidate.ts || "");
+      return fileChangeSignature(candidate) === signature
+        && !Number.isNaN(eventTime)
+        && !Number.isNaN(candidateTime)
+        && Math.abs(candidateTime - eventTime) <= 10_000;
+    });
+  });
+}
+
+function fileChangeSignature(event: Extract<AppEvent, { kind: "file_change" }>): string {
+  return event.files.map((file) => `${file.action}:${file.path}`).sort().join("|");
 }
 
 export function parseSessionRecords(files: SessionRecordFile[]): AppEvent[] {
