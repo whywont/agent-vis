@@ -15,6 +15,7 @@ import {
 
 export type LiveProvider = "codex" | "claude-code";
 export type ModelOption = readonly [id: string, description: string];
+export type EffortOption = readonly [id: string, description: string];
 
 export type HarnessContext = {
   sessionKey: string;
@@ -81,6 +82,15 @@ export const CLAUDE_MODEL_OPTIONS: readonly ModelOption[] = [
   ["opus[1m]", "Opus with 1M context"],
   ["sonnet[1m]", "Sonnet with 1M context"],
   ["fable[1m]", "Fable with 1M context"],
+];
+
+export const CLAUDE_EFFORT_OPTIONS: readonly EffortOption[] = [
+  ["default", "Claude's configured default"],
+  ["low", "Faster responses with lighter reasoning"],
+  ["medium", "Balanced reasoning"],
+  ["high", "More thorough reasoning"],
+  ["xhigh", "Extended reasoning"],
+  ["max", "Maximum available reasoning"],
 ];
 
 const codexAdapter: HarnessAdapter = {

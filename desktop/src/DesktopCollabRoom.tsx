@@ -11,6 +11,7 @@ import {
   createCollabTask,
   getCollabRoomState,
   integrateCollabChange,
+  listCodexModels,
   postCollabAgentMessage,
   postCollabDirectMessage,
   postCollabMessage,
@@ -25,7 +26,9 @@ import {
   updateCollabWorkerRuntime,
   type CollabRoomState,
   type CollabWorker,
+  type CodexModel,
 } from "./desktop-api";
+import { CLAUDE_EFFORT_OPTIONS, CLAUDE_MODEL_OPTIONS, type EffortOption, type ModelOption } from "./harness-adapters";
 
 interface CodexRuntimeEvent {
   sessionKey: string;
@@ -64,6 +67,12 @@ export default function DesktopCollabRoom({
   const [coordinationOpen, setCoordinationOpen] = useState(false);
   const [workerName, setWorkerName] = useState("");
   const [provider, setProvider] = useState("codex");
+  const [model, setModel] = useState("");
+  const [effort, setEffort] = useState("default");
+  const [modelOptions, setModelOptions] = useState<readonly ModelOption[]>([]);
+  const [effortOptions, setEffortOptions] = useState<readonly EffortOption[]>([]);
+  const [codexModels, setCodexModels] = useState<readonly CodexModel[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
   const [taskTitle, setTaskTitle] = useState("");
   const [taskScope, setTaskScope] = useState("");
   const [leaseWorker, setLeaseWorker] = useState("");
@@ -114,6 +123,51 @@ export default function DesktopCollabRoom({
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [coordinationOpen]);
 
+  useEffect(() => {
+    if (provider !== "codex") return;
+    const timer = window.setTimeout(() => {
+      setModelsLoading(true);
+      const sessionKey = `collab:model-picker:${crypto.randomUUID()}`;
+      void listCodexModels(sessionKey, "", session.cwd)
+        .then((models) => {
+          setCodexModels(models);
+          setModelOptions(models.map((item): ModelOption => [
+            item.id || item.model || "",
+            item.description || item.displayName || "Codex model",
+          ]).filter(([id]) => Boolean(id)));
+          const selected = models.find((item) => item.isDefault) || models[0];
+          setModel(selected?.id || selected?.model || "");
+          setEffortOptions(codexEfforts(selected));
+        })
+        .catch((reason: unknown) => setError(errorText(reason)))
+        .finally(() => setModelsLoading(false));
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [provider, session.cwd]);
+
+  function chooseWorkerModel(nextModel: string) {
+    setModel(nextModel);
+    if (provider !== "codex") return;
+    const selected = codexModels.find((item) => (item.id || item.model) === nextModel);
+    setEffortOptions(codexEfforts(selected));
+    setEffort("default");
+  }
+
+  function chooseWorkerProvider(nextProvider: string) {
+    setProvider(nextProvider);
+    setEffort("default");
+    setCodexModels([]);
+    if (nextProvider === "claude") {
+      setModelOptions(CLAUDE_MODEL_OPTIONS);
+      setModel("default");
+      setEffortOptions(CLAUDE_EFFORT_OPTIONS);
+    } else {
+      setModel("");
+      setModelOptions([]);
+      setEffortOptions([]);
+    }
+  }
+
   const appendStream = useCallback((workerId: string, entry: AgentStreamEntry, append = false) => {
     setStreams((current) => {
       const entries = current[workerId] || [];
@@ -137,10 +191,10 @@ export default function DesktopCollabRoom({
         else await connectClaudeThread(sessionKey, threadId, worker.worktreePath);
       } else {
         sessionKey = `collab:${session.id}:${worker.id}`;
-        if (worker.provider === "codex") threadId = (await startCodexSession(sessionKey, worker.worktreePath, "")).id;
+        if (worker.provider === "codex") threadId = (await startCodexSession(sessionKey, worker.worktreePath, worker.model, worker.effort)).id;
         else {
           const requestedId = crypto.randomUUID();
-          threadId = await startClaudeSession(sessionKey, requestedId, worker.worktreePath, "default");
+          threadId = await startClaudeSession(sessionKey, requestedId, worker.worktreePath, worker.model || "default", worker.effort);
         }
       }
       updateState(await updateCollabWorkerRuntime(roomRef, worker.id, sessionKey, threadId, "running"));
@@ -343,7 +397,7 @@ export default function DesktopCollabRoom({
   async function addWorker(event: FormEvent) {
     event.preventDefault();
     const known = new Set(stateRef.current?.workers.map((worker) => worker.id) || []);
-    if (!await mutate(() => addCollabWorker(roomRef, workerName, provider, provider === "human" ? "collaborator" : "agent worker"))) return;
+    if (!await mutate(() => addCollabWorker(roomRef, workerName, provider, model, effort, provider === "human" ? "collaborator" : "agent worker"))) return;
     setWorkerName("");
     const worker = stateRef.current?.workers.find((candidate) => !known.has(candidate.id));
     if (worker && supportsRuntime(worker)) await startWorker(worker);
@@ -357,7 +411,7 @@ export default function DesktopCollabRoom({
       <div className="desktop-collab-column-resize" role="separator" aria-label="Resize group and private chats" aria-orientation="vertical" onMouseDown={resizeConversationColumns} />
       <aside className={`desktop-collab-agent-rail${openWorkers.length > 1 ? " multi" : ""}`}>
         {openWorkers.length > 0 && <div className="desktop-collab-open-agent-panes">{openWorkers.map((worker) => <DirectPane key={worker.id} worker={worker} active={worker.id === activeWorkerId} messages={state.messages.filter((message) => (message.authorId === "local-host" && message.recipientId === worker.id) || (message.authorId === worker.id && message.recipientId === "local-host"))} draft={directDrafts[worker.id] || ""} onDraft={(value) => setDirectDrafts((current) => ({ ...current, [worker.id]: value }))} onSubmit={(event) => void sendDirect(event, worker)} onActivate={() => activateWorker(worker.id)} onPublish={(message) => void mutate(() => postCollabAgentMessage(roomRef, worker, message.body, false))} onClose={() => closeWorker(worker.id)} onStart={() => void startWorker(worker)} busy={busy} />)}</div>}
-        {openWorkers.length < 2 && <AgentRoster workers={state.workers} workerName={workerName} setWorkerName={setWorkerName} provider={provider} setProvider={setProvider} onAddWorker={addWorker} onSelect={activateWorker} onStart={(worker) => void startWorker(worker)} busy={busy} />}
+        {openWorkers.length < 2 && <AgentRoster workers={state.workers} workerName={workerName} setWorkerName={setWorkerName} provider={provider} setProvider={chooseWorkerProvider} model={model} setModel={chooseWorkerModel} effort={effort} setEffort={setEffort} modelOptions={modelOptions} effortOptions={effortOptions} modelsLoading={modelsLoading} onAddWorker={addWorker} onSelect={activateWorker} onStart={(worker) => void startWorker(worker)} busy={busy} />}
       </aside>
     </div>
     {coordinationOpen && <div className="desktop-collab-coordination-layer" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setCoordinationOpen(false); }}><CoordinationDrawer onClose={() => setCoordinationOpen(false)} state={state} busy={busy} workerNames={workerNames} taskTitle={taskTitle} setTaskTitle={setTaskTitle} taskScope={taskScope} setTaskScope={setTaskScope} leaseWorker={selectedLeaseWorker} setLeaseWorker={setLeaseWorker} leaseResource={leaseResource} setLeaseResource={setLeaseResource} submissionTitle={submissionTitle} setSubmissionTitle={setSubmissionTitle} submissionSummary={submissionSummary} setSubmissionSummary={setSubmissionSummary} onCreateTask={(event) => { event.preventDefault(); void mutate(() => createCollabTask(roomRef, taskTitle, taskScope)).then((ok) => { if (ok) { setTaskTitle(""); setTaskScope(""); } }); }} onClaimTask={(taskId, workerId) => void mutate(() => claimCollabTask(roomRef, taskId, workerId))} onAcquireLease={(event) => { event.preventDefault(); void mutate(() => acquireCollabLease(roomRef, selectedLeaseWorker, null, leaseResource, "exclusive", 900)).then((ok) => { if (ok) setLeaseResource(""); }); }} onRenewLease={(lease) => void mutate(() => renewCollabLease(roomRef, lease))} onReleaseLease={(lease) => void mutate(() => releaseCollabLease(roomRef, lease))} onSubmitChange={(event) => { event.preventDefault(); if (!selectedLeaseWorker) return; void mutate(() => submitCollabChange(roomRef, selectedLeaseWorker, submissionTitle, submissionSummary, state.leases)).then((ok) => { if (ok) { setSubmissionTitle(""); setSubmissionSummary(""); } }); }} onReview={(id, decision) => void mutate(() => reviewCollabChange(roomRef, id, decision, decision === "approved" ? "Approved by host" : "Changes requested"))} onIntegrate={(id) => void mutate(() => integrateCollabChange(roomRef, id))} /></div>}
@@ -376,8 +430,9 @@ function DirectPane({ worker, active, messages, draft, onDraft, onSubmit, onActi
   return <aside className={`desktop-collab-direct${active ? " active" : ""}`} onMouseDown={onActivate}><header><div><i className={`runtime ${worker.runtimeStatus}`} /><strong style={agentNameStyle(worker.id)}>{worker.name}</strong><span>{worker.provider} / private</span></div><button type="button" onClick={(event) => { event.stopPropagation(); onClose(); }} aria-label={`Close ${worker.name} chat`}>x</button></header>{worker.runtimeStatus !== "running" && supportsRuntime(worker) && <button className="start-agent" type="button" onClick={onStart} disabled={busy || worker.runtimeStatus === "starting"}>Start agent</button>}<section className="desktop-collab-private-thread" ref={threadRef}><header>Private chat</header>{messages.map((message) => <article key={message.id} className={message.authorId === "local-host" ? "host" : "agent"}><header><b style={agentNameStyle(message.authorId)}>{message.authorName}</b><time>{formatTimestamp(message.createdAt)}</time>{message.authorId === worker.id && <button type="button" onClick={() => onPublish(message)}>Publish to group</button>}</header><p>{message.body}</p></article>)}{!messages.length && <p className="empty">Messages here stay between you and {worker.name}.</p>}</section><form onSubmit={onSubmit}><input value={draft} onChange={(event) => onDraft(event.target.value)} placeholder={`Message ${worker.name} privately...`} required /><button disabled={busy || (supportsRuntime(worker) && worker.runtimeStatus !== "running")}>Send</button></form></aside>;
 }
 
-function AgentRoster({ workers, workerName, setWorkerName, provider, setProvider, onAddWorker, onSelect, onStart, busy }: { workers: CollabWorker[]; workerName: string; setWorkerName: (value: string) => void; provider: string; setProvider: (value: string) => void; onAddWorker: (event: FormEvent) => void; onSelect: (workerId: string) => void; onStart: (worker: CollabWorker) => void; busy: boolean }) {
-  return <section className="desktop-collab-roster desktop-collab-restored-roster"><header><strong>People & agents</strong><span>{workers.length} total</span></header><div className="desktop-collab-worker-list">{workers.map((worker) => <article key={worker.id} role="button" tabIndex={0} onClick={() => onSelect(worker.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") onSelect(worker.id); }}><header><b>{worker.name}</b><i className={`runtime ${worker.runtimeStatus}`}>{runtimeLabel(worker)}</i></header><span>{worker.provider} / {worker.role}</span><code>{worker.branch}</code>{worker.runtimeError && <p>{worker.runtimeError}</p>}<footer><button type="button" onClick={(event) => { event.stopPropagation(); void navigator.clipboard.writeText(worker.worktreePath); }}>Copy path</button>{supportsRuntime(worker) && worker.runtimeStatus !== "running" && <button type="button" disabled={busy || worker.runtimeStatus === "starting"} onClick={(event) => { event.stopPropagation(); onStart(worker); }}>Start agent</button>}</footer></article>)}{!workers.length && <p className="desktop-collab-empty">Create an agent to add its isolated worktree.</p>}</div><form className="desktop-collab-form compact" onSubmit={onAddWorker}><label>Name<input value={workerName} onChange={(event) => setWorkerName(event.target.value)} placeholder="Frontend agent" required /></label><label>Provider<select value={provider} onChange={(event) => setProvider(event.target.value)}><option value="codex">Codex</option><option value="claude">Claude</option><option value="opencode">OpenCode</option><option value="openrouter">OpenRouter</option><option value="human">Human collaborator</option></select></label><button disabled={busy}>Create isolated worker</button></form></section>;
+function AgentRoster({ workers, workerName, setWorkerName, provider, setProvider, model, setModel, effort, setEffort, modelOptions, effortOptions, modelsLoading, onAddWorker, onSelect, onStart, busy }: { workers: CollabWorker[]; workerName: string; setWorkerName: (value: string) => void; provider: string; setProvider: (value: string) => void; model: string; setModel: (value: string) => void; effort: string; setEffort: (value: string) => void; modelOptions: readonly ModelOption[]; effortOptions: readonly EffortOption[]; modelsLoading: boolean; onAddWorker: (event: FormEvent) => void; onSelect: (workerId: string) => void; onStart: (worker: CollabWorker) => void; busy: boolean }) {
+  const configurable = provider === "codex" || provider === "claude";
+  return <section className="desktop-collab-roster desktop-collab-restored-roster"><header><strong>People & agents</strong><span>{workers.length} total</span></header><div className="desktop-collab-worker-list">{workers.map((worker) => <article key={worker.id} role="button" tabIndex={0} onClick={() => onSelect(worker.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") onSelect(worker.id); }}><header><b>{worker.name}</b><i className={`runtime ${worker.runtimeStatus}`}>{runtimeLabel(worker)}</i></header><span>{worker.provider}{worker.model ? ` / ${worker.model}` : ""}{worker.effort && worker.effort !== "default" ? ` / ${worker.effort}` : ""}</span><code>{worker.branch}</code>{worker.runtimeError && <p>{worker.runtimeError}</p>}<footer><button type="button" onClick={(event) => { event.stopPropagation(); void navigator.clipboard.writeText(worker.worktreePath); }}>Copy path</button>{supportsRuntime(worker) && worker.runtimeStatus !== "running" && <button type="button" disabled={busy || worker.runtimeStatus === "starting"} onClick={(event) => { event.stopPropagation(); onStart(worker); }}>Start agent</button>}</footer></article>)}{!workers.length && <p className="desktop-collab-empty">Create an agent to add its isolated worktree.</p>}</div><form className="desktop-collab-form compact" onSubmit={onAddWorker}><label>Name<input value={workerName} onChange={(event) => setWorkerName(event.target.value)} placeholder="Frontend agent" required /></label><label>Provider<select value={provider} onChange={(event) => setProvider(event.target.value)}><option value="codex">Codex</option><option value="claude">Claude</option><option value="opencode">OpenCode</option><option value="openrouter">OpenRouter</option><option value="human">Human collaborator</option></select></label>{configurable && <><label>Model<select value={model} onChange={(event) => setModel(event.target.value)} disabled={modelsLoading}>{modelsLoading && !modelOptions.length ? <option>Loading models...</option> : modelOptions.map(([id, description]) => <option key={id || "default"} value={id} title={description}>{id || "default"}</option>)}</select></label><label>Effort<select value={effort} onChange={(event) => setEffort(event.target.value)} disabled={modelsLoading}>{effortOptions.map(([id, description]) => <option key={id} value={id} title={description}>{id}</option>)}</select></label></>}<button disabled={busy || (configurable && (!model || modelsLoading))}>Create isolated worker</button></form></section>;
 }
 
 function CoordinationDrawer(props: CoordinationProps) {
@@ -393,6 +448,13 @@ type CoordinationProps = {
 
 function supportsRuntime(worker: CollabWorker) { return worker.provider === "codex" || worker.provider === "claude"; }
 function runtimeLabel(worker: CollabWorker) { return supportsRuntime(worker) ? worker.runtimeStatus : worker.provider === "human" ? "person" : "adapter needed"; }
+function codexEfforts(model: Awaited<ReturnType<typeof listCodexModels>>[number] | undefined): readonly EffortOption[] {
+  if (!model) return [["default", "Use the model default"]];
+  return [
+    ["default", `Use ${model.defaultReasoningEffort || "the model"} default`],
+    ...(model.supportedReasoningEfforts || []).map((option): EffortOption => [option.reasoningEffort, option.description]),
+  ];
+}
 function useChatAutoScroll(threadRef: React.RefObject<HTMLElement>, lastMessageId: string | undefined) {
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {

@@ -90,6 +90,7 @@ pub(crate) struct NewCodexSessionRequest {
     session_key: String,
     cwd: String,
     model: Option<String>,
+    effort: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -447,6 +448,9 @@ pub(crate) fn start_codex_session(
     if let Some(model) = request_data.model.filter(|model| !model.is_empty()) {
         params["model"] = Value::String(model);
     }
+    if let Some(effort) = request_data.effort.filter(|effort| !effort.is_empty()) {
+        params["config"] = json!({ "model_reasoning_effort": effort });
+    }
     let thread = request(&connection, "thread/start", params)?;
     let id = thread
         .get("thread")
@@ -524,11 +528,29 @@ pub(crate) fn list_codex_models(
 ) -> Result<Value, String> {
     let connection = connection_for(&app, &state, &request_data.session_key)?;
     initialize_connection(&connection)?;
-    request(
-        &connection,
-        "model/list",
-        json!({ "limit": 50, "includeHidden": false }),
-    )
+    let mut data = Vec::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        let mut params = json!({ "limit": 100, "includeHidden": false });
+        if let Some(next_cursor) = cursor.as_ref() {
+            params["cursor"] = Value::String(next_cursor.clone());
+        }
+        let page = request(&connection, "model/list", params)?;
+        data.extend(
+            page.get("data")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default(),
+        );
+        cursor = page
+            .get("nextCursor")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned);
+        if cursor.is_none() {
+            return Ok(json!({ "data": data, "nextCursor": null }));
+        }
+    }
 }
 
 #[tauri::command]

@@ -115,7 +115,7 @@ fn manifest_to_room(manifest: CollabRoomManifest, manifest_path: &Path) -> Colla
 }
 
 fn collect_collab_rooms(app: &tauri::AppHandle) -> Result<Vec<CollabRoomMeta>, String> {
-    let root = collab_rooms_root(&app)?;
+    let root = collab_rooms_root(app)?;
     let Ok(entries) = fs::read_dir(root) else {
         return Ok(Vec::new());
     };
