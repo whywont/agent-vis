@@ -66,7 +66,7 @@ export default function DesktopCollabRoom({
   const [directDrafts, setDirectDrafts] = useState<Record<string, string>>({});
   const [coordinationOpen, setCoordinationOpen] = useState(false);
   const [workerName, setWorkerName] = useState("");
-  const [provider, setProvider] = useState("codex");
+  const [provider, setProvider] = useState("");
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState("default");
   const [modelOptions, setModelOptions] = useState<readonly ModelOption[]>([]);
@@ -135,9 +135,6 @@ export default function DesktopCollabRoom({
             item.id || item.model || "",
             item.description || item.displayName || "Codex model",
           ]).filter(([id]) => Boolean(id)));
-          const selected = models.find((item) => item.isDefault) || models[0];
-          setModel(selected?.id || selected?.model || "");
-          setEffortOptions(codexEfforts(selected));
         })
         .catch((reason: unknown) => setError(errorText(reason)))
         .finally(() => setModelsLoading(false));
@@ -147,10 +144,14 @@ export default function DesktopCollabRoom({
 
   function chooseWorkerModel(nextModel: string) {
     setModel(nextModel);
+    setEffort("default");
+    if (provider === "claude") {
+      setEffortOptions(CLAUDE_EFFORT_OPTIONS);
+      return;
+    }
     if (provider !== "codex") return;
     const selected = codexModels.find((item) => (item.id || item.model) === nextModel);
     setEffortOptions(codexEfforts(selected));
-    setEffort("default");
   }
 
   function chooseWorkerProvider(nextProvider: string) {
@@ -159,8 +160,6 @@ export default function DesktopCollabRoom({
     setCodexModels([]);
     if (nextProvider === "claude") {
       setModelOptions(CLAUDE_MODEL_OPTIONS);
-      setModel("default");
-      setEffortOptions(CLAUDE_EFFORT_OPTIONS);
     } else {
       setModel("");
       setModelOptions([]);
@@ -432,7 +431,7 @@ function DirectPane({ worker, active, messages, draft, onDraft, onSubmit, onActi
 
 function AgentRoster({ workers, workerName, setWorkerName, provider, setProvider, model, setModel, effort, setEffort, modelOptions, effortOptions, modelsLoading, onAddWorker, onSelect, onStart, busy }: { workers: CollabWorker[]; workerName: string; setWorkerName: (value: string) => void; provider: string; setProvider: (value: string) => void; model: string; setModel: (value: string) => void; effort: string; setEffort: (value: string) => void; modelOptions: readonly ModelOption[]; effortOptions: readonly EffortOption[]; modelsLoading: boolean; onAddWorker: (event: FormEvent) => void; onSelect: (workerId: string) => void; onStart: (worker: CollabWorker) => void; busy: boolean }) {
   const configurable = provider === "codex" || provider === "claude";
-  return <section className="desktop-collab-roster desktop-collab-restored-roster"><header><strong>People & agents</strong><span>{workers.length} total</span></header><div className="desktop-collab-worker-list">{workers.map((worker) => <article key={worker.id} role="button" tabIndex={0} onClick={() => onSelect(worker.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") onSelect(worker.id); }}><header><b>{worker.name}</b><i className={`runtime ${worker.runtimeStatus}`}>{runtimeLabel(worker)}</i></header><span>{worker.provider}{worker.model ? ` / ${worker.model}` : ""}{worker.effort && worker.effort !== "default" ? ` / ${worker.effort}` : ""}</span><code>{worker.branch}</code>{worker.runtimeError && <p>{worker.runtimeError}</p>}<footer><button type="button" onClick={(event) => { event.stopPropagation(); void navigator.clipboard.writeText(worker.worktreePath); }}>Copy path</button>{supportsRuntime(worker) && worker.runtimeStatus !== "running" && <button type="button" disabled={busy || worker.runtimeStatus === "starting"} onClick={(event) => { event.stopPropagation(); onStart(worker); }}>Start agent</button>}</footer></article>)}{!workers.length && <p className="desktop-collab-empty">Create an agent to add its isolated worktree.</p>}</div><form className="desktop-collab-form compact" onSubmit={onAddWorker}><label>Name<input value={workerName} onChange={(event) => setWorkerName(event.target.value)} placeholder="Frontend agent" required /></label><label>Provider<select value={provider} onChange={(event) => setProvider(event.target.value)}><option value="codex">Codex</option><option value="claude">Claude</option><option value="opencode">OpenCode</option><option value="openrouter">OpenRouter</option><option value="human">Human collaborator</option></select></label>{configurable && <><label>Model<select value={model} onChange={(event) => setModel(event.target.value)} disabled={modelsLoading}>{modelsLoading && !modelOptions.length ? <option>Loading models...</option> : modelOptions.map(([id, description]) => <option key={id || "default"} value={id} title={description}>{id || "default"}</option>)}</select></label><label>Effort<select value={effort} onChange={(event) => setEffort(event.target.value)} disabled={modelsLoading}>{effortOptions.map(([id, description]) => <option key={id} value={id} title={description}>{id}</option>)}</select></label></>}<button disabled={busy || (configurable && (!model || modelsLoading))}>Create isolated worker</button></form></section>;
+  return <section className="desktop-collab-roster desktop-collab-restored-roster"><header><strong>People & agents</strong><span>{workers.length} total</span></header><div className="desktop-collab-worker-list">{workers.map((worker) => <article key={worker.id} role="button" tabIndex={0} onClick={() => onSelect(worker.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") onSelect(worker.id); }}><header><b>{worker.name}</b><i className={`runtime ${worker.runtimeStatus}`}>{runtimeLabel(worker)}</i></header><span>{worker.provider}{worker.model ? ` / ${worker.model}` : ""}{worker.effort && worker.effort !== "default" ? ` / ${worker.effort}` : ""}</span><code>{worker.branch}</code>{worker.runtimeError && <p>{worker.runtimeError}</p>}<footer><button type="button" onClick={(event) => { event.stopPropagation(); void navigator.clipboard.writeText(worker.worktreePath); }}>Copy path</button>{supportsRuntime(worker) && worker.runtimeStatus !== "running" && <button type="button" disabled={busy || worker.runtimeStatus === "starting"} onClick={(event) => { event.stopPropagation(); onStart(worker); }}>Start agent</button>}</footer></article>)}{!workers.length && <p className="desktop-collab-empty">Create an agent to add its isolated worktree.</p>}</div><form className="desktop-collab-form compact" onSubmit={onAddWorker}><label>Name<input value={workerName} onChange={(event) => setWorkerName(event.target.value)} placeholder="Frontend agent" required /></label><label>Provider<select value={provider} onChange={(event) => setProvider(event.target.value)} required><option value="" disabled>Select provider...</option><option value="codex">Codex</option><option value="claude">Claude</option><option value="opencode">OpenCode</option><option value="openrouter">OpenRouter</option><option value="human">Human collaborator</option></select></label>{configurable && <label>Model<select value={model} onChange={(event) => setModel(event.target.value)} disabled={modelsLoading} required><option value="" disabled>{modelsLoading ? "Loading models..." : "Select model..."}</option>{modelOptions.map(([id, description]) => <option key={id || "default"} value={id} title={description}>{id || "default"}</option>)}</select></label>}{configurable && model && <label>Effort<select value={effort} onChange={(event) => setEffort(event.target.value)}>{effortOptions.map(([id, description]) => <option key={id} value={id} title={description}>{id}</option>)}</select></label>}<button disabled={busy || !provider || (configurable && (!model || modelsLoading))}>Create isolated worker</button></form></section>;
 }
 
 function CoordinationDrawer(props: CoordinationProps) {
