@@ -50,10 +50,14 @@ export default function DesktopDiffView({
   patch,
   contextText,
   workspaceRoot,
+  onOpenFile,
+  snapshotContent,
 }: {
   patch: string;
   contextText?: string;
   workspaceRoot: string;
+  onOpenFile?: (filepath: string) => void;
+  snapshotContent?: string | null;
 }) {
   const blocks = useMemo(() => parseDiff(patch), [patch]);
   if (!patch) return <em>no patch content</em>;
@@ -75,6 +79,8 @@ export default function DesktopDiffView({
             contextText={contextText}
             workspaceRoot={workspaceRoot}
             explanationKey={explanationKey}
+            onOpenFile={onOpenFile}
+            snapshotContent={snapshotContent}
             key={explanationKey}
           />
         );
@@ -88,11 +94,15 @@ function DesktopDiffBlock({
   contextText,
   workspaceRoot,
   explanationKey,
+  onOpenFile,
+  snapshotContent,
 }: {
   block: DiffBlock;
   contextText?: string;
   workspaceRoot: string;
   explanationKey: string;
+  onOpenFile?: (filepath: string) => void;
+  snapshotContent?: string | null;
 }) {
   const detailedExplanationKey = detailedDiffExplanationKey(explanationKey);
   const [copied, setCopied] = useState(false);
@@ -116,7 +126,9 @@ function DesktopDiffBlock({
 
   async function loadCurrentFile(): Promise<string> {
     if (fullContent !== null) return fullContent;
-    const content = await readWorkspaceFile(workspaceRoot, block.filepath);
+    const content = snapshotContent !== undefined
+      ? snapshotContent ?? ""
+      : await readWorkspaceFile(workspaceRoot, block.filepath);
     setFullContent(content);
     return content;
   }
@@ -240,7 +252,7 @@ function DesktopDiffBlock({
     <div className="diff-block">
       <div className="diff-file-header">
         <span className={`diff-file-action action-${block.action}`}>{block.action}</span>
-        <span className="desktop-diff-path">{block.filepath}</span>
+        <button type="button" className="desktop-diff-path" disabled={!onOpenFile || block.action === "delete"} onClick={() => onOpenFile?.(block.filepath)} title={block.action === "delete" ? `${block.filepath} was deleted` : `Open ${block.filepath} in Editor`}>{block.filepath}</button>
         <div className="desktop-diff-actions">
           {editError && <span className="diff-edit-error" title={editError}>{editError}</span>}
           {editing ? (
@@ -254,7 +266,7 @@ function DesktopDiffBlock({
             </>
           ) : (
             <>
-              {block.action !== "delete" && (
+              {(block.action !== "delete" || snapshotContent !== undefined) && (
                 <button className={`diff-view-toggle${showFull ? " active" : ""}`} disabled={loadingFile} onClick={() => void toggleFull()}>
                   {loadingFile ? "loading..." : showFull ? "diff only" : "full file"}
                 </button>
@@ -262,7 +274,7 @@ function DesktopDiffBlock({
               <button className="diff-explain-btn" disabled={explaining} onClick={() => void explain()}>
                 {explaining ? "explaining..." : "explain"}
               </button>
-              {block.action !== "delete" && (
+              {block.action !== "delete" && snapshotContent === undefined && (
                 <button className="diff-copy-path-btn" title="Edit file" disabled={loadingFile} onClick={() => void openEditor()}>
                   <PencilIcon />
                 </button>

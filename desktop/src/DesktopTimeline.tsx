@@ -49,6 +49,7 @@ export default function DesktopTimeline({
   matchTarget,
   liveConversation,
   onOpenTerminal,
+  onOpenFile,
   terminalDisabled,
 }: {
   events: AppEvent[];
@@ -61,9 +62,10 @@ export default function DesktopTimeline({
     onNeedsAttention?: () => void;
   }>;
   onOpenTerminal?: () => void;
+  onOpenFile?: (filepath: string) => void;
   terminalDisabled?: boolean;
 }) {
-  return <DesktopTimelineForSession key={sessionKey} events={events} sessionCwd={sessionCwd} sessionKey={sessionKey} matchTarget={matchTarget} liveConversation={liveConversation} onOpenTerminal={onOpenTerminal} terminalDisabled={terminalDisabled} />;
+  return <DesktopTimelineForSession key={sessionKey} events={events} sessionCwd={sessionCwd} sessionKey={sessionKey} matchTarget={matchTarget} liveConversation={liveConversation} onOpenTerminal={onOpenTerminal} onOpenFile={onOpenFile} terminalDisabled={terminalDisabled} />;
 }
 
 function DesktopTimelineForSession({
@@ -73,6 +75,7 @@ function DesktopTimelineForSession({
   matchTarget,
   liveConversation,
   onOpenTerminal,
+  onOpenFile,
   terminalDisabled,
 }: {
   events: AppEvent[];
@@ -85,6 +88,7 @@ function DesktopTimelineForSession({
     onNeedsAttention?: () => void;
   }>;
   onOpenTerminal?: () => void;
+  onOpenFile?: (filepath: string) => void;
   terminalDisabled?: boolean;
 }) {
   const [filterPreferences, setFilterPreferences] = useState<TimelineFilterPreferences>(() =>
@@ -258,6 +262,7 @@ function DesktopTimelineForSession({
             matched={targetMatchesEvent(matchTarget, event)}
             matchRequestKey={targetMatchesEvent(matchTarget, event) ? targetRequestKey(matchTarget) : null}
             expanded={expandedEvents.has(timelineEventIdentity(event)) || autoExpandedAgentEvent === timelineEventIdentity(event)}
+            onOpenFile={onOpenFile}
             onExpandedChange={(nextExpanded) => {
               const identity = timelineEventIdentity(event);
               if (!nextExpanded && autoExpandedAgentEvent === identity) setDismissedAutoExpandedAgentEvent(identity);
@@ -298,6 +303,7 @@ function DesktopTimelineEntry({
   matched,
   matchRequestKey,
   expanded,
+  onOpenFile,
   onExpandedChange,
 }: {
   event: TimelineEvent;
@@ -306,6 +312,7 @@ function DesktopTimelineEntry({
   matched: boolean;
   matchRequestKey: string | null;
   expanded: boolean;
+  onOpenFile?: (filepath: string) => void;
   onExpandedChange: (expanded: boolean) => void;
 }) {
   const [dismissedMatchRequest, setDismissedMatchRequest] = useState<string | null>(null);
@@ -392,7 +399,7 @@ function DesktopTimelineEntry({
       <div className={`entry-body${collapsed ? " collapsed" : ""}${event.kind === "file_change" ? " diff-body" : ""}`}>
         <div className="entry-body-section">
           {event.kind === "file_change" ? (
-            <DesktopDiffView patch={event.patch} contextText={contextText} workspaceRoot={sessionCwd} />
+            <DesktopDiffView patch={event.patch} contextText={contextText} workspaceRoot={sessionCwd} onOpenFile={onOpenFile} />
           ) : event.kind === "shell_command" ? (
             <>
               {event.workdir && <><span className="desktop-workdir">[{event.workdir || sessionCwd}]</span>{"\n"}</>}

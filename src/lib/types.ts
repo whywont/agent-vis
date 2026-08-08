@@ -7,11 +7,19 @@ export interface SessionMeta {
   timestamp: string;
   modified: string;
   cli_version: string;
-  source: "codex" | "claude-code";
+  source: "codex" | "claude-code" | "collab";
   project?: string;
   /** A remote transcript replica with no local harness or terminal. */
   synced?: boolean;
+  /** Persisted display name for custom sessions such as collaboration rooms. */
+  customName?: string;
+  /** Native manifest backing a custom session. */
+  manifest?: string;
 }
+
+export type TranscriptSessionMeta = SessionMeta & {
+  source: "codex" | "claude-code";
+};
 
 export interface FileInfo {
   action: "add" | "update" | "delete";

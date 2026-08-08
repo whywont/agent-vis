@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { AppEvent, FileChangeEvent } from "@/lib/types";
 import { formatTime } from "@/utils/format";
+import { readSessionFileHistory, type SessionFileVersion } from "./desktop-api";
 import DesktopDiffView from "./DesktopDiffView";
 import { precedingUserRequest } from "./explain-context";
 import { workspaceRelativePath } from "./workspace-path";
@@ -27,14 +29,40 @@ export default function DesktopFileCardStack({
   changes,
   events,
   sessionCwd,
+  threadId,
 }: {
   filepath: string;
   changes: FileChangeEvent[];
   events: AppEvent[];
   sessionCwd: string;
+  threadId: string;
 }) {
   const [activeIndex, setActiveIndex] = useState(changes.length - 1);
   const [expanded, setExpanded] = useState(false);
+  const [versions, setVersions] = useState<SessionFileVersion[]>([]);
+  const [historyRefresh, setHistoryRefresh] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    void readSessionFileHistory(threadId, filepath).then((next) => {
+      if (!cancelled) setVersions(next);
+    }).catch(() => {
+      if (!cancelled) setVersions([]);
+    });
+    return () => { cancelled = true; };
+  }, [filepath, historyRefresh, threadId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: UnlistenFn | undefined;
+    void listen<{ sessionKey: string }>("session-history-updated", () => {
+      if (!cancelled) setHistoryRefresh((current) => current + 1);
+    }).then((stop) => {
+      if (cancelled) stop();
+      else unlisten = stop;
+    });
+    return () => { cancelled = true; unlisten?.(); };
+  }, []);
 
   useEffect(() => {
     if (!expanded) return;
@@ -52,6 +80,12 @@ export default function DesktopFileCardStack({
   )?.action ?? "update";
   const activeAction = actionForChange(activeChange);
   const contextText = precedingUserRequest(events, activeChange.ts);
+  const baselineTime = versions[0]?.timestamp ? new Date(versions[0].timestamp).getTime() : Number.NEGATIVE_INFINITY;
+  const snapshotIndex = versions.findIndex((version, index) => index > 0 && new Date(version.timestamp).getTime() >= Math.max(baselineTime, new Date(activeChange.ts).getTime()));
+  const recordedSnapshot = snapshotIndex >= 0 ? versions[snapshotIndex] : versions.at(-1);
+  const snapshot = activeAction === "delete" && recordedSnapshot?.content === null
+    ? versions[Math.max(0, snapshotIndex - 1)]
+    : recordedSnapshot;
   const newest = activeIndex === changes.length - 1;
   const peeks = changes
     .map((change, index) => ({ change, index }))
@@ -115,7 +149,7 @@ export default function DesktopFileCardStack({
             </button>
           </div>
           <div className="file-card-body">
-            <DesktopDiffView patch={activeChange.patch} contextText={contextText} workspaceRoot={sessionCwd} />
+            <DesktopDiffView patch={activeChange.patch} contextText={contextText} workspaceRoot={sessionCwd} snapshotContent={snapshot?.content} />
           </div>
         </div>
       </div>
@@ -148,7 +182,7 @@ export default function DesktopFileCardStack({
               <button type="button" className="card-expanded-close" onClick={() => setExpanded(false)}>close esc</button>
             </div>
             <div className="card-expanded-body">
-              <DesktopDiffView patch={activeChange.patch} contextText={contextText} workspaceRoot={sessionCwd} />
+              <DesktopDiffView patch={activeChange.patch} contextText={contextText} workspaceRoot={sessionCwd} snapshotContent={snapshot?.content} />
             </div>
           </div>
         </div>,

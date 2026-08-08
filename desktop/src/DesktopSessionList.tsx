@@ -242,7 +242,7 @@ export default function DesktopSessionList({
   }
 
   function startSessionDrag(event: React.MouseEvent<HTMLDivElement>, session: SessionMeta) {
-    if (session.synced) return;
+    if (session.synced || session.source === "collab") return;
     if (event.button !== 0 || (event.target as HTMLElement).closest("button")) return;
     const startX = event.clientX;
     const startY = event.clientY;
@@ -455,8 +455,8 @@ export default function DesktopSessionList({
                     if (event.key === "Enter" && !menuOpen) onSelectSession(files, null);
                   }}
                 >
-                  <span className={`session-source ${session.source === "claude-code" ? "source-claude" : "source-codex"}`}>
-                    {session.source === "claude-code" ? "claude" : "codex"}
+                  <span className={`session-source ${session.source === "collab" ? "source-collab" : session.source === "claude-code" ? "source-claude" : "source-codex"}`}>
+                    {session.source === "collab" ? "collab" : session.source === "claude-code" ? "claude" : "codex"}
                   </span>
                   <span className={`session-id${alias ? " desktop-session-alias" : ""}`} title={alias || session.id}>
                     {alias || session.id.slice(0, 12)}
@@ -468,6 +468,8 @@ export default function DesktopSessionList({
                     >
                       json-only
                     </span>
+                  ) : session.source === "collab" ? (
+                    <span className="desktop-session-custom" title="Custom collaboration session">custom</span>
                   ) : outboundSynced ? (
                     <span
                       className="desktop-session-synced"
@@ -525,7 +527,7 @@ export default function DesktopSessionList({
                       >
                         Rename chat
                       </button>
-                      {!session.synced && (
+                      {!session.synced && session.source !== "collab" && (
                         <button
                           type="button"
                           className="session-item-dropdown-btn"
@@ -538,7 +540,9 @@ export default function DesktopSessionList({
                           Split session
                         </button>
                       )}
-                      {session.synced ? (
+                      {session.source === "collab" ? (
+                        <span className="session-item-dropdown-note">Custom collaboration room</span>
+                      ) : session.synced ? (
                         <button
                           type="button"
                           className="session-item-dropdown-btn"
@@ -613,7 +617,7 @@ export default function DesktopSessionList({
                       >
                         Copy session ID
                       </button>
-                      <button
+                      {session.source !== "collab" && <button
                         type="button"
                         className="session-item-dropdown-btn"
                         onClick={(event) => {
@@ -625,8 +629,8 @@ export default function DesktopSessionList({
                         }}
                       >
                         Export JSON
-                      </button>
-                      <button
+                      </button>}
+                      {session.source !== "collab" && <button
                         type="button"
                         className="session-item-dropdown-btn"
                         onClick={(event) => {
@@ -638,7 +642,7 @@ export default function DesktopSessionList({
                         }}
                       >
                         Export Compact
-                      </button>
+                      </button>}
                       <button
                         type="button"
                         className="session-item-dropdown-btn delete"

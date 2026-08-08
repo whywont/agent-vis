@@ -1,4 +1,4 @@
-import type { AppEvent, SessionMeta } from "@/lib/types";
+import type { AppEvent, TranscriptSessionMeta } from "@/lib/types";
 import type { SessionMatchTarget } from "./App";
 import DesktopSessionDetail from "./DesktopSessionDetail";
 
@@ -12,6 +12,7 @@ export default function DesktopSessionWorkspace({
   matchTarget,
   onActiveTabChange,
   onTerminalOpen,
+  onOpenCollab,
   onTerminalClose,
   liveSessionKey,
   initialDraft,
@@ -19,15 +20,16 @@ export default function DesktopSessionWorkspace({
   onLiveActivity,
   onContinuationDraftSent,
 }: {
-  primary: SessionMeta;
-  secondary: SessionMeta | null;
+  primary: TranscriptSessionMeta;
+  secondary: TranscriptSessionMeta | null;
   primaryName: string | null;
   secondaryName: string | null;
-  activeTab: "session" | "files";
+  activeTab: "session" | "files" | "editor";
   terminalOpen: boolean;
   matchTarget: SessionMatchTarget | null;
-  onActiveTabChange: (tab: "session" | "files") => void;
-  onTerminalOpen: (session: SessionMeta) => void;
+  onActiveTabChange: (tab: "session" | "files" | "editor") => void;
+  onTerminalOpen: (session: TranscriptSessionMeta) => void;
+  onOpenCollab: () => void;
   onTerminalClose: () => void;
   liveSessionKey?: string;
   initialDraft?: string;
@@ -48,6 +50,7 @@ export default function DesktopSessionWorkspace({
           splitView={split}
           onActiveTabChange={onActiveTabChange}
           onTerminalOpen={() => onTerminalOpen(primary)}
+          onOpenCollab={onOpenCollab}
           onTerminalClose={onTerminalClose}
           matchTarget={matchTarget}
           liveSessionKey={liveSessionKey}

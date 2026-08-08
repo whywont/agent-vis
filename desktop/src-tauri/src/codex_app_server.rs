@@ -30,6 +30,7 @@ struct CodexAppServerConnection {
     next_request_id: AtomicU64,
     waiters: Mutex<HashMap<u64, mpsc::Sender<Result<Value, String>>>>,
     lifecycle: Mutex<CodexConnectionLifecycle>,
+    thread_resume: Mutex<()>,
 }
 
 #[derive(Default)]
@@ -190,6 +191,7 @@ fn start_connection(
         next_request_id: AtomicU64::new(1),
         waiters: Mutex::new(HashMap::new()),
         lifecycle: Mutex::new(CodexConnectionLifecycle::default()),
+        thread_resume: Mutex::new(()),
     });
     let reader_connection = Arc::clone(&connection);
     std::thread::spawn(move || {
@@ -211,6 +213,17 @@ fn start_connection(
                 }
             }
             update_active_turn(&reader_connection, &message);
+            let method = message.get("method").and_then(Value::as_str);
+            let completed_file_change = method == Some("item/completed")
+                && message
+                    .get("params")
+                    .and_then(|params| params.get("item"))
+                    .and_then(|item| item.get("type"))
+                    .and_then(Value::as_str)
+                    == Some("fileChange");
+            if completed_file_change || method == Some("turn/completed") {
+                crate::session_history::capture_session_history_now(&app, &session_key);
+            }
             emit_event(&app, &session_key, message);
         }
         emit_event(
@@ -376,6 +389,12 @@ pub(crate) fn connect_codex_thread(
     request_data: CodexThreadRequest,
 ) -> Result<(), String> {
     let connection = connection_for(&app, &state, &request_data.session_key)?;
+    // Serialize frontend reconnects without blocking the stdout reader, which
+    // needs the lifecycle mutex while resume notifications are in flight.
+    let _resume = connection
+        .thread_resume
+        .lock()
+        .map_err(|_| "Codex app-server resume state is unavailable.".to_owned())?;
     // The Tauri backend survives a frontend HMR reload. Initialize exactly
     // once, and do not resume a thread that this connection already owns.
     let lifecycle = connection
@@ -387,10 +406,6 @@ pub(crate) fn connect_codex_thread(
     }
     drop(lifecycle);
     initialize_connection(&connection)?;
-    let mut lifecycle = connection
-        .lifecycle
-        .lock()
-        .map_err(|_| "Codex app-server lifecycle state is unavailable.".to_owned())?;
     let resumed = request(
         &connection,
         "thread/resume",
@@ -409,6 +424,10 @@ pub(crate) fn connect_codex_thread(
                 .collect()
         })
         .unwrap_or_default();
+    let mut lifecycle = connection
+        .lifecycle
+        .lock()
+        .map_err(|_| "Codex app-server lifecycle state is unavailable.".to_owned())?;
     lifecycle
         .instruction_sources
         .insert(request_data.thread_id.clone(), instruction_sources);

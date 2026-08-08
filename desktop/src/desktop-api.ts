@@ -98,6 +98,10 @@ interface WorkspaceFile {
   content: string;
 }
 
+export interface WorkspaceTreeEntry {
+  path: string;
+}
+
 export interface SessionSearchResult {
   sessionKey: string;
   eventTs: string;
@@ -123,6 +127,172 @@ export function listSessions(): Promise<SessionMeta[]> {
   return invoke<SessionMeta[]>("list_sessions");
 }
 
+export function listCollabRooms(): Promise<SessionMeta[]> {
+  return invoke<SessionMeta[]>("list_collab_rooms");
+}
+
+export function createCollabRoom(cwd: string, name = ""): Promise<SessionMeta> {
+  return invoke<SessionMeta>("create_collab_room", { request: { cwd, name } });
+}
+
+export function deleteCollabRoom(fileRef: string): Promise<number> {
+  return invoke<number>("delete_collab_room", { fileRef });
+}
+
+export interface CollabWorker {
+  id: string;
+  name: string;
+  provider: string;
+  role: string;
+  worktreePath: string;
+  branch: string;
+  createdAt: string;
+  sessionKey: string | null;
+  threadId: string | null;
+  runtimeStatus: "offline" | "starting" | "running" | "error";
+  runtimeError: string;
+}
+
+export interface CollabTask {
+  id: string;
+  title: string;
+  scope: string;
+  status: "open" | "claimed" | "done";
+  claimedBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CollabLease {
+  id: string;
+  resource: string;
+  mode: "exclusive" | "shared";
+  holderId: string;
+  taskId: string | null;
+  fencingToken: number;
+  expiresAtMs: number;
+  createdAt: string;
+}
+
+export interface CollabChangeSet {
+  id: string;
+  workerId: string;
+  title: string;
+  summary: string;
+  baseCommit: string;
+  changedPaths: string[];
+  status: "review" | "approved" | "rejected" | "integrated";
+  reviewerId: string | null;
+  reviewNote: string;
+  createdAt: string;
+  updatedAt: string;
+  integratedAt: string | null;
+}
+
+export interface CollabMessage {
+  id: string;
+  authorId: string;
+  authorName: string;
+  body: string;
+  createdAt: string;
+  recipientId: string | null;
+}
+
+export interface CollabRoomState {
+  roomId: string;
+  repository: string;
+  headCommit: string;
+  workers: CollabWorker[];
+  tasks: CollabTask[];
+  leases: CollabLease[];
+  changeSets: CollabChangeSet[];
+  messages: CollabMessage[];
+}
+
+export function getCollabRoomState(roomRef: string): Promise<CollabRoomState> {
+  return invoke<CollabRoomState>("get_collab_room_state", { roomRef });
+}
+
+export function addCollabWorker(roomRef: string, name: string, provider: string, role: string): Promise<CollabRoomState> {
+  return invoke<CollabRoomState>("add_collab_worker", { request: { roomRef, name, provider, role } });
+}
+
+export function createCollabTask(roomRef: string, title: string, scope: string): Promise<CollabRoomState> {
+  return invoke<CollabRoomState>("create_collab_task", { request: { roomRef, title, scope } });
+}
+
+export function claimCollabTask(roomRef: string, taskId: string, workerId: string | null): Promise<CollabRoomState> {
+  return invoke<CollabRoomState>("claim_collab_task", { request: { roomRef, taskId, workerId } });
+}
+
+export function acquireCollabLease(
+  roomRef: string,
+  holderId: string,
+  taskId: string | null,
+  resource: string,
+  mode: "exclusive" | "shared",
+  ttlSeconds: number,
+): Promise<CollabRoomState> {
+  return invoke<CollabRoomState>("acquire_collab_lease", { request: { roomRef, holderId, taskId, resource, mode, ttlSeconds } });
+}
+
+export function renewCollabLease(roomRef: string, lease: CollabLease, ttlSeconds = 900): Promise<CollabRoomState> {
+  return invoke<CollabRoomState>("renew_collab_lease", { request: { roomRef, leaseId: lease.id, holderId: lease.holderId, fencingToken: lease.fencingToken, ttlSeconds } });
+}
+
+export function releaseCollabLease(roomRef: string, lease: CollabLease): Promise<CollabRoomState> {
+  return invoke<CollabRoomState>("release_collab_lease", { request: { roomRef, leaseId: lease.id, holderId: lease.holderId, fencingToken: lease.fencingToken, ttlSeconds: null } });
+}
+
+export function submitCollabChange(roomRef: string, workerId: string, title: string, summary: string, leases: CollabLease[]): Promise<CollabRoomState> {
+  return invoke<CollabRoomState>("submit_collab_change", {
+    request: {
+      roomRef,
+      workerId,
+      title,
+      summary,
+      leaseProofs: leases.filter((lease) => lease.holderId === workerId && lease.mode === "exclusive").map((lease) => ({ leaseId: lease.id, fencingToken: lease.fencingToken })),
+    },
+  });
+}
+
+export function reviewCollabChange(roomRef: string, changeSetId: string, decision: "approved" | "rejected", note: string): Promise<CollabRoomState> {
+  return invoke<CollabRoomState>("review_collab_change", { request: { roomRef, changeSetId, reviewerId: "local-host", decision, note } });
+}
+
+export function integrateCollabChange(roomRef: string, changeSetId: string): Promise<CollabRoomState> {
+  return invoke<CollabRoomState>("integrate_collab_change", { request: { roomRef, changeSetId } });
+}
+
+export function postCollabMessage(roomRef: string, body: string): Promise<CollabRoomState> {
+  return invoke<CollabRoomState>("post_collab_message", { request: { roomRef, authorId: "local-host", authorName: "Host", body, recipientId: null } });
+}
+
+export function updateCollabWorkerRuntime(
+  roomRef: string,
+  workerId: string,
+  sessionKey: string | null,
+  threadId: string | null,
+  status: CollabWorker["runtimeStatus"],
+  error = "",
+): Promise<CollabRoomState> {
+  return invoke<CollabRoomState>("update_collab_worker_runtime", {
+    request: { roomRef, workerId, sessionKey, threadId, status, error },
+  });
+}
+
+export function postCollabAgentMessage(roomRef: string, worker: CollabWorker, body: string, direct = false): Promise<CollabRoomState> {
+  return invoke<CollabRoomState>("post_collab_message", {
+    request: { roomRef, authorId: worker.id, authorName: worker.name, body, recipientId: direct ? "local-host" : null },
+  });
+}
+
+export function postCollabDirectMessage(roomRef: string, workerId: string, body: string): Promise<CollabRoomState> {
+  return invoke<CollabRoomState>("post_collab_message", {
+    request: { roomRef, authorId: "local-host", authorName: "Host", body, recipientId: workerId },
+  });
+}
+
 /** Read only the selected transcript's mtime; avoids a full session discovery scan. */
 export function getSessionModified(fileRefs: string): Promise<string> {
   return invoke<string>("get_session_modified", { fileRefs });
@@ -146,6 +316,10 @@ export function chooseWorkspaceDirectory(): Promise<string | null> {
 
 export function resolveWorkspaceFilepaths(workspaceRoot: string, filepaths: string[]): Promise<(string | null)[]> {
   return invoke<(string | null)[]>("resolve_workspace_filepaths", { request: { workspaceRoot, filepaths } });
+}
+
+export function listWorkspaceFiles(workspaceRoot: string): Promise<WorkspaceTreeEntry[]> {
+  return invoke<WorkspaceTreeEntry[]>("list_workspace_files", { request: { workspaceRoot } });
 }
 
 export function startTerminal(terminalId: string, workspaceRoot: string): Promise<boolean> {
@@ -174,6 +348,29 @@ export interface NewCodexSession {
 
 export function startCodexSession(sessionKey: string, cwd: string, model: string): Promise<NewCodexSession> {
   return invoke<NewCodexSession>("start_codex_session", { requestData: { sessionKey, cwd, model } });
+}
+
+export interface SessionFileVersion {
+  version: number;
+  timestamp: string;
+  content: string | null;
+  baseline: boolean;
+}
+
+export function startSessionHistory(sessionKey: string, workspaceRoot: string): Promise<number> {
+  return invoke<number>("start_session_history", { sessionKey, workspaceRoot });
+}
+
+export function bindSessionHistory(sessionKey: string, threadId: string): Promise<void> {
+  return invoke<void>("bind_session_history", { request: { sessionKey, threadId } });
+}
+
+export function captureSessionHistory(sessionKey: string, timestamp?: string): Promise<number> {
+  return invoke<number>("capture_session_history", { request: { sessionKey, timestamp } });
+}
+
+export function readSessionFileHistory(threadId: string, filepath: string): Promise<SessionFileVersion[]> {
+  return invoke<SessionFileVersion[]>("read_session_file_history", { request: { threadId, filepath } });
 }
 
 export function sendCodexTurn(
