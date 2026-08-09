@@ -64,4 +64,42 @@ describe("SessionRecordParser", () => {
       text: "Continue from the latest phone message.",
     });
   });
+
+  it("prefers completed file changes over the earlier requested patch envelope", () => {
+    const patch = "*** Update File: /repo/src/app.ts\n-old\n+new";
+    const events = parseSessionRecords([{
+      ...records,
+      lines: [
+        JSON.stringify({
+          type: "response_item",
+          timestamp: "2026-08-08T04:00:00Z",
+          payload: {
+            type: "custom_tool_call",
+            name: "exec",
+            call_id: "requested",
+            input: `text(await tools.apply_patch(${JSON.stringify(patch)}));`,
+          },
+        }),
+        JSON.stringify({
+          type: "event_msg",
+          timestamp: "2026-08-08T04:00:01Z",
+          payload: {
+            type: "item_completed",
+            item: {
+              type: "FileChange",
+              id: "completed",
+              changes: { "/repo/src/app.ts": { type: "update", unified_diff: "@@\n-old\n+new" } },
+            },
+          },
+        }),
+      ],
+    }]);
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      kind: "file_change",
+      callId: "completed",
+      attribution: "tool_completed",
+    });
+  });
 });

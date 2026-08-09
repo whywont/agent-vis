@@ -24,10 +24,10 @@ export default function DesktopSessionWorkspace({
   secondary: TranscriptSessionMeta | null;
   primaryName: string | null;
   secondaryName: string | null;
-  activeTab: "session" | "files" | "editor";
+  activeTab: "session" | "files" | "testing" | "editor";
   terminalOpen: boolean;
   matchTarget: SessionMatchTarget | null;
-  onActiveTabChange: (tab: "session" | "files" | "editor") => void;
+  onActiveTabChange: (tab: "session" | "files" | "testing" | "editor") => void;
   onTerminalOpen: (session: TranscriptSessionMeta) => void;
   onOpenCollab: () => void;
   onTerminalClose: () => void;

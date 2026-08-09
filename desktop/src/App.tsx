@@ -70,7 +70,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
   const [sessionSidebarOpen, setSessionSidebarOpen] = useState(true);
-  const [activeTab, setActiveTab] = useState<"session" | "files" | "editor">("session");
+  const [activeTab, setActiveTab] = useState<"session" | "files" | "testing" | "editor">("session");
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [matchTarget, setMatchTarget] = useState<SessionMatchTarget | null>(null);
   const [sessionAliases, setSessionAliases] = useState(() => loadSessionAliases());
@@ -397,8 +397,8 @@ export default function App() {
         splitView={splitActive}
         splitCenter={splitCenter}
         onActiveTabChange={(tab) => {
-          if (selected?.synced && (tab === "files" || tab === "editor")) return;
-          if (tab === "files" || tab === "editor") setMatchTarget(null);
+          if (selected?.synced && (tab === "files" || tab === "testing" || tab === "editor")) return;
+          if (tab === "files" || tab === "testing" || tab === "editor") setMatchTarget(null);
           setActiveTab(tab);
         }}
         onTerminalOpen={() => {
@@ -558,8 +558,8 @@ export default function App() {
               terminalOpen={terminalOpen}
               matchTarget={matchTarget}
               onActiveTabChange={(tab) => {
-                if (selected.synced && (tab === "files" || tab === "editor")) return;
-                if (tab === "files" || tab === "editor") setMatchTarget(null);
+                if (selected.synced && (tab === "files" || tab === "testing" || tab === "editor")) return;
+                if (tab === "files" || tab === "testing" || tab === "editor") setMatchTarget(null);
                 setActiveTab(tab);
               }}
               onTerminalOpen={(session) => {
@@ -634,11 +634,11 @@ function DesktopMacTitlebar({
   sessionName: string | null;
   splitSession: SessionMeta | null;
   splitSessionName: string | null;
-  activeTab: "session" | "files" | "editor";
+  activeTab: "session" | "files" | "testing" | "editor";
   terminalOpen: boolean;
   splitView: boolean;
   splitCenter: number | null;
-  onActiveTabChange: (tab: "session" | "files" | "editor") => void;
+  onActiveTabChange: (tab: "session" | "files" | "testing" | "editor") => void;
   onTerminalOpen: () => void;
   onOpenCollab?: () => void;
   onCloseSplit: () => void;
@@ -715,6 +715,14 @@ function DesktopMacTitlebar({
             title={session.synced ? "Editor is unavailable for synced transcripts" : splitView ? "Editor is unavailable while sessions are split" : undefined}
           >
             Editor
+          </button>
+          <button
+            className={activeTab === "testing" ? "active" : ""}
+            onClick={() => onActiveTabChange("testing")}
+            disabled={splitView || Boolean(session.synced)}
+            title={session.synced ? "Testing is unavailable for synced transcripts" : splitView ? "Testing is unavailable while sessions are split" : undefined}
+          >
+            Testing
           </button>
           <button
             className="desktop-collab-tab"

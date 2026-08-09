@@ -7,6 +7,7 @@ import type { SessionMatchTarget } from "./App";
 import { formatTime } from "@/utils/format";
 import DesktopFileTree from "./DesktopFileTree";
 import DesktopFilesCanvas from "./DesktopFilesCanvas";
+import DesktopTestingCanvas from "./DesktopTestingCanvas";
 import DesktopTimeline from "./DesktopTimeline";
 import DesktopTerminal from "./DesktopTerminal";
 import DesktopLiveConversation from "./DesktopLiveConversation";
@@ -37,10 +38,10 @@ export default function DesktopSessionDetail({
 }: {
   session: TranscriptSessionMeta;
   sessionName: string | null;
-  activeTab: "session" | "files" | "editor";
+  activeTab: "session" | "files" | "testing" | "editor";
   terminalOpen: boolean;
   splitView?: boolean;
-  onActiveTabChange: (tab: "session" | "files" | "editor") => void;
+  onActiveTabChange: (tab: "session" | "files" | "testing" | "editor") => void;
   onTerminalOpen: () => void;
   onOpenCollab?: () => void;
   onTerminalClose: () => void;
@@ -486,6 +487,14 @@ export default function DesktopSessionDetail({
             Editor
           </button>
           <button
+            className={`session-tab-btn${activeTab === "testing" ? " active" : ""}`}
+            onClick={() => onActiveTabChange("testing")}
+            disabled={splitView || transcriptOnly}
+            title={transcriptOnly ? "Testing is unavailable for synced transcripts" : splitView ? "Testing is unavailable while sessions are split" : undefined}
+          >
+            Testing
+          </button>
+          <button
             className="session-tab-btn desktop-collab-tab"
             onClick={onOpenCollab}
             disabled={!onOpenCollab}
@@ -501,6 +510,8 @@ export default function DesktopSessionDetail({
         <div className="desktop-detail-state error">{error}</div>
       ) : activeTab === "files" && !splitView && !transcriptOnly ? (
         <DesktopFilesCanvas events={events} sessionCwd={cwd} threadId={id} />
+      ) : activeTab === "testing" && !splitView && !transcriptOnly ? (
+        <DesktopTestingCanvas events={events} sessionCwd={cwd} onOpenFile={(path) => void openTimelineFileInEditor(path)} />
       ) : activeTab === "editor" && !splitView && !transcriptOnly ? (
         <Suspense fallback={<div className="desktop-detail-state">Loading editor...</div>}>
           <DesktopEditor workspaceRoot={cwd} navigation={editorNavigation} threadId={id} />

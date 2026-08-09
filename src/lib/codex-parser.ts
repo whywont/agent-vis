@@ -35,6 +35,25 @@ function extractExecCommands(input: unknown): { cmd: string; workdir: string }[]
   return commands;
 }
 
+/** Extract patches nested in the JavaScript `exec` wrapper. */
+function extractExecPatches(input: unknown): string[] {
+  if (typeof input !== "string") return [];
+  const literals = new Map<string, string>();
+  for (const match of input.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')\s*;/g)) {
+    literals.set(match[1], readStringLiteral(match[2]));
+  }
+
+  const patches: string[] = [];
+  for (const match of input.matchAll(/tools\.apply_patch\(\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[A-Za-z_$][\w$]*)\s*\)/g)) {
+    const argument = match[1];
+    const patch = argument.startsWith("\"") || argument.startsWith("'")
+      ? readStringLiteral(argument)
+      : literals.get(argument);
+    if (patch) patches.push(patch);
+  }
+  return patches;
+}
+
 function extractTerminalWait(input: unknown): string | null {
   if (typeof input !== "string") return null;
   const match = input.match(/tools\.(?:wait|write_stdin)\(\{[\s\S]*?\bcell_id\s*:\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\d+)/);
@@ -123,6 +142,22 @@ export function parseEvent(obj: Record<string, unknown>): AppEvent | null {
 
   if (type === "event_msg") {
     const p = payload as Record<string, unknown>;
+    if (p.type === "item_completed") {
+      const item = p.item as Record<string, unknown> | undefined;
+      if (item?.type === "FileChange") {
+        const patch = structuredPatchToPatch(item.changes);
+        if (!patch) return null;
+        return {
+          kind: "file_change",
+          ts,
+          patch,
+          files: extractPatchFiles(patch),
+          callId: item.id as string,
+          toolName: "apply_patch",
+          attribution: "tool_completed",
+        };
+      }
+    }
     if (p.type === "patch_apply_end") {
       const patch = structuredPatchToPatch(p.changes);
       if (!patch) return null;
@@ -132,6 +167,7 @@ export function parseEvent(obj: Record<string, unknown>): AppEvent | null {
         patch,
         files: extractPatchFiles(patch),
         callId: p.call_id as string,
+        attribution: "tool_completed",
       };
     }
     if (p.type === "user_message") {
@@ -216,12 +252,25 @@ export function parseEvent(obj: Record<string, unknown>): AppEvent | null {
     if (p.type === "custom_tool_call" && p.name === "apply_patch") {
       const patch = (p.input as string) || "";
       const files = extractPatchFiles(patch);
-      return { kind: "file_change", ts, patch, files, callId: p.call_id as string };
+      return { kind: "file_change", ts, patch, files, callId: p.call_id as string, attribution: "legacy" };
     }
 
     // Recent Codex sessions wrap terminal work in a JavaScript `exec` call.
-    // The actual terminal calls are nested as tools.exec_command({...}).
+    // The actual patch and terminal calls are nested in that script.
     if (p.type === "custom_tool_call" && p.name === "exec") {
+      const patches = extractExecPatches(p.input);
+      if (patches.length > 0) {
+        const patch = patches.join("\n");
+        return {
+          kind: "file_change",
+          ts,
+          patch,
+          files: extractPatchFiles(patch),
+          callId: p.call_id as string,
+          toolName: "apply_patch",
+          attribution: "tool_requested",
+        };
+      }
       const commands = extractExecCommands(p.input);
       if (commands.length > 0) {
         return {
@@ -255,7 +304,7 @@ export function parseEvent(obj: Record<string, unknown>): AppEvent | null {
         patch = (p.arguments as string) || "";
       }
       const files = extractPatchFiles(patch);
-      return { kind: "file_change", ts, patch, files, callId: p.call_id as string };
+      return { kind: "file_change", ts, patch, files, callId: p.call_id as string, attribution: "legacy" };
     }
 
     if (p.type === "function_call" && p.name === "exec_command") {
@@ -278,7 +327,7 @@ export function parseEvent(obj: Record<string, unknown>): AppEvent | null {
         const patchLines = content.split("\n").map((l) => "+" + l).join("\n");
         const patch = `*** Begin Patch\n*** Add File: ${filepath}\n${patchLines}\n*** End Patch`;
         const files: FileInfo[] = [{ action: "add", path: filepath }];
-        return { kind: "file_change", ts, patch, files, callId: p.call_id as string };
+        return { kind: "file_change", ts, patch, files, callId: p.call_id as string, attribution: "legacy" };
       }
 
       return { kind: "shell_command", ts, cmd, workdir, callId: p.call_id as string };
@@ -323,10 +372,10 @@ export function parseEvent(obj: Record<string, unknown>): AppEvent | null {
  */
 export function extractPatchFiles(patch: string): FileInfo[] {
   const files: FileInfo[] = [];
-  const re = /\*\*\* (Update|Add|Delete) File: (.+)/g;
+  const re = /^\*\*\* (Update|Add|Delete) File: ([^\r\n]+)$/gm;
   let m;
   while ((m = re.exec(patch)) !== null) {
-    files.push({ action: m[1].toLowerCase() as FileInfo["action"], path: m[2] });
+    files.push({ action: m[1].toLowerCase() as FileInfo["action"], path: m[2].trim() });
   }
   return files;
 }
