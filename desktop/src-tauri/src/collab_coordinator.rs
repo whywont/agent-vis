@@ -15,6 +15,8 @@ const CHANGES_DIR: &str = "changes";
 const MIN_LEASE_SECONDS: u64 = 30;
 const MAX_LEASE_SECONDS: u64 = 24 * 60 * 60;
 const MAX_TEXT: usize = 4_000;
+const LOCAL_PARTICIPANT_ID: &str = "local-host";
+const FALLBACK_LOCAL_DEVICE_ID: &str = "local-device";
 
 static GIT_OPERATION_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
@@ -34,6 +36,18 @@ pub(crate) struct CollabWorker {
     thread_id: Option<String>,
     runtime_status: String,
     runtime_error: String,
+    owner_participant_id: String,
+    host_device_id: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CollabParticipant {
+    id: String,
+    display_name: String,
+    device_id: String,
+    role: String,
+    joined_at: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -95,6 +109,9 @@ pub(crate) struct CollabRoomState {
     room_id: String,
     repository: String,
     head_commit: String,
+    local_participant_id: String,
+    local_device_id: String,
+    participants: Vec<CollabParticipant>,
     workers: Vec<CollabWorker>,
     tasks: Vec<CollabTask>,
     leases: Vec<CollabLease>,
@@ -285,6 +302,10 @@ fn open_database(room: &CollabRoomContext) -> Result<Connection, String> {
                next_fencing_token INTEGER NOT NULL
              );
              INSERT OR IGNORE INTO coordinator_meta(id, next_fencing_token) VALUES (1, 1);
+             CREATE TABLE IF NOT EXISTS participants (
+               id TEXT PRIMARY KEY, display_name TEXT NOT NULL, device_id TEXT NOT NULL UNIQUE,
+               role TEXT NOT NULL, joined_at TEXT NOT NULL
+             );
              CREATE TABLE IF NOT EXISTS workers (
                id TEXT PRIMARY KEY, name TEXT NOT NULL, provider TEXT NOT NULL, role TEXT NOT NULL,
                model TEXT NOT NULL DEFAULT '', effort TEXT NOT NULL DEFAULT '',
@@ -313,8 +334,53 @@ fn open_database(room: &CollabRoomContext) -> Result<Connection, String> {
         )
         .map_err(|error| error.to_string())?;
     ensure_worker_runtime_columns(&connection)?;
+    ensure_worker_ownership_columns(&connection)?;
     ensure_message_channel_column(&connection)?;
     Ok(connection)
+}
+
+fn ensure_worker_ownership_columns(connection: &Connection) -> Result<(), String> {
+    let mut statement = connection
+        .prepare("PRAGMA table_info(workers)")
+        .map_err(|error| error.to_string())?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<HashSet<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    drop(statement);
+    for (name, definition) in [
+        ("owner_participant_id", "TEXT NOT NULL DEFAULT 'local-host'"),
+        ("host_device_id", "TEXT NOT NULL DEFAULT ''"),
+    ] {
+        if !columns.contains(name) {
+            connection
+                .execute_batch(&format!(
+                    "ALTER TABLE workers ADD COLUMN {name} {definition};"
+                ))
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn ensure_local_participant(room: &CollabRoomContext, device_id: &str) -> Result<(), String> {
+    let device_id = validate_text(device_id, "Local device", false)?;
+    let connection = open_database(room)?;
+    connection
+        .execute(
+            "INSERT INTO participants(id,display_name,device_id,role,joined_at) VALUES (?1,'Host',?2,'owner',?3)
+             ON CONFLICT(id) DO UPDATE SET device_id=excluded.device_id",
+            params![LOCAL_PARTICIPANT_ID, device_id, now_iso()],
+        )
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute(
+            "UPDATE workers SET host_device_id=?1 WHERE owner_participant_id=?2 AND host_device_id IN ('',?3)",
+            params![device_id, LOCAL_PARTICIPANT_ID, FALLBACK_LOCAL_DEVICE_ID],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 fn ensure_message_channel_column(connection: &Connection) -> Result<(), String> {
@@ -387,8 +453,13 @@ fn git_text(repo: &Path, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&bytes).trim().to_owned())
 }
 
-fn load_state(room: &CollabRoomContext) -> Result<CollabRoomState, String> {
+fn load_state_for(
+    room: &CollabRoomContext,
+    local_participant_id: &str,
+    local_device_id: &str,
+) -> Result<CollabRoomState, String> {
     let connection = open_database(room)?;
+    let participants = query_participants(&connection)?;
     let workers = query_workers(&connection)?;
     let tasks = query_tasks(&connection)?;
     let leases = query_leases(&connection)?;
@@ -399,6 +470,9 @@ fn load_state(room: &CollabRoomContext) -> Result<CollabRoomState, String> {
         room_id: room.id.clone(),
         repository: room.cwd.to_string_lossy().into_owned(),
         head_commit,
+        local_participant_id: local_participant_id.to_owned(),
+        local_device_id: local_device_id.to_owned(),
+        participants,
         workers,
         tasks,
         leases,
@@ -407,8 +481,46 @@ fn load_state(room: &CollabRoomContext) -> Result<CollabRoomState, String> {
     })
 }
 
+fn load_state(room: &CollabRoomContext) -> Result<CollabRoomState, String> {
+    let connection = open_database(room)?;
+    let device_id = connection
+        .query_row(
+            "SELECT device_id FROM participants WHERE id=?1",
+            params![LOCAL_PARTICIPANT_ID],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?
+        .unwrap_or_else(|| FALLBACK_LOCAL_DEVICE_ID.to_owned());
+    drop(connection);
+    ensure_local_participant(room, &device_id)?;
+    load_state_for(room, LOCAL_PARTICIPANT_ID, &device_id)
+}
+
+fn query_participants(connection: &Connection) -> Result<Vec<CollabParticipant>, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT id,display_name,device_id,role,joined_at FROM participants ORDER BY joined_at",
+        )
+        .map_err(|error| error.to_string())?;
+    let participants = statement
+        .query_map([], |row| {
+            Ok(CollabParticipant {
+                id: row.get(0)?,
+                display_name: row.get(1)?,
+                device_id: row.get(2)?,
+                role: row.get(3)?,
+                joined_at: row.get(4)?,
+            })
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    Ok(participants)
+}
+
 fn query_workers(connection: &Connection) -> Result<Vec<CollabWorker>, String> {
-    let mut statement = connection.prepare("SELECT id,name,provider,model,effort,role,worktree_path,branch,created_at,session_key,thread_id,runtime_status,runtime_error FROM workers ORDER BY created_at").map_err(|error| error.to_string())?;
+    let mut statement = connection.prepare("SELECT id,name,provider,model,effort,role,worktree_path,branch,created_at,session_key,thread_id,runtime_status,runtime_error,owner_participant_id,host_device_id FROM workers ORDER BY created_at").map_err(|error| error.to_string())?;
     let rows = statement
         .query_map([], |row| {
             Ok(CollabWorker {
@@ -425,6 +537,8 @@ fn query_workers(connection: &Connection) -> Result<Vec<CollabWorker>, String> {
                 thread_id: row.get(10)?,
                 runtime_status: row.get(11)?,
                 runtime_error: row.get(12)?,
+                owner_participant_id: row.get(13)?,
+                host_device_id: row.get(14)?,
             })
         })
         .map_err(|error| error.to_string())?
@@ -530,7 +644,12 @@ fn worker_exists(transaction: &Transaction<'_>, worker_id: &str) -> Result<bool,
         .map_err(|error| error.to_string())
 }
 
-fn add_worker(room: &CollabRoomContext, request: AddWorkerRequest) -> Result<(), String> {
+fn add_worker_as(
+    room: &CollabRoomContext,
+    request: AddWorkerRequest,
+    owner_participant_id: &str,
+    host_device_id: &str,
+) -> Result<(), String> {
     let name = validate_text(&request.name, "Worker name", false)?;
     let provider = validate_identifier(&request.provider, "Worker provider")?;
     let model = validate_text(&request.model, "Worker model", true)?;
@@ -555,13 +674,24 @@ fn add_worker(room: &CollabRoomContext, request: AddWorkerRequest) -> Result<(),
     let created_at = now_iso();
     let connection = open_database(room)?;
     if let Err(error) = connection.execute(
-        "INSERT INTO workers(id,name,provider,model,effort,role,worktree_path,branch,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
-        params![id, name, provider, model, effort, role, worktree.to_string_lossy(), branch, created_at],
+        "INSERT INTO workers(id,name,provider,model,effort,role,worktree_path,branch,created_at,owner_participant_id,host_device_id) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+        params![id, name, provider, model, effort, role, worktree.to_string_lossy(), branch, created_at, owner_participant_id, host_device_id],
     ) {
         let _ = Command::new("git").args(["worktree", "remove", "--force"]).arg(&worktree).current_dir(&room.cwd).status();
         return Err(error.to_string());
     }
     Ok(())
+}
+
+#[cfg(test)]
+fn add_worker(room: &CollabRoomContext, request: AddWorkerRequest) -> Result<(), String> {
+    ensure_local_participant(room, FALLBACK_LOCAL_DEVICE_ID)?;
+    add_worker_as(
+        room,
+        request,
+        LOCAL_PARTICIPANT_ID,
+        FALLBACK_LOCAL_DEVICE_ID,
+    )
 }
 
 fn create_task(room: &CollabRoomContext, request: CreateTaskRequest) -> Result<(), String> {
@@ -972,9 +1102,10 @@ fn post_message(room: &CollabRoomContext, request: PostMessageRequest) -> Result
     Ok(())
 }
 
-fn update_worker_runtime(
+fn update_worker_runtime_as(
     room: &CollabRoomContext,
     request: UpdateWorkerRuntimeRequest,
+    actor_device_id: &str,
 ) -> Result<(), String> {
     let worker_id = validate_identifier(&request.worker_id, "Worker")?;
     let status = match request.status.as_str() {
@@ -983,6 +1114,18 @@ fn update_worker_runtime(
     };
     let error = validate_text(&request.error, "Worker runtime error", true)?;
     let connection = open_database(room)?;
+    let host_device_id = connection
+        .query_row(
+            "SELECT host_device_id FROM workers WHERE id=?1",
+            params![worker_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "Worker was not found.".to_owned())?;
+    if host_device_id != actor_device_id {
+        return Err("Only the device hosting this worker can control its runtime.".to_owned());
+    }
     let changed = connection
         .execute(
             "UPDATE workers SET session_key=?1,thread_id=?2,runtime_status=?3,runtime_error=?4 WHERE id=?5",
@@ -998,9 +1141,13 @@ fn update_worker_runtime(
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) fn get_collab_room_state(
     app: tauri::AppHandle,
+    mesh: tauri::State<'_, crate::mesh::MeshState>,
     room_ref: String,
 ) -> Result<CollabRoomState, String> {
-    load_state(&resolve_collab_room(&app, &room_ref)?)
+    let room = resolve_collab_room(&app, &room_ref)?;
+    let device_id = mesh.device_id();
+    ensure_local_participant(&room, &device_id)?;
+    load_state_for(&room, LOCAL_PARTICIPANT_ID, &device_id)
 }
 
 macro_rules! state_command {
@@ -1017,7 +1164,18 @@ macro_rules! state_command {
     };
 }
 
-state_command!(add_collab_worker, AddWorkerRequest, add_worker);
+#[tauri::command]
+pub(crate) fn add_collab_worker(
+    app: tauri::AppHandle,
+    mesh: tauri::State<'_, crate::mesh::MeshState>,
+    request: AddWorkerRequest,
+) -> Result<CollabRoomState, String> {
+    let room = resolve_collab_room(&app, &request.room_ref)?;
+    let device_id = mesh.device_id();
+    ensure_local_participant(&room, &device_id)?;
+    add_worker_as(&room, request, LOCAL_PARTICIPANT_ID, &device_id)?;
+    load_state_for(&room, LOCAL_PARTICIPANT_ID, &device_id)
+}
 state_command!(create_collab_task, CreateTaskRequest, create_task);
 state_command!(claim_collab_task, ClaimTaskRequest, claim_task);
 state_command!(acquire_collab_lease, AcquireLeaseRequest, acquire_lease);
@@ -1050,11 +1208,18 @@ state_command!(
     integrate_change
 );
 state_command!(post_collab_message, PostMessageRequest, post_message);
-state_command!(
-    update_collab_worker_runtime,
-    UpdateWorkerRuntimeRequest,
-    update_worker_runtime
-);
+#[tauri::command]
+pub(crate) fn update_collab_worker_runtime(
+    app: tauri::AppHandle,
+    mesh: tauri::State<'_, crate::mesh::MeshState>,
+    request: UpdateWorkerRuntimeRequest,
+) -> Result<CollabRoomState, String> {
+    let room = resolve_collab_room(&app, &request.room_ref)?;
+    let device_id = mesh.device_id();
+    ensure_local_participant(&room, &device_id)?;
+    update_worker_runtime_as(&room, request, &device_id)?;
+    load_state_for(&room, LOCAL_PARTICIPANT_ID, &device_id)
+}
 
 #[cfg(test)]
 mod tests {
@@ -1125,6 +1290,88 @@ mod tests {
         );
         assert!(normalize_resource("../secret").is_err());
         assert!(normalize_resource("/tmp/repo").is_err());
+    }
+
+    #[test]
+    fn local_participant_adopts_legacy_workers_and_exposes_ownership() {
+        let (root, room) = test_room();
+        add_worker(
+            &room,
+            AddWorkerRequest {
+                room_ref: "collab:test-room".to_owned(),
+                name: "Local agent".to_owned(),
+                provider: "codex".to_owned(),
+                model: "gpt-5".to_owned(),
+                effort: "high".to_owned(),
+                role: "contributor".to_owned(),
+            },
+        )
+        .unwrap();
+
+        ensure_local_participant(&room, "device-public-key").unwrap();
+        let state = load_state_for(&room, LOCAL_PARTICIPANT_ID, "device-public-key").unwrap();
+
+        assert_eq!(state.local_participant_id, LOCAL_PARTICIPANT_ID);
+        assert_eq!(state.local_device_id, "device-public-key");
+        assert_eq!(state.participants.len(), 1);
+        assert_eq!(state.workers[0].owner_participant_id, LOCAL_PARTICIPANT_ID);
+        assert_eq!(state.workers[0].host_device_id, "device-public-key");
+        command_output(
+            Command::new("git")
+                .args(["worktree", "remove", "--force"])
+                .arg(&state.workers[0].worktree_path)
+                .current_dir(&room.cwd),
+            "cleanup",
+        )
+        .unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn only_the_host_device_can_change_worker_runtime() {
+        let (root, room) = test_room();
+        ensure_local_participant(&room, "host-device").unwrap();
+        add_worker_as(
+            &room,
+            AddWorkerRequest {
+                room_ref: "collab:test-room".to_owned(),
+                name: "Owned agent".to_owned(),
+                provider: "codex".to_owned(),
+                model: "gpt-5".to_owned(),
+                effort: "high".to_owned(),
+                role: "contributor".to_owned(),
+            },
+            LOCAL_PARTICIPANT_ID,
+            "host-device",
+        )
+        .unwrap();
+        let worker = load_state_for(&room, LOCAL_PARTICIPANT_ID, "host-device")
+            .unwrap()
+            .workers
+            .remove(0);
+        let request = || UpdateWorkerRuntimeRequest {
+            room_ref: "collab:test-room".to_owned(),
+            worker_id: worker.id.clone(),
+            session_key: Some("session".to_owned()),
+            thread_id: Some("thread".to_owned()),
+            status: "running".to_owned(),
+            error: String::new(),
+        };
+
+        assert_eq!(
+            update_worker_runtime_as(&room, request(), "remote-device").unwrap_err(),
+            "Only the device hosting this worker can control its runtime."
+        );
+        update_worker_runtime_as(&room, request(), "host-device").unwrap();
+        command_output(
+            Command::new("git")
+                .args(["worktree", "remove", "--force"])
+                .arg(&worker.worktree_path)
+                .current_dir(&room.cwd),
+            "cleanup",
+        )
+        .unwrap();
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

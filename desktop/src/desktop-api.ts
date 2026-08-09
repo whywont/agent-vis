@@ -153,6 +153,16 @@ export interface CollabWorker {
   threadId: string | null;
   runtimeStatus: "offline" | "starting" | "running" | "error";
   runtimeError: string;
+  ownerParticipantId: string;
+  hostDeviceId: string;
+}
+
+export interface CollabParticipant {
+  id: string;
+  displayName: string;
+  deviceId: string;
+  role: "owner" | "operator" | "participant";
+  joinedAt: string;
 }
 
 export interface CollabTask {
@@ -204,6 +214,9 @@ export interface CollabRoomState {
   roomId: string;
   repository: string;
   headCommit: string;
+  localParticipantId: string;
+  localDeviceId: string;
+  participants: CollabParticipant[];
   workers: CollabWorker[];
   tasks: CollabTask[];
   leases: CollabLease[];

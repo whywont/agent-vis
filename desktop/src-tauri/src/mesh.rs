@@ -284,6 +284,13 @@ impl MeshState {
         *active = Some(MeshListener { shutdown, thread });
     }
 
+    pub(crate) fn device_id(&self) -> String {
+        self.identity
+            .lock()
+            .map(|identity| identity.public_key.clone())
+            .unwrap_or_default()
+    }
+
     fn status(&self) -> MeshStatus {
         MeshStatus {
             public_key: self

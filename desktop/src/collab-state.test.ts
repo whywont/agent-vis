@@ -6,12 +6,15 @@ const alpha: CollabWorker = {
   id: "worker-a", name: "Alpha", provider: "codex", model: "gpt-5", effort: "high", role: "agent worker",
   worktreePath: "/tmp/alpha", branch: "agent-vis/alpha", createdAt: "",
   sessionKey: "alpha-session", threadId: "alpha-thread", runtimeStatus: "running", runtimeError: "",
+  ownerParticipantId: "local-host", hostDeviceId: "local-device",
 };
 const beta = { ...alpha, id: "worker-b", name: "Beta", worktreePath: "/tmp/beta" };
 const gamma = { ...alpha, id: "worker-c", name: "Gamma", worktreePath: "/tmp/gamma" };
 
 const state: CollabRoomState = {
   roomId: "room-1", repository: "/repo", headCommit: "abc123", workers: [alpha, beta, gamma],
+  localParticipantId: "local-host", localDeviceId: "local-device",
+  participants: [{ id: "local-host", displayName: "Host", deviceId: "local-device", role: "owner", joinedAt: "" }],
   tasks: [
     { id: "task-a", title: "Timeline", scope: "desktop/src/**", status: "claimed", claimedBy: "worker-a", createdAt: "", updatedAt: "" },
     { id: "task-b", title: "Timeline component", scope: "desktop/src/DesktopTimeline.tsx", status: "claimed", claimedBy: "worker-b", createdAt: "", updatedAt: "" },
