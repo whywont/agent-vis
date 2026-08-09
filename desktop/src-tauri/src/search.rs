@@ -1511,6 +1511,11 @@ mod tests {
             cli_version: String::new(),
             source: "codex",
             project: Some("vision-claw".to_owned()),
+            parent_session_id: None,
+            agent_path: None,
+            agent_nickname: None,
+            agent_depth: None,
+            agent_status: None,
             synced: false,
         }
     }

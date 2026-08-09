@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { SessionMeta } from "@/lib/types";
 import { toCompactMarkdown } from "@/lib/compact-utils";
 import { formatDate, formatTime } from "@/utils/format";
@@ -11,6 +11,7 @@ import { MAX_SESSION_ALIAS_LENGTH, sessionAlias, type SessionAliases } from "./s
 import { loadPinnedSessions, savePinnedSessions } from "./session-pins";
 import { sessionIdentity } from "./session-refresh";
 import { hasCurrentMeshSyncReceipt, type MeshSyncReceipts } from "./mesh-sync-receipts";
+import { descendantSessions, subagentChildren, subagentLabel, topLevelSessions } from "./subagent-sessions";
 
 type SortBy = "newest" | "oldest" | "project";
 type GroupBy = "date" | "project" | "none";
@@ -116,6 +117,7 @@ export default function DesktopSessionList({
   const [sessionActionNotice, setSessionActionNotice] = useState("");
   const [searchState, setSearchState] = useState<{ query: string; response: SessionSearchResponse } | null>(null);
   const [ignoreNextClick, setIgnoreNextClick] = useState(false);
+  const [expandedSubagents, setExpandedSubagents] = useState<Set<string>>(() => new Set());
   const menuRef = useRef<HTMLDivElement>(null);
   const activeQuery = search.trim();
   const searchResponse = searchState?.query === activeQuery ? searchState.response : null;
@@ -123,6 +125,16 @@ export default function DesktopSessionList({
   const renamingSession = renamingFor
     ? sessions.find((session) => fileKey(session) === renamingFor) || null
     : null;
+  const childSessions = useMemo(() => subagentChildren(sessions), [sessions]);
+  const visibleExpandedSubagents = useMemo(() => {
+    const next = new Set(expandedSubagents);
+    let parentId = sessions.find((session) => fileKey(session) === currentFile)?.parentSessionId;
+    while (parentId) {
+      next.add(parentId);
+      parentId = sessions.find((session) => session.id === parentId)?.parentSessionId;
+    }
+    return next;
+  }, [currentFile, expandedSubagents, sessions]);
 
   useEffect(() => {
     if (!menuOpenFor) return;
@@ -209,7 +221,7 @@ export default function DesktopSessionList({
         .toLowerCase()
         .includes(query);
     });
-    const sorted = [...filtered].sort((left, right) => {
+    const sorted = topLevelSessions(filtered).sort((left, right) => {
       if (sortBy === "project") {
         return (left.project || left.cwd).localeCompare(right.project || right.cwd);
       }
@@ -453,9 +465,12 @@ export default function DesktopSessionList({
               const sessionKey = sessionIdentity(session);
               const shared = sessionSharingMode === "all" || sharedSessionKeys.has(sessionKey);
               const outboundSynced = shared && hasCurrentMeshSyncReceipt(session, meshSyncReceipts);
+              const children = childSessions.get(session.id) || [];
+              const childCount = descendantSessions(session.id, childSessions).length;
+              const childrenOpen = visibleExpandedSubagents.has(session.id);
               return (
+                <div className="desktop-session-family" key={files}>
                 <div
-                  key={files}
                   className={`session-item desktop-session${active ? " active" : ""}${menuOpen ? " menu-open" : ""}`}
                   role="button"
                   tabIndex={0}
@@ -505,6 +520,21 @@ export default function DesktopSessionList({
                     </>
                   )}
                   <span className="session-time">{formatTime(session.modified)}</span>
+                  {childCount > 0 && <button
+                    type="button"
+                    className="desktop-subagent-toggle"
+                    aria-label={`${childrenOpen ? "Collapse" : "Expand"} ${childCount} sub-agents`}
+                    aria-expanded={childrenOpen}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setExpandedSubagents((current) => {
+                        const next = new Set(current);
+                        if (next.has(session.id)) next.delete(session.id);
+                        else next.add(session.id);
+                        return next;
+                      });
+                    }}
+                  >{childrenOpen ? "▾" : "▸"}<small>{childCount}</small></button>}
                   <button
                     type="button"
                     className="session-item-menu-btn"
@@ -687,6 +717,23 @@ export default function DesktopSessionList({
                       </button>
                     </div>
                   )}
+                </div>
+                {childrenOpen && children.map((child) => <SubagentSessionRows
+                  key={child.id}
+                  session={child}
+                  depth={1}
+                  childMap={childSessions}
+                  currentFile={currentFile}
+                  expanded={visibleExpandedSubagents}
+                  onToggle={(id) => setExpandedSubagents((current) => {
+                    const next = new Set(current);
+                    if (next.has(id)) next.delete(id);
+                    else next.add(id);
+                    return next;
+                  })}
+                  onSelect={(childSession) => onSelectSession(fileKey(childSession), null)}
+                  onSplit={onSplitSession}
+                />)}
                 </div>
               );
             })}
@@ -968,6 +1015,50 @@ function SessionUtilityActions({
       </button>
     </>
   );
+}
+
+function SubagentSessionRows({
+  session,
+  depth,
+  childMap,
+  currentFile,
+  expanded,
+  onToggle,
+  onSelect,
+  onSplit,
+}: {
+  session: SessionMeta;
+  depth: number;
+  childMap: Map<string, SessionMeta[]>;
+  currentFile: string | null;
+  expanded: Set<string>;
+  onToggle: (id: string) => void;
+  onSelect: (session: SessionMeta) => void;
+  onSplit: (session: SessionMeta) => void;
+}) {
+  const nested = childMap.get(session.id) || [];
+  const open = expanded.has(session.id);
+  const label = subagentLabel(session);
+  const files = fileKey(session);
+  return <>
+    <div
+      className={`desktop-subagent-session${currentFile === files ? " active" : ""}`}
+      style={{ "--subagent-depth": Math.max(1, depth) } as CSSProperties}
+      role="button"
+      tabIndex={0}
+      onClick={() => onSelect(session)}
+      onKeyDown={(event) => { if (event.key === "Enter") onSelect(session); }}
+    >
+      {nested.length > 0 ? <button type="button" onClick={(event) => { event.stopPropagation(); onToggle(session.id); }} aria-label={`${open ? "Collapse" : "Expand"} ${label}`}>{open ? "▾" : "▸"}</button> : <i />}
+      <span className="desktop-subagent-mark">agent</span>
+      <strong title={session.agentPath || session.id}>{label}</strong>
+      <small>{session.agentPath || `depth ${session.agentDepth ?? depth}`}</small>
+      {session.agentStatus && <span className={`desktop-subagent-status ${session.agentStatus}`}>{session.agentStatus}</span>}
+      <time>{formatTime(session.modified)}</time>
+      <button className="desktop-subagent-split" type="button" onClick={(event) => { event.stopPropagation(); onSplit(session); }}>split</button>
+    </div>
+    {open && nested.map((child) => <SubagentSessionRows key={child.id} session={child} depth={depth + 1} childMap={childMap} currentFile={currentFile} expanded={expanded} onToggle={onToggle} onSelect={onSelect} onSplit={onSplit} />)}
+  </>;
 }
 
 function OptionGroup({

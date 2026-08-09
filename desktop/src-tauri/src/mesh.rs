@@ -80,6 +80,16 @@ struct MeshSessionMeta {
     cli_version: String,
     source: String,
     project: Option<String>,
+    #[serde(default)]
+    parent_session_id: Option<String>,
+    #[serde(default)]
+    agent_path: Option<String>,
+    #[serde(default)]
+    agent_nickname: Option<String>,
+    #[serde(default)]
+    agent_depth: Option<u64>,
+    #[serde(default)]
+    agent_status: Option<String>,
     file_count: usize,
 }
 
@@ -94,6 +104,11 @@ impl MeshSessionMeta {
             cli_version: session.cli_version.clone(),
             source: session.source.to_owned(),
             project: session.project.clone(),
+            parent_session_id: session.parent_session_id.clone(),
+            agent_path: session.agent_path.clone(),
+            agent_nickname: session.agent_nickname.clone(),
+            agent_depth: session.agent_depth,
+            agent_status: session.agent_status.clone(),
             file_count: session.files.len(),
         }
     }
@@ -121,6 +136,11 @@ impl MeshSessionMeta {
             cli_version: self.cli_version,
             source,
             project: self.project,
+            parent_session_id: self.parent_session_id,
+            agent_path: self.agent_path,
+            agent_nickname: self.agent_nickname,
+            agent_depth: self.agent_depth,
+            agent_status: self.agent_status,
             synced: false,
         })
     }

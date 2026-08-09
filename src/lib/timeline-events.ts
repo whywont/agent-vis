@@ -37,5 +37,8 @@ export function timelineEventIdentity(event: TimelineEvent): string {
   if (event.kind === "context_compaction") {
     return `${event.kind}:${event.ts}`;
   }
+  if (event.kind === "subagent_spawn") {
+    return `${event.kind}:${event.sessionId}`;
+  }
   return `${event.kind}:${event.text}`;
 }

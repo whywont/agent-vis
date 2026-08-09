@@ -14,6 +14,11 @@ export function sessionListsEqual(current: SessionMeta[], next: SessionMeta[]): 
       && session.modified === candidate.modified
       && session.timestamp === candidate.timestamp
       && session.customName === candidate.customName
+      && session.parentSessionId === candidate.parentSessionId
+      && session.agentPath === candidate.agentPath
+      && session.agentNickname === candidate.agentNickname
+      && session.agentDepth === candidate.agentDepth
+      && session.agentStatus === candidate.agentStatus
       && (session.files?.join(",") || session.file) === (candidate.files?.join(",") || candidate.file);
   });
 }

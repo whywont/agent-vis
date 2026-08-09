@@ -2,7 +2,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { afterEach, describe, expect, it } from "vitest";
-import { readLastClaudeTimestamp, walkClaudeDir } from "./sessions";
+import { readLastClaudeTimestamp, readLastCodexAgentStatus, walkClaudeDir } from "./sessions";
 import type { SessionMeta } from "./types";
 
 const tempDirs: string[] = [];
@@ -41,6 +41,21 @@ describe("readLastClaudeTimestamp", () => {
     ].join("\n"));
 
     expect(readLastClaudeTimestamp(filepath)).toBe("2026-07-29T20:05:00.000Z");
+  });
+});
+
+describe("readLastCodexAgentStatus", () => {
+  it("uses the latest lifecycle event", () => {
+    const dir = makeTempDir();
+    const filepath = path.join(dir, "session.jsonl");
+    fs.writeFileSync(filepath, [
+      JSON.stringify({ type: "event_msg", payload: { type: "task_complete" } }),
+      JSON.stringify({ type: "event_msg", payload: { type: "task_started" } }),
+    ].join("\n"));
+
+    expect(readLastCodexAgentStatus(filepath)).toBe("running");
+    fs.appendFileSync(filepath, `\n${JSON.stringify({ type: "event_msg", payload: { type: "task_complete" } })}`);
+    expect(readLastCodexAgentStatus(filepath)).toBe("complete");
   });
 });
 

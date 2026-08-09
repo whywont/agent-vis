@@ -15,6 +15,13 @@ export interface SessionMeta {
   customName?: string;
   /** Native manifest backing a custom session. */
   manifest?: string;
+  /** Parent Codex thread for a spawned sub-agent rollout. */
+  parentSessionId?: string;
+  agentPath?: string;
+  agentNickname?: string;
+  agentDepth?: number;
+  /** Latest lifecycle state inferred from Codex task events. */
+  agentStatus?: "running" | "complete" | "interrupted";
 }
 
 export type TranscriptSessionMeta = SessionMeta & {
@@ -59,6 +66,16 @@ export interface ContextCompactionEvent {
   kind: "context_compaction";
   ts: string;
   text: string;
+}
+
+export interface SubagentSpawnEvent {
+  kind: "subagent_spawn";
+  ts: string;
+  sessionId: string;
+  agentPath?: string;
+  agentNickname?: string;
+  agentDepth: number;
+  agentStatus?: SessionMeta["agentStatus"];
 }
 
 export interface FileChangeEvent {
@@ -108,6 +125,7 @@ export type AppEvent =
   | AgentMessageEvent
   | ReasoningEvent
   | ContextCompactionEvent
+  | SubagentSpawnEvent
   | FileChangeEvent
   | ShellCommandEvent
   | ToolOutputEvent
