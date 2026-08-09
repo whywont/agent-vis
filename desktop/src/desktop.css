@@ -468,6 +468,11 @@ body.terminal-over-sessions #sidebar {
   -webkit-app-region: no-drag;
 }
 
+.desktop-macos-titlebar.split .desktop-titlebar-tabs {
+  border-color: transparent;
+  background: transparent;
+}
+
 .desktop-titlebar-split-sessions {
   position: absolute;
   left: 50%;

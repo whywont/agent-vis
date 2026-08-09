@@ -657,12 +657,12 @@ function DesktopMacTitlebar({
 
   return (
     <header
-      className="desktop-macos-titlebar"
+      className={`desktop-macos-titlebar${splitView ? " split" : ""}`}
       data-tauri-drag-region
       onMouseDown={startWindowDrag}
     >
       <div className="desktop-macos-titlebar-gutter" />
-      {session && (
+      {session && !splitView && (
         <div className="desktop-titlebar-meta" data-window-no-drag>
           <span
             className={`mono${sessionName ? " desktop-session-name" : ""}`}
@@ -703,7 +703,14 @@ function DesktopMacTitlebar({
           {collab ? <>
             <button className="desktop-collab-tab active" onClick={onOpenCollab}>Collab</button>
             <button onClick={() => window.dispatchEvent(new CustomEvent("toggle-collab-coordination"))}>Coordination</button>
-          </> : <><button
+          </> : splitView ? <button
+            className="desktop-collab-tab"
+            onClick={onOpenCollab}
+            disabled={!onOpenCollab}
+            title="Choose a repository and open collaboration mode"
+          >
+            Collab
+          </button> : <><button
             className={activeTab === "session" ? "active" : ""}
             onClick={() => onActiveTabChange("session")}
           >
