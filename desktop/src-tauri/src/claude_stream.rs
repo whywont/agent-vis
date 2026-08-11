@@ -6,6 +6,8 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, State};
 
+use crate::shell_environment::apply_desktop_shell_environment;
+
 pub(crate) struct ClaudeStreamState {
     connections: Mutex<HashMap<String, Arc<ClaudeStreamConnection>>>,
 }
@@ -106,17 +108,19 @@ fn start_connection(
     effort: Option<&str>,
 ) -> Result<Arc<ClaudeStreamConnection>, String> {
     let mut command = Command::new(claude_executable());
-    command.current_dir(cwd).args([
-        "-p",
-        "--verbose",
-        "--input-format",
-        "stream-json",
-        "--output-format",
-        "stream-json",
-        "--include-partial-messages",
-        "--permission-mode",
-        "manual",
-    ]);
+    apply_desktop_shell_environment(&mut command)
+        .current_dir(cwd)
+        .args([
+            "-p",
+            "--verbose",
+            "--input-format",
+            "stream-json",
+            "--output-format",
+            "stream-json",
+            "--include-partial-messages",
+            "--permission-mode",
+            "manual",
+        ]);
     if let Some(thread_id) = resume_thread_id {
         command.args(["--resume", thread_id]);
     } else {

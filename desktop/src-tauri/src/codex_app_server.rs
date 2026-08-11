@@ -13,6 +13,8 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, State};
 use tungstenite::{client, Error as WebSocketError, Message};
 
+use crate::shell_environment::apply_desktop_shell_environment;
+
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(12);
 const SHARED_SERVER_START_TIMEOUT: Duration = Duration::from_secs(8);
 const WRITER_RELEASE_TIMEOUT: Duration = Duration::from_secs(8);
@@ -592,7 +594,8 @@ fn ensure_shared_codex_app_server(state: &CodexAppServerState) -> Result<PathBuf
     let socket_path = socket_dir.join("app-server.sock");
     let listen_address = format!("unix://{}", socket_path.display());
     let executable = resolve_codex_executable();
-    let child = Command::new(executable)
+    let mut command = Command::new(executable);
+    let child = apply_desktop_shell_environment(&mut command)
         .args(["app-server", "--listen"])
         .arg(listen_address)
         .stdin(Stdio::null())

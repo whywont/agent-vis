@@ -50,3 +50,18 @@ Cursor Agent uses `about`, matching its supported installation/authentication
 inspection command. Later inventory commits will enrich the same snapshots with
 authentication, models, commands, and skills through each provider's native
 protocol.
+
+## Desktop Launch Environment
+
+Packaged desktop applications frequently start without the environment a user's
+terminal receives. Before starting provider inventory, Agent Vis reads a bounded
+set of launch variables from the user's login shell and merges its `PATH` ahead
+of the inherited desktop path without duplicates. macOS falls back to
+`launchctl getenv PATH` if the login shell does not return one.
+
+The resolved environment is kept inside the native process and applied directly
+to child commands; it is never returned to the renderer. Provider probes and the
+existing Codex and Claude launchers therefore resolve binaries and credentials
+consistently. In addition to `PATH`, this preserves shell-provided SSH agent,
+Homebrew, XDG, display, Wayland, and Linux session-bus variables needed by local
+and remote-oriented harnesses.

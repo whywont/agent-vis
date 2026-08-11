@@ -11,6 +11,7 @@ mod semantic;
 mod session_history;
 mod sessions;
 mod settings;
+mod shell_environment;
 mod terminal;
 mod workspace;
 
@@ -56,6 +57,7 @@ use workspace::{
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    shell_environment::initialize_desktop_shell_environment();
     tauri::Builder::default()
         .setup(|app| {
             let search = SearchIndexState::new(app.handle())?;

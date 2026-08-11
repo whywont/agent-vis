@@ -7,6 +7,8 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, State};
 
+use crate::shell_environment::apply_desktop_shell_environment;
+
 const PROVIDER_INVENTORY_EVENT: &str = "agent-provider-inventory-updated";
 const PROVIDER_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_PROBE_DETAIL_CHARS: usize = 500;
@@ -305,7 +307,7 @@ fn probe_provider(driver: &AgentProviderDriver) -> AgentProviderSnapshot {
         .unwrap_or_default()
         .as_millis() as u64;
     let mut command = Command::new(&driver.executable);
-    command
+    apply_desktop_shell_environment(&mut command)
         .args(probe_arguments(driver))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
