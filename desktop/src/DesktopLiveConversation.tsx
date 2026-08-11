@@ -1,7 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { AppEvent } from "@/lib/types";
-import { getActiveCodexTurn, interruptCodexTurn, respondToCodexApproval } from "./desktop-api";
+import {
+  getActiveCodexTurn,
+  getCodexThreadWriter,
+  interruptCodexTurn,
+  respondToCodexApproval,
+  takeOverCodexThread,
+  type CodexWriterInfo,
+} from "./desktop-api";
 import { getHarnessAdapter, type LiveProvider, type ModelOption } from "./harness-adapters";
 import type { LiveStreamEntry } from "./DesktopLiveStream";
 
@@ -77,6 +84,7 @@ export default function DesktopLiveConversation({
   const [draft, setDraft] = useState(initialDraft);
   const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [externalWriter, setExternalWriter] = useState<CodexWriterInfo | null>(null);
   const [approval, setApproval] = useState<Approval | null>(null);
   const [sending, setSending] = useState(false);
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -292,10 +300,26 @@ export default function DesktopLiveConversation({
       try {
         await adapter.connect({ sessionKey, threadId, cwd, activeTurnId, tokenUsage });
         setModelOptions(await adapter.models({ sessionKey, threadId, cwd, activeTurnId, tokenUsage }));
+        setExternalWriter(null);
         setState("ready");
         return true;
       } catch (reason) {
-        setError(reason instanceof Error ? reason.message : String(reason));
+        const message = reason instanceof Error ? reason.message : String(reason);
+        if (provider === "codex" && message.includes("already has an active writer")) {
+          try {
+            const writer = await getCodexThreadWriter(threadId);
+            setExternalWriter(writer);
+            setError(writer
+              ? `Codex is open in another terminal (PID ${writer.pid}).`
+              : "Codex is open in another process. Close it before taking control here.");
+          } catch (inspectionError) {
+            setExternalWriter(null);
+            setError(inspectionError instanceof Error ? inspectionError.message : String(inspectionError));
+          }
+        } else {
+          setExternalWriter(null);
+          setError(message);
+        }
         setState("error");
         return false;
       } finally {
@@ -306,7 +330,7 @@ export default function DesktopLiveConversation({
     return attempt;
   }
 
-  async function submit(textOverride?: string) {
+  async function submit(textOverride?: string, alreadyConnected = false) {
     const text = (textOverride ?? draft).trim();
     if ((!text && !images.length) || sending) return;
     if (text === "/model") {
@@ -323,7 +347,7 @@ export default function DesktopLiveConversation({
       return;
     }
     setSending(true);
-    if (state !== "ready" && !(await connect())) {
+    if (!alreadyConnected && state !== "ready" && !(await connect())) {
       setSending(false);
       return;
     }
@@ -378,6 +402,32 @@ export default function DesktopLiveConversation({
       setError(reason instanceof Error ? reason.message : String(reason));
       setState("error");
     } finally {
+      setSending(false);
+    }
+  }
+
+  async function takeControlAndRetry() {
+    if (!externalWriter || sending) return;
+    const confirmed = window.confirm(
+      `Take control of this Codex thread?\n\nCodex process ${externalWriter.pid} will exit and its terminal will return to the shell. Any in-flight work in that terminal will stop. The conversation history will be preserved.`,
+    );
+    if (!confirmed) return;
+    setSending(true);
+    setError("");
+    setState("connecting");
+    try {
+      await takeOverCodexThread(threadId, externalWriter.pid);
+      setExternalWriter(null);
+      connection.current = null;
+      if (!(await connect())) {
+        setSending(false);
+        return;
+      }
+      await submit(undefined, true);
+      setSending(false);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+      setState("error");
       setSending(false);
     }
   }
@@ -488,7 +538,7 @@ export default function DesktopLiveConversation({
           placeholder={activeTurnId ? `Steer ${provider === "codex" ? "Codex" : "Claude"}...` : `Message ${provider === "codex" ? "Codex" : "Claude"}...`}
           rows={1}
           onFocus={() => {
-            if (state !== "ready" && state !== "connecting") void connect();
+            if (!externalWriter && state !== "ready" && state !== "connecting") void connect();
           }}
           onPaste={(event) => {
             const files = [...event.clipboardData.items]
@@ -598,9 +648,21 @@ export default function DesktopLiveConversation({
             ))}
           </div>
         )}
-        <button type="button" onClick={() => void submit()} disabled={(!draft.trim() && !images.length) || sending}>
-          {sending || state === "connecting" ? "Opening..." : activeTurnId ? "Steer" : "Send"}
-        </button>
+        {externalWriter ? (
+          <button
+            type="button"
+            className="desktop-codex-take-control"
+            onClick={() => void takeControlAndRetry()}
+            disabled={sending}
+            title={`Exit Codex PID ${externalWriter.pid}, resume this thread in Agent Vis, and send the current message`}
+          >
+            {sending ? "Taking control..." : "Take control"}
+          </button>
+        ) : (
+          <button type="button" onClick={() => void submit()} disabled={(!draft.trim() && !images.length) || sending}>
+            {sending || state === "connecting" ? "Opening..." : activeTurnId ? "Steer" : "Send"}
+          </button>
+        )}
         {error && <span className="desktop-codex-live-error" title={error}>{error}</span>}
       </div>
       {images.length > 0 && (

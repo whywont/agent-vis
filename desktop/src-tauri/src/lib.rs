@@ -17,10 +17,11 @@ use claude_stream::{
     connect_claude_thread, send_claude_turn, start_claude_session, ClaudeStreamState,
 };
 use codex_app_server::{
-    compact_codex_thread, connect_codex_thread, get_active_codex_turn, interrupt_codex_turn,
-    list_codex_mcp_servers, list_codex_models, list_codex_skills, read_codex_thread_status,
-    respond_to_codex_approval, send_codex_turn, set_codex_thread_model, start_codex_review,
-    start_codex_session, CodexAppServerState,
+    compact_codex_thread, connect_codex_thread, ensure_codex_shared_app_server,
+    get_active_codex_turn, get_codex_thread_writer, interrupt_codex_turn, list_codex_mcp_servers,
+    list_codex_models, list_codex_skills, read_codex_thread_status, respond_to_codex_approval,
+    send_codex_turn, set_codex_thread_model, start_codex_review, start_codex_session,
+    take_over_codex_thread, CodexAppServerState,
 };
 use collab::{create_collab_room, delete_collab_room, list_collab_rooms};
 use collab_coordinator::{
@@ -106,7 +107,10 @@ pub fn run() {
             write_terminal,
             resize_terminal,
             stop_terminal,
+            ensure_codex_shared_app_server,
             connect_codex_thread,
+            get_codex_thread_writer,
+            take_over_codex_thread,
             get_active_codex_turn,
             start_codex_session,
             send_codex_turn,

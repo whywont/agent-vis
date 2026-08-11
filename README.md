@@ -136,6 +136,18 @@ Using `HOSTS=127.0.0.1,100.x.y.z` keeps normal Mac access at `http://localhost:3
 
 ## Notes
 
+### Moving a Codex thread into Agent Vis
+
+Codex 0.147 and newer allow only one process to write a thread. If a standalone Codex terminal already owns a thread, Agent Vis remains a passive viewer until you use its composer. Agent Vis then offers **Take control**: after confirmation it asks only the verified Codex owner process to exit, waits for the writer lock to release, resumes the same thread through Agent Vis's shared local server, and retries the message. The rollout and conversation history are preserved; an in-flight turn in the standalone terminal is stopped.
+
+Once Agent Vis owns the thread, its embedded terminals connect to the shared server automatically and can be opened or closed without transferring ownership. The optional repository wrapper provides the same remote-client behavior in an external terminal while Agent Vis is running:
+
+```bash
+./scripts/codex-agent-vis resume <thread-id>
+```
+
+For a new shared thread, run `./scripts/codex-agent-vis` without `resume`. The wrapper falls back to normal Codex when Agent Vis is closed and passes utility commands such as `exec`, `login`, and `update` through unchanged. It is optional; normal standalone Codex sessions continue to work and remain visible in Agent Vis. Do not delete writer-lock files.
+
 - The server binds to `127.0.0.1` by default and is not accessible from other machines
 - Binding to a non-local host without `AGENT_VIS_AUTH_TOKEN` is refused at startup
 - On macOS, `node-pty`'s spawn-helper is fixed automatically by the `postinstall` script

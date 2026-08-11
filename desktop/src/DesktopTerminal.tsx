@@ -1,7 +1,13 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import "@xterm/xterm/css/xterm.css";
-import { resizeTerminal, startTerminal, stopTerminal, writeTerminal } from "./desktop-api";
+import {
+  ensureCodexSharedAppServer,
+  resizeTerminal,
+  startTerminal,
+  stopTerminal,
+  writeTerminal,
+} from "./desktop-api";
 
 interface TerminalOutput {
   terminalId: string;
@@ -117,6 +123,7 @@ export default function DesktopTerminal({
       lastSize = "";
       fitToContainer();
       if (prefillResume && terminalStarted) {
+        const codexRemote = sessionSource === "codex" ? await ensureCodexSharedAppServer() : "";
         // zsh emits its first prompt after startup. Send the draft to its line
         // editor without a newline, so it remains editable and Enter executes it.
         draftTimer = window.setTimeout(() => {
@@ -124,7 +131,7 @@ export default function DesktopTerminal({
             void writeTerminal(
               terminalId,
               sessionSource === "codex"
-                ? `codex resume ${sessionId}`
+                ? `codex --remote ${codexRemote} resume ${sessionId}`
                 : `claude --resume ${sessionId}`,
             );
           }
