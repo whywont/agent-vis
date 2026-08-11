@@ -340,8 +340,25 @@ export function stopTerminal(terminalId: string): Promise<void> {
   return invoke<void>("stop_terminal", { request: { terminalId } });
 }
 
+export function ensureCodexSharedAppServer(): Promise<string> {
+  return invoke<string>("ensure_codex_shared_app_server");
+}
+
 export function connectCodexThread(sessionKey: string, threadId: string, cwd: string): Promise<void> {
   return invoke<void>("connect_codex_thread", { requestData: { sessionKey, threadId, cwd } });
+}
+
+export interface CodexWriterInfo {
+  pid: number;
+  command: string;
+}
+
+export function getCodexThreadWriter(threadId: string): Promise<CodexWriterInfo | null> {
+  return invoke<CodexWriterInfo | null>("get_codex_thread_writer", { request: { threadId } });
+}
+
+export function takeOverCodexThread(threadId: string, pid: number): Promise<void> {
+  return invoke<void>("take_over_codex_thread", { request: { threadId, pid } });
 }
 
 export interface NewCodexSession {

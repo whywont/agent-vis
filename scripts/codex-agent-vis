@@ -1,0 +1,51 @@
+#!/bin/sh
+set -eu
+
+agent_vis_codex_bin=${CODEX_BIN:-}
+if [ -z "$agent_vis_codex_bin" ]; then
+  for candidate in /opt/homebrew/bin/codex /usr/local/bin/codex; do
+    if [ -x "$candidate" ]; then
+      agent_vis_codex_bin=$candidate
+      break
+    fi
+  done
+fi
+if [ -z "$agent_vis_codex_bin" ]; then
+  agent_vis_codex_bin=$(command -v codex || true)
+fi
+if [ -z "$agent_vis_codex_bin" ]; then
+  echo "Could not find the Codex executable. Set CODEX_BIN and try again." >&2
+  exit 1
+fi
+
+# Codex accepts --remote only for interactive TUI entry points. Keep utility
+# commands byte-for-byte compatible so this script can safely sit behind a
+# shell function named `codex`.
+agent_vis_passthrough=false
+for argument in "$@"; do
+  case "$argument" in
+    --remote|--remote=*)
+      agent_vis_passthrough=true
+      break
+      ;;
+    exec|review|login|logout|mcp|plugin|mcp-server|app-server|remote-control|app|completion|update|doctor|sandbox|debug|apply|archive|delete|unarchive|cloud|exec-server|features|help)
+      agent_vis_passthrough=true
+      break
+      ;;
+  esac
+done
+
+agent_vis_uid=$(id -u)
+agent_vis_socket=""
+if [ "$agent_vis_passthrough" = false ]; then
+  for candidate in /tmp/agent-vis-codex-"$agent_vis_uid"-*/app-server.sock; do
+    if [ -S "$candidate" ] && { [ -z "$agent_vis_socket" ] || [ "$candidate" -nt "$agent_vis_socket" ]; }; then
+      agent_vis_socket=$candidate
+    fi
+  done
+fi
+
+if [ -n "$agent_vis_socket" ]; then
+  exec "$agent_vis_codex_bin" --remote "unix://$agent_vis_socket" "$@"
+fi
+exec "$agent_vis_codex_bin" "$@"

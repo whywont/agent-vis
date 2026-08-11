@@ -1575,6 +1575,12 @@ body.resizing .desktop-collab-column-resize::after { background: rgba(224,184,92
 }
 .desktop-codex-live-bar button:hover:not(:disabled) { background: rgba(var(--accent-rgb), 0.2); color: var(--text); }
 .desktop-codex-live-bar button:disabled { cursor: default; opacity: 0.45; }
+.desktop-codex-live-bar .desktop-codex-take-control {
+  min-width: 92px;
+  border-color: rgba(224, 122, 122, 0.5);
+  background: rgba(224, 122, 122, 0.1);
+  color: var(--red);
+}
 .desktop-codex-live-error { overflow: hidden; max-width: 190px; color: var(--red); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 
 .desktop-slash-picker {
