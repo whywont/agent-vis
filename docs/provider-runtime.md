@@ -96,3 +96,10 @@ older than the retained window—or belongs to a runtime that restarted—the
 response sets `resetRequired`, telling the client to rebuild from the persisted
 thread snapshot before continuing. This is the first step toward removing
 selected-session transcript polling without creating reconnect gaps.
+
+The live conversation now consumes this unified subscription for both Codex
+and Claude. It installs the Tauri listener before reading catch-up, queues live
+events during that read, and applies replay plus queued traffic in sequence
+order. A component-local watermark removes the overlap, including across React
+effect resubscriptions. The provider-specific native event names remain only
+for screens that have not migrated yet.
