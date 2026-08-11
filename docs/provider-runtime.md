@@ -65,3 +65,17 @@ existing Codex and Claude launchers therefore resolve binaries and credentials
 consistently. In addition to `PATH`, this preserves shell-provided SSH agent,
 Homebrew, XDG, display, Wayland, and Linux session-bus variables needed by local
 and remote-oriented harnesses.
+
+## Instance Routing
+
+Renderer code can start, resume, and send turns through one set of native
+commands keyed by `providerInstanceId`. The router currently dispatches to the
+existing Codex app-server and Claude stream-JSON runtimes; registered providers
+without a completed adapter return an explicit unavailable error instead of
+silently falling through to another CLI.
+
+Codex and Claude events are also mirrored onto
+`agent-provider-runtime-event`, which carries the provider instance ID, session
+key, and unmodified protocol message. Their legacy event names remain during UI
+migration. This lets future ACP and OpenCode adapters join one event stream
+without forcing another provider switch into React.

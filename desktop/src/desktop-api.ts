@@ -94,6 +94,42 @@ export interface AgentProviderSnapshot {
   checkedAtMs: number | null;
 }
 
+export interface AgentProviderRuntimeEvent {
+  providerInstanceId: string;
+  sessionKey: string;
+  message: unknown;
+}
+
+export interface StartAgentProviderSessionRequest {
+  providerInstanceId: string;
+  sessionKey: string;
+  threadId?: string;
+  cwd: string;
+  model?: string;
+  effort?: string;
+}
+
+export interface StartedAgentProviderSession {
+  providerInstanceId: string;
+  threadId: string;
+}
+
+export interface ResumeAgentProviderSessionRequest {
+  providerInstanceId: string;
+  sessionKey: string;
+  threadId: string;
+  cwd: string;
+}
+
+export interface SendAgentProviderTurnRequest {
+  providerInstanceId: string;
+  sessionKey: string;
+  threadId: string;
+  turnId?: string;
+  text: string;
+  imageUrls: string[];
+}
+
 export interface DesktopSettings {
   appearance: DesktopAppearance;
   provider: ExplainProvider;
@@ -401,6 +437,20 @@ export function listAgentProviderInventory(): Promise<AgentProviderSnapshot[]> {
 
 export function refreshAgentProviderInventory(): Promise<boolean> {
   return invoke<boolean>("refresh_agent_provider_inventory");
+}
+
+export function startAgentProviderSession(
+  request: StartAgentProviderSessionRequest,
+): Promise<StartedAgentProviderSession> {
+  return invoke<StartedAgentProviderSession>("start_agent_provider_session", { request });
+}
+
+export function resumeAgentProviderSession(request: ResumeAgentProviderSessionRequest): Promise<void> {
+  return invoke<void>("resume_agent_provider_session", { request });
+}
+
+export function sendAgentProviderTurn(request: SendAgentProviderTurnRequest): Promise<void> {
+  return invoke<void>("send_agent_provider_turn", { request });
 }
 
 export function connectCodexThread(sessionKey: string, threadId: string, cwd: string): Promise<void> {

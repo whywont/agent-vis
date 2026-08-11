@@ -37,6 +37,7 @@ use mesh::{
 };
 use provider_runtime::{
     list_agent_provider_drivers, list_agent_provider_inventory, refresh_agent_provider_inventory,
+    resume_agent_provider_session, send_agent_provider_turn, start_agent_provider_session,
     ProviderRuntimeState,
 };
 use search::{search_sessions, SearchIndexState};
@@ -139,6 +140,9 @@ pub fn run() {
             list_agent_provider_drivers,
             list_agent_provider_inventory,
             refresh_agent_provider_inventory,
+            start_agent_provider_session,
+            resume_agent_provider_session,
+            send_agent_provider_turn,
         ])
         .run(tauri::generate_context!())
         .expect("error while running agent-vis desktop");

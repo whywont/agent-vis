@@ -1,4 +1,5 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::io::ErrorKind;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -8,10 +9,21 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::shell_environment::apply_desktop_shell_environment;
+use crate::{
+    claude_stream::{
+        connect_claude_thread, send_claude_turn, start_claude_session, ClaudeStreamState,
+        ClaudeThreadRequest, ClaudeTurnRequest, NewClaudeSessionRequest,
+    },
+    codex_app_server::{
+        connect_codex_thread, send_codex_turn, start_codex_session, CodexAppServerState,
+        CodexThreadRequest, CodexTurnRequest, NewCodexSessionRequest,
+    },
+};
 
 const PROVIDER_INVENTORY_EVENT: &str = "agent-provider-inventory-updated";
 const PROVIDER_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_PROBE_DETAIL_CHARS: usize = 500;
+pub(crate) const PROVIDER_RUNTIME_EVENT: &str = "agent-provider-runtime-event";
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
@@ -104,6 +116,87 @@ pub(crate) struct AgentProviderSnapshot {
     version: Option<String>,
     detail: Option<String>,
     checked_at_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AgentProviderRuntimeEvent {
+    provider_instance_id: String,
+    session_key: String,
+    message: Value,
+}
+
+pub(crate) fn emit_provider_runtime_event(
+    app: &AppHandle,
+    provider_instance_id: &str,
+    session_key: &str,
+    message: &Value,
+) {
+    let _ = app.emit(
+        PROVIDER_RUNTIME_EVENT,
+        AgentProviderRuntimeEvent {
+            provider_instance_id: provider_instance_id.to_owned(),
+            session_key: session_key.to_owned(),
+            message: message.clone(),
+        },
+    );
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct StartAgentProviderSessionRequest {
+    provider_instance_id: String,
+    session_key: String,
+    thread_id: Option<String>,
+    cwd: String,
+    model: Option<String>,
+    effort: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct StartedAgentProviderSession {
+    provider_instance_id: String,
+    thread_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ResumeAgentProviderSessionRequest {
+    provider_instance_id: String,
+    session_key: String,
+    thread_id: String,
+    cwd: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SendAgentProviderTurnRequest {
+    provider_instance_id: String,
+    session_key: String,
+    thread_id: String,
+    turn_id: Option<String>,
+    text: String,
+    image_urls: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NativeProviderRuntime {
+    Codex,
+    Claude,
+}
+
+fn native_provider_runtime(instance_id: &str) -> Result<NativeProviderRuntime, String> {
+    match instance_id {
+        "codex" => Ok(NativeProviderRuntime::Codex),
+        "claude-code" => Ok(NativeProviderRuntime::Claude),
+        _ if built_in_provider_drivers()
+            .iter()
+            .any(|driver| driver.instance_id == instance_id) => Err(format!(
+            "Provider instance {instance_id} is installed in the registry but its runtime adapter is not available yet."
+        )),
+        _ => Err(format!("Unknown provider instance: {instance_id}.")),
+    }
 }
 
 impl AgentProviderSnapshot {
@@ -448,6 +541,113 @@ pub(crate) fn refresh_agent_provider_inventory(
     state.start_background_inventory(app)
 }
 
+#[tauri::command]
+pub(crate) fn start_agent_provider_session(
+    app: AppHandle,
+    codex_state: State<'_, CodexAppServerState>,
+    claude_state: State<'_, ClaudeStreamState>,
+    request: StartAgentProviderSessionRequest,
+) -> Result<StartedAgentProviderSession, String> {
+    let provider_instance_id = request.provider_instance_id.clone();
+    let thread_id = match native_provider_runtime(&request.provider_instance_id)? {
+        NativeProviderRuntime::Codex => {
+            start_codex_session(
+                app,
+                codex_state,
+                NewCodexSessionRequest {
+                    session_key: request.session_key,
+                    cwd: request.cwd,
+                    model: request.model,
+                    effort: request.effort,
+                },
+            )?
+            .id
+        }
+        NativeProviderRuntime::Claude => {
+            let thread_id = request
+                .thread_id
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| {
+                    "Claude Code requires a thread ID when starting a session.".to_owned()
+                })?;
+            start_claude_session(
+                app,
+                claude_state,
+                NewClaudeSessionRequest {
+                    session_key: request.session_key,
+                    thread_id,
+                    cwd: request.cwd,
+                    model: request.model,
+                    effort: request.effort,
+                },
+            )?
+        }
+    };
+    Ok(StartedAgentProviderSession {
+        provider_instance_id,
+        thread_id,
+    })
+}
+
+#[tauri::command]
+pub(crate) fn resume_agent_provider_session(
+    app: AppHandle,
+    codex_state: State<'_, CodexAppServerState>,
+    claude_state: State<'_, ClaudeStreamState>,
+    request: ResumeAgentProviderSessionRequest,
+) -> Result<(), String> {
+    match native_provider_runtime(&request.provider_instance_id)? {
+        NativeProviderRuntime::Codex => connect_codex_thread(
+            app,
+            codex_state,
+            CodexThreadRequest {
+                session_key: request.session_key,
+                thread_id: request.thread_id,
+                cwd: request.cwd,
+            },
+        ),
+        NativeProviderRuntime::Claude => connect_claude_thread(
+            app,
+            claude_state,
+            ClaudeThreadRequest {
+                session_key: request.session_key,
+                thread_id: request.thread_id,
+                cwd: request.cwd,
+            },
+        ),
+    }
+}
+
+#[tauri::command]
+pub(crate) fn send_agent_provider_turn(
+    app: AppHandle,
+    codex_state: State<'_, CodexAppServerState>,
+    claude_state: State<'_, ClaudeStreamState>,
+    request: SendAgentProviderTurnRequest,
+) -> Result<(), String> {
+    match native_provider_runtime(&request.provider_instance_id)? {
+        NativeProviderRuntime::Codex => send_codex_turn(
+            app,
+            codex_state,
+            CodexTurnRequest {
+                session_key: request.session_key,
+                thread_id: request.thread_id,
+                turn_id: request.turn_id,
+                text: request.text,
+                image_urls: request.image_urls,
+            },
+        ),
+        NativeProviderRuntime::Claude => send_claude_turn(
+            claude_state,
+            ClaudeTurnRequest {
+                session_key: request.session_key,
+                text: request.text,
+                image_urls: request.image_urls,
+            },
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -532,5 +732,23 @@ mod tests {
             };
             assert_eq!(probe_arguments(&driver), expected);
         }
+    }
+
+    #[test]
+    fn native_runtime_router_accepts_only_implemented_instances() {
+        assert_eq!(
+            native_provider_runtime("codex"),
+            Ok(NativeProviderRuntime::Codex)
+        );
+        assert_eq!(
+            native_provider_runtime("claude-code"),
+            Ok(NativeProviderRuntime::Claude)
+        );
+        assert!(native_provider_runtime("cursor")
+            .unwrap_err()
+            .contains("not available yet"));
+        assert!(native_provider_runtime("unknown")
+            .unwrap_err()
+            .contains("Unknown provider instance"));
     }
 }

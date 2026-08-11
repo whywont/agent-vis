@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, State};
 use tungstenite::{client, Error as WebSocketError, Message};
 
+use crate::provider_runtime::emit_provider_runtime_event;
 use crate::shell_environment::apply_desktop_shell_environment;
 
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(12);
@@ -69,19 +70,19 @@ struct CodexConnectionLifecycle {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CodexThreadRequest {
-    session_key: String,
-    thread_id: String,
-    cwd: String,
+    pub(crate) session_key: String,
+    pub(crate) thread_id: String,
+    pub(crate) cwd: String,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CodexTurnRequest {
-    session_key: String,
-    thread_id: String,
-    turn_id: Option<String>,
-    text: String,
-    image_urls: Vec<String>,
+    pub(crate) session_key: String,
+    pub(crate) thread_id: String,
+    pub(crate) turn_id: Option<String>,
+    pub(crate) text: String,
+    pub(crate) image_urls: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -112,16 +113,16 @@ pub(crate) struct CodexInterruptRequest {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct NewCodexSessionRequest {
-    session_key: String,
-    cwd: String,
-    model: Option<String>,
-    effort: Option<String>,
+    pub(crate) session_key: String,
+    pub(crate) cwd: String,
+    pub(crate) model: Option<String>,
+    pub(crate) effort: Option<String>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct NewCodexSession {
-    id: String,
+    pub(crate) id: String,
 }
 
 #[derive(Serialize)]
@@ -152,6 +153,7 @@ struct CodexAppServerEvent {
 }
 
 fn emit_event(app: &AppHandle, session_key: &str, message: Value) {
+    emit_provider_runtime_event(app, "codex", session_key, &message);
     let _ = app.emit(
         "codex-app-server-event",
         CodexAppServerEvent {
