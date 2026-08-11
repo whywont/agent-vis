@@ -97,7 +97,15 @@ export interface AgentProviderSnapshot {
 export interface AgentProviderRuntimeEvent {
   providerInstanceId: string;
   sessionKey: string;
+  sequence: number;
   message: unknown;
+}
+
+export interface AgentProviderRuntimeReplay {
+  events: AgentProviderRuntimeEvent[];
+  oldestAvailableSequence: number;
+  latestSequence: number;
+  resetRequired: boolean;
 }
 
 export interface StartAgentProviderSessionRequest {
@@ -437,6 +445,16 @@ export function listAgentProviderInventory(): Promise<AgentProviderSnapshot[]> {
 
 export function refreshAgentProviderInventory(): Promise<boolean> {
   return invoke<boolean>("refresh_agent_provider_inventory");
+}
+
+export function readAgentProviderRuntimeEvents(
+  providerInstanceId: string,
+  sessionKey: string,
+  afterSequence?: number,
+): Promise<AgentProviderRuntimeReplay> {
+  return invoke<AgentProviderRuntimeReplay>("read_agent_provider_runtime_events", {
+    request: { providerInstanceId, sessionKey, afterSequence },
+  });
 }
 
 export function startAgentProviderSession(

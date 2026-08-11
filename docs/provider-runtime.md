@@ -79,3 +79,20 @@ Codex and Claude events are also mirrored onto
 key, and unmodified protocol message. Their legacy event names remain during UI
 migration. This lets future ACP and OpenCode adapters join one event stream
 without forcing another provider switch into React.
+
+## Sequenced Event Replay
+
+Every event on `agent-provider-runtime-event` receives a monotonically
+increasing sequence number scoped to its provider instance and session key.
+The native runtime keeps a bounded replay window for up to 64 recently active
+streams, limited to 4,096 events and 8 MiB per stream. These bounds prevent a
+long tool result or abandoned session from turning live replay into unbounded
+desktop memory.
+
+The renderer can attach its event listener first and then call
+`read_agent_provider_runtime_events` with its last applied sequence. Duplicate
+live/replayed events are discarded by sequence. If the requested watermark is
+older than the retained window—or belongs to a runtime that restarted—the
+response sets `resetRequired`, telling the client to rebuild from the persisted
+thread snapshot before continuing. This is the first step toward removing
+selected-session transcript polling without creating reconnect gaps.

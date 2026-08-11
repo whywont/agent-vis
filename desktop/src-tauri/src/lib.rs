@@ -36,9 +36,9 @@ use mesh::{
     connect_mesh_peer, get_mesh_status, regenerate_mesh_identity, sync_all_mesh_peers, MeshState,
 };
 use provider_runtime::{
-    list_agent_provider_drivers, list_agent_provider_inventory, refresh_agent_provider_inventory,
-    resume_agent_provider_session, send_agent_provider_turn, start_agent_provider_session,
-    ProviderRuntimeState,
+    list_agent_provider_drivers, list_agent_provider_inventory, read_agent_provider_runtime_events,
+    refresh_agent_provider_inventory, resume_agent_provider_session, send_agent_provider_turn,
+    start_agent_provider_session, ProviderRuntimeState,
 };
 use search::{search_sessions, SearchIndexState};
 use session_history::{
@@ -140,6 +140,7 @@ pub fn run() {
             list_agent_provider_drivers,
             list_agent_provider_inventory,
             refresh_agent_provider_inventory,
+            read_agent_provider_runtime_events,
             start_agent_provider_session,
             resume_agent_provider_session,
             send_agent_provider_turn,

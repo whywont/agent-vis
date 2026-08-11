@@ -1,12 +1,13 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::{HashMap, VecDeque};
 use std::io::ErrorKind;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::shell_environment::apply_desktop_shell_environment;
 use crate::{
@@ -23,6 +24,9 @@ use crate::{
 const PROVIDER_INVENTORY_EVENT: &str = "agent-provider-inventory-updated";
 const PROVIDER_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_PROBE_DETAIL_CHARS: usize = 500;
+const MAX_RUNTIME_EVENT_STREAMS: usize = 64;
+const MAX_RUNTIME_REPLAY_EVENTS: usize = 4_096;
+const MAX_RUNTIME_REPLAY_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) const PROVIDER_RUNTIME_EVENT: &str = "agent-provider-runtime-event";
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq, Hash)]
@@ -118,12 +122,156 @@ pub(crate) struct AgentProviderSnapshot {
     checked_at_ms: Option<u64>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AgentProviderRuntimeEvent {
     provider_instance_id: String,
     session_key: String,
+    sequence: u64,
     message: Value,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ReadAgentProviderRuntimeEventsRequest {
+    provider_instance_id: String,
+    session_key: String,
+    after_sequence: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AgentProviderRuntimeReplay {
+    events: Vec<AgentProviderRuntimeEvent>,
+    oldest_available_sequence: u64,
+    latest_sequence: u64,
+    reset_required: bool,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct RuntimeEventStreamKey {
+    provider_instance_id: String,
+    session_key: String,
+}
+
+#[derive(Default)]
+struct RuntimeEventBuffer {
+    next_sequence: u64,
+    retained_bytes: usize,
+    last_touched: u64,
+    events: VecDeque<(usize, AgentProviderRuntimeEvent)>,
+}
+
+#[derive(Default)]
+struct RuntimeEventStore {
+    touch_counter: u64,
+    streams: HashMap<RuntimeEventStreamKey, RuntimeEventBuffer>,
+}
+
+impl RuntimeEventStore {
+    fn record(
+        &mut self,
+        provider_instance_id: &str,
+        session_key: &str,
+        message: &Value,
+    ) -> AgentProviderRuntimeEvent {
+        self.record_with_limits(
+            provider_instance_id,
+            session_key,
+            message,
+            MAX_RUNTIME_EVENT_STREAMS,
+            MAX_RUNTIME_REPLAY_EVENTS,
+            MAX_RUNTIME_REPLAY_BYTES,
+        )
+    }
+
+    fn record_with_limits(
+        &mut self,
+        provider_instance_id: &str,
+        session_key: &str,
+        message: &Value,
+        max_streams: usize,
+        max_events: usize,
+        max_bytes: usize,
+    ) -> AgentProviderRuntimeEvent {
+        let key = RuntimeEventStreamKey {
+            provider_instance_id: provider_instance_id.to_owned(),
+            session_key: session_key.to_owned(),
+        };
+        if !self.streams.contains_key(&key) && self.streams.len() >= max_streams {
+            if let Some(oldest) = self
+                .streams
+                .iter()
+                .min_by_key(|(_, buffer)| buffer.last_touched)
+                .map(|(key, _)| key.clone())
+            {
+                self.streams.remove(&oldest);
+            }
+        }
+
+        self.touch_counter = self.touch_counter.saturating_add(1);
+        let buffer = self.streams.entry(key).or_default();
+        buffer.last_touched = self.touch_counter;
+        buffer.next_sequence = buffer.next_sequence.saturating_add(1).max(1);
+        let event = AgentProviderRuntimeEvent {
+            provider_instance_id: provider_instance_id.to_owned(),
+            session_key: session_key.to_owned(),
+            sequence: buffer.next_sequence,
+            message: message.clone(),
+        };
+        let event_bytes = serde_json::to_vec(&event).map_or(0, |encoded| encoded.len());
+        buffer.retained_bytes = buffer.retained_bytes.saturating_add(event_bytes);
+        buffer.events.push_back((event_bytes, event.clone()));
+        while buffer.events.len() > max_events || buffer.retained_bytes > max_bytes {
+            let Some((removed_bytes, _)) = buffer.events.pop_front() else {
+                break;
+            };
+            buffer.retained_bytes = buffer.retained_bytes.saturating_sub(removed_bytes);
+        }
+        event
+    }
+
+    fn replay(
+        &self,
+        provider_instance_id: &str,
+        session_key: &str,
+        after_sequence: Option<u64>,
+    ) -> AgentProviderRuntimeReplay {
+        let key = RuntimeEventStreamKey {
+            provider_instance_id: provider_instance_id.to_owned(),
+            session_key: session_key.to_owned(),
+        };
+        let Some(buffer) = self.streams.get(&key) else {
+            return AgentProviderRuntimeReplay {
+                events: Vec::new(),
+                oldest_available_sequence: 1,
+                latest_sequence: 0,
+                reset_required: after_sequence.is_some_and(|sequence| sequence > 0),
+            };
+        };
+        let latest_sequence = buffer.next_sequence;
+        let oldest_available_sequence = buffer
+            .events
+            .front()
+            .map_or(latest_sequence.saturating_add(1), |(_, event)| {
+                event.sequence
+            });
+        let reset_required = after_sequence.is_some_and(|sequence| {
+            sequence > latest_sequence || sequence.saturating_add(1) < oldest_available_sequence
+        });
+        let events = buffer
+            .events
+            .iter()
+            .filter(|(_, event)| after_sequence.is_none_or(|sequence| event.sequence > sequence))
+            .map(|(_, event)| event.clone())
+            .collect();
+        AgentProviderRuntimeReplay {
+            events,
+            oldest_available_sequence,
+            latest_sequence,
+            reset_required,
+        }
+    }
 }
 
 pub(crate) fn emit_provider_runtime_event(
@@ -132,14 +280,11 @@ pub(crate) fn emit_provider_runtime_event(
     session_key: &str,
     message: &Value,
 ) {
-    let _ = app.emit(
-        PROVIDER_RUNTIME_EVENT,
-        AgentProviderRuntimeEvent {
-            provider_instance_id: provider_instance_id.to_owned(),
-            session_key: session_key.to_owned(),
-            message: message.clone(),
-        },
-    );
+    let Some(state) = app.try_state::<ProviderRuntimeState>() else {
+        return;
+    };
+    let event = state.record_runtime_event(provider_instance_id, session_key, message);
+    let _ = app.emit(PROVIDER_RUNTIME_EVENT, event);
 }
 
 #[derive(Deserialize)]
@@ -215,6 +360,7 @@ impl AgentProviderSnapshot {
 pub(crate) struct ProviderRuntimeState {
     snapshots: Arc<Mutex<Vec<AgentProviderSnapshot>>>,
     refreshing: Arc<AtomicBool>,
+    runtime_events: Mutex<RuntimeEventStore>,
 }
 
 impl ProviderRuntimeState {
@@ -226,6 +372,7 @@ impl ProviderRuntimeState {
         Self {
             snapshots: Arc::new(Mutex::new(snapshots)),
             refreshing: Arc::new(AtomicBool::new(false)),
+            runtime_events: Mutex::new(RuntimeEventStore::default()),
         }
     }
 
@@ -277,6 +424,30 @@ impl ProviderRuntimeState {
             .lock()
             .unwrap_or_else(|value| value.into_inner())
             .clone()
+    }
+
+    fn record_runtime_event(
+        &self,
+        provider_instance_id: &str,
+        session_key: &str,
+        message: &Value,
+    ) -> AgentProviderRuntimeEvent {
+        self.runtime_events
+            .lock()
+            .unwrap_or_else(|value| value.into_inner())
+            .record(provider_instance_id, session_key, message)
+    }
+
+    fn replay_runtime_events(
+        &self,
+        provider_instance_id: &str,
+        session_key: &str,
+        after_sequence: Option<u64>,
+    ) -> AgentProviderRuntimeReplay {
+        self.runtime_events
+            .lock()
+            .unwrap_or_else(|value| value.into_inner())
+            .replay(provider_instance_id, session_key, after_sequence)
     }
 }
 
@@ -542,6 +713,24 @@ pub(crate) fn refresh_agent_provider_inventory(
 }
 
 #[tauri::command]
+pub(crate) fn read_agent_provider_runtime_events(
+    state: State<'_, ProviderRuntimeState>,
+    request: ReadAgentProviderRuntimeEventsRequest,
+) -> Result<AgentProviderRuntimeReplay, String> {
+    if native_provider_runtime(&request.provider_instance_id).is_err()
+        || request.session_key.trim().is_empty()
+        || request.session_key.len() > 512
+    {
+        return Err("A valid runtime provider instance and session key are required.".to_owned());
+    }
+    Ok(state.replay_runtime_events(
+        &request.provider_instance_id,
+        &request.session_key,
+        request.after_sequence,
+    ))
+}
+
+#[tauri::command]
 pub(crate) fn start_agent_provider_session(
     app: AppHandle,
     codex_state: State<'_, CodexAppServerState>,
@@ -750,5 +939,68 @@ mod tests {
         assert!(native_provider_runtime("unknown")
             .unwrap_err()
             .contains("Unknown provider instance"));
+    }
+
+    #[test]
+    fn runtime_events_are_sequenced_and_replayed_after_a_watermark() {
+        let mut store = RuntimeEventStore::default();
+        for index in 1..=3 {
+            let event = store.record_with_limits(
+                "codex",
+                "session-a",
+                &serde_json::json!({ "index": index }),
+                4,
+                10,
+                10_000,
+            );
+            assert_eq!(event.sequence, index);
+        }
+
+        let replay = store.replay("codex", "session-a", Some(1));
+        assert_eq!(
+            replay
+                .events
+                .iter()
+                .map(|event| event.sequence)
+                .collect::<Vec<_>>(),
+            [2, 3]
+        );
+        assert_eq!(replay.oldest_available_sequence, 1);
+        assert_eq!(replay.latest_sequence, 3);
+        assert!(!replay.reset_required);
+    }
+
+    #[test]
+    fn runtime_replay_reports_when_requested_events_were_evicted() {
+        let mut store = RuntimeEventStore::default();
+        for index in 1..=4 {
+            store.record_with_limits(
+                "claude-code",
+                "session-b",
+                &serde_json::json!({ "index": index }),
+                4,
+                2,
+                10_000,
+            );
+        }
+
+        let replay = store.replay("claude-code", "session-b", Some(1));
+        assert_eq!(replay.oldest_available_sequence, 3);
+        assert_eq!(replay.latest_sequence, 4);
+        assert!(replay.reset_required);
+        assert_eq!(replay.events.len(), 2);
+    }
+
+    #[test]
+    fn runtime_event_store_evicts_the_least_recently_used_stream() {
+        let mut store = RuntimeEventStore::default();
+        store.record_with_limits("codex", "old", &Value::Null, 2, 10, 10_000);
+        store.record_with_limits("codex", "kept", &Value::Null, 2, 10, 10_000);
+        store.record_with_limits("codex", "kept", &Value::Null, 2, 10, 10_000);
+        store.record_with_limits("codex", "new", &Value::Null, 2, 10, 10_000);
+
+        assert!(store.replay("codex", "old", Some(1)).reset_required);
+        assert_eq!(store.replay("codex", "kept", None).latest_sequence, 2);
+        assert_eq!(store.replay("codex", "new", None).latest_sequence, 1);
     }
 }
