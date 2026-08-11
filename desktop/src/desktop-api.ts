@@ -47,6 +47,44 @@ export interface SyncAllMeshPeersResponse {
   peers: MeshPeerStatus[];
 }
 
+export type ProviderRuntimeOperation =
+  | "startSession"
+  | "resumeSession"
+  | "sendTurn"
+  | "interruptTurn"
+  | "respondToApproval"
+  | "respondToUserInput"
+  | "stopSession"
+  | "listSessions"
+  | "readThread"
+  | "rollbackThread"
+  | "changeModel";
+
+export type ProviderTransport =
+  | "codexAppServer"
+  | "claudeStreamJson"
+  | "agentClientProtocol"
+  | "openCodeServer";
+
+export interface AgentProviderDriver {
+  instanceId: string;
+  driver: string;
+  displayName: string;
+  executable: string;
+  transport: ProviderTransport;
+  supportsMultipleInstances: boolean;
+  runtimeAvailable: boolean;
+  requiredOperations: ProviderRuntimeOperation[];
+  inventory: {
+    method: "appServer" | "cliAndInit" | "cliAndAcp" | "cliAndHttp";
+    version: boolean;
+    authentication: boolean;
+    models: boolean;
+    slashCommands: boolean;
+    skills: boolean;
+  };
+}
+
 export interface DesktopSettings {
   appearance: DesktopAppearance;
   provider: ExplainProvider;
@@ -342,6 +380,10 @@ export function stopTerminal(terminalId: string): Promise<void> {
 
 export function ensureCodexSharedAppServer(): Promise<string> {
   return invoke<string>("ensure_codex_shared_app_server");
+}
+
+export function listAgentProviderDrivers(): Promise<AgentProviderDriver[]> {
+  return invoke<AgentProviderDriver[]>("list_agent_provider_drivers");
 }
 
 export function connectCodexThread(sessionKey: string, threadId: string, cwd: string): Promise<void> {

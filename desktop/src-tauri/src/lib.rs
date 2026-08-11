@@ -4,6 +4,7 @@ mod collab;
 mod collab_coordinator;
 mod explain;
 mod mesh;
+mod provider_runtime;
 mod search;
 mod secrets;
 mod semantic;
@@ -33,6 +34,7 @@ use explain::explain_diff;
 use mesh::{
     connect_mesh_peer, get_mesh_status, regenerate_mesh_identity, sync_all_mesh_peers, MeshState,
 };
+use provider_runtime::list_agent_provider_drivers;
 use search::{search_sessions, SearchIndexState};
 use session_history::{
     bind_session_history, capture_session_history, read_session_file_history, start_session_history,
@@ -126,6 +128,7 @@ pub fn run() {
             connect_claude_thread,
             start_claude_session,
             send_claude_turn,
+            list_agent_provider_drivers,
         ])
         .run(tauri::generate_context!())
         .expect("error while running agent-vis desktop");
