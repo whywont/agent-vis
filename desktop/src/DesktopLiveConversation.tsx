@@ -85,6 +85,7 @@ export default function DesktopLiveConversation({
   const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [externalWriter, setExternalWriter] = useState<CodexWriterInfo | null>(null);
+  const [takeControlConfirmation, setTakeControlConfirmation] = useState<{ threadId: string; pid: number } | null>(null);
   const [approval, setApproval] = useState<Approval | null>(null);
   const [sending, setSending] = useState(false);
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -408,10 +409,7 @@ export default function DesktopLiveConversation({
 
   async function takeControlAndRetry() {
     if (!externalWriter || sending) return;
-    const confirmed = window.confirm(
-      `Take control of this Codex thread?\n\nCodex process ${externalWriter.pid} will exit and its terminal will return to the shell. Any in-flight work in that terminal will stop. The conversation history will be preserved.`,
-    );
-    if (!confirmed) return;
+    setTakeControlConfirmation(null);
     setSending(true);
     setError("");
     setState("connecting");
@@ -652,7 +650,7 @@ export default function DesktopLiveConversation({
           <button
             type="button"
             className="desktop-codex-take-control"
-            onClick={() => void takeControlAndRetry()}
+            onClick={() => setTakeControlConfirmation({ threadId, pid: externalWriter.pid })}
             disabled={sending}
             title={`Exit Codex PID ${externalWriter.pid}, resume this thread in Agent Vis, and send the current message`}
           >
@@ -664,6 +662,20 @@ export default function DesktopLiveConversation({
           </button>
         )}
         {error && <span className="desktop-codex-live-error" title={error}>{error}</span>}
+        {externalWriter
+          && takeControlConfirmation?.threadId === threadId
+          && takeControlConfirmation.pid === externalWriter.pid
+          && !sending && (
+          <div className="desktop-codex-take-control-confirm" role="alertdialog" aria-modal="true" aria-label="Confirm Codex takeover">
+            <span>
+              Exit Codex PID {externalWriter.pid}? Its terminal will return to the shell and any in-flight work there will stop. History is preserved.
+            </span>
+            <button type="button" className="danger" onClick={() => void takeControlAndRetry()}>
+              Exit and resume here
+            </button>
+            <button type="button" onClick={() => setTakeControlConfirmation(null)}>Cancel</button>
+          </div>
+        )}
       </div>
       {images.length > 0 && (
         <div className="desktop-codex-image-attachments" aria-label="Attached images">

@@ -1500,6 +1500,35 @@ body.resizing .desktop-collab-column-resize::after { background: rgba(224,184,92
   color: var(--red);
 }
 .desktop-codex-live-error { overflow: hidden; max-width: 190px; color: var(--red); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.desktop-codex-take-control-confirm {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% - 2px);
+  right: 9px;
+  display: grid;
+  width: min(390px, calc(100% - 34px));
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(224, 122, 122, 0.5);
+  border-radius: 5px;
+  background: var(--bg-card);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.3);
+}
+.desktop-codex-take-control-confirm span {
+  grid-column: 1 / -1;
+  color: var(--text);
+  font: 10px/1.5 var(--font-mono);
+}
+.desktop-codex-live-bar .desktop-codex-take-control-confirm button {
+  min-height: 28px;
+  padding: 5px 9px;
+}
+.desktop-codex-live-bar .desktop-codex-take-control-confirm button.danger {
+  border-color: rgba(224, 122, 122, 0.65);
+  background: rgba(224, 122, 122, 0.14);
+  color: var(--red);
+}
 
 .desktop-slash-picker {
   position: absolute;
