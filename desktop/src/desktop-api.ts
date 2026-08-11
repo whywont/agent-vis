@@ -85,6 +85,15 @@ export interface AgentProviderDriver {
   };
 }
 
+export interface AgentProviderSnapshot {
+  instanceId: string;
+  status: "checking" | "ready" | "warning" | "unavailable";
+  installed: boolean | null;
+  version: string | null;
+  detail: string | null;
+  checkedAtMs: number | null;
+}
+
 export interface DesktopSettings {
   appearance: DesktopAppearance;
   provider: ExplainProvider;
@@ -384,6 +393,14 @@ export function ensureCodexSharedAppServer(): Promise<string> {
 
 export function listAgentProviderDrivers(): Promise<AgentProviderDriver[]> {
   return invoke<AgentProviderDriver[]>("list_agent_provider_drivers");
+}
+
+export function listAgentProviderInventory(): Promise<AgentProviderSnapshot[]> {
+  return invoke<AgentProviderSnapshot[]>("list_agent_provider_inventory");
+}
+
+export function refreshAgentProviderInventory(): Promise<boolean> {
+  return invoke<boolean>("refresh_agent_provider_inventory");
 }
 
 export function connectCodexThread(sessionKey: string, threadId: string, cwd: string): Promise<void> {

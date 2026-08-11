@@ -34,3 +34,19 @@ stays false until its native transport is usable, so catalog coverage cannot
 accidentally advertise a selectable but unusable harness. Inventory flags describe
 the discovery surface each finished driver must populate; they do not claim that
 the current implementation already performs every probe.
+
+## Startup Inventory
+
+The native registry exists before any CLI process is started, so the renderer can
+immediately show all built-in providers in a `checking` state. At application
+startup it probes every executable concurrently with a three-second per-process
+timeout and caches installation and version snapshots. Each completed probe emits
+`agent-provider-inventory-updated`; one missing or hung harness therefore cannot
+delay the other providers or application startup.
+
+The probe commands are fixed by the native driver catalog rather than accepted
+from renderer input. Codex, Claude Code, Grok, and OpenCode use `--version`;
+Cursor Agent uses `about`, matching its supported installation/authentication
+inspection command. Later inventory commits will enrich the same snapshots with
+authentication, models, commands, and skills through each provider's native
+protocol.
