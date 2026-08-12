@@ -87,6 +87,7 @@ export default function DesktopLiveConversation({
   const [interrupted, setInterrupted] = useState(false);
   const pendingSlashCommand = useRef<{ command: string; callId: string; output: string } | null>(null);
   const connection = useRef<Promise<boolean> | null>(null);
+  const reconnect = useRef<() => Promise<boolean>>(async () => false);
   const runtimeSequence = useRef({ scope: "", sequence: 0 });
   const slashInput = draft.startsWith("/") ? draft.slice(1).trimStart() : null;
   const slashQuery = slashInput?.split(/\s/, 1)[0].toLowerCase() ?? null;
@@ -116,6 +117,40 @@ export default function DesktopLiveConversation({
     }).catch(() => {});
     return () => { cancelled = true; };
   }, [cwd, provider, sessionKey, threadId]);
+
+  useEffect(() => {
+    if (provider !== "codex" || !externalWriter) return;
+    let cancelled = false;
+    let timer: number | undefined;
+    const recheck = async () => {
+      try {
+        const writer = await getCodexThreadWriter(threadId);
+        if (cancelled) return;
+        if (!writer) {
+          setExternalWriter(null);
+          setTakeControlConfirmation(null);
+          setError("");
+          setState("idle");
+          connection.current = null;
+          void reconnect.current();
+          return;
+        }
+        if (writer.pid !== externalWriter.pid) {
+          setExternalWriter(writer);
+          setTakeControlConfirmation(null);
+          setError(`Codex is open in another terminal (PID ${writer.pid}).`);
+        }
+      } catch {
+        // Keep the confirmed owner visible if a transient inspection fails.
+      }
+      if (!cancelled) timer = window.setTimeout(recheck, 1000);
+    };
+    void recheck();
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [externalWriter, provider, threadId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -354,6 +389,7 @@ export default function DesktopLiveConversation({
     connection.current = attempt;
     return attempt;
   }
+  reconnect.current = connect;
 
   async function submit(textOverride?: string, alreadyConnected = false) {
     const text = (textOverride ?? draft).trim();
@@ -749,7 +785,7 @@ function codexStreamEvent(method: string | undefined, params: Record<string, unk
   if (!method) return null;
   const item = params.item;
   if (method === "item/started" || method === "item/completed") {
-    const formatted = formatCodexItem(item);
+    const formatted = formatCodexItem(item, method === "item/completed");
     return formatted ? streamEntry(formatted.kind, formatted.text, `codex:${formatted.id}`) : null;
   }
   const delta = typeof params.delta === "string" ? params.delta : "";
@@ -761,7 +797,7 @@ function codexStreamEvent(method: string | undefined, params: Record<string, unk
   return null;
 }
 
-function formatCodexItem(item: unknown): { id: string; kind: LiveStreamEntry["kind"]; text: string } | null {
+function formatCodexItem(item: unknown, completed = false): { id: string; kind: LiveStreamEntry["kind"]; text: string } | null {
   if (typeof item !== "object" || item === null) return null;
   const record = item as Record<string, unknown>;
   const id = typeof record.id === "string" ? record.id : crypto.randomUUID();
@@ -769,10 +805,32 @@ function formatCodexItem(item: unknown): { id: string; kind: LiveStreamEntry["ki
   const text = stringValue(record.text) || stringValue(record.content) || stringValue(record.command) || stringValue(record.query);
   if (type === "agentMessage" && text) return { id, kind: "assistant", text };
   if (type === "reasoning" && text) return { id, kind: "reasoning", text };
-  if (type === "commandExecution") return { id, kind: "tool", text: text ? `$ ${text}` : "Running command..." };
+  if (type === "commandExecution") {
+    if (completed) {
+      const output = stringValue(record.aggregatedOutput);
+      const status = stringValue(record.status);
+      const exitCode = typeof record.exitCode === "number" ? record.exitCode : null;
+      if (output) return { id: `${id}:result`, kind: "output", text: boundedCommandOutput(output) };
+      if (status === "failed" || (exitCode !== null && exitCode !== 0)) {
+        return {
+          id: `${id}:result`,
+          kind: "output",
+          text: `Command failed${exitCode === null ? "." : ` with exit code ${exitCode}.`}`,
+        };
+      }
+      return null;
+    }
+    return { id, kind: "tool", text: text ? `$ ${text}` : "Running command..." };
+  }
   if (type === "fileChange") return { id, kind: "tool", text: "Applying file changes..." };
   if (type === "webSearch") return { id, kind: "tool", text: text ? `Searching: ${text}` : "Searching the web..." };
   return null;
+}
+
+function boundedCommandOutput(output: string): string {
+  const maxCharacters = 12_000;
+  if (output.length <= maxCharacters) return output;
+  return `[Earlier command output omitted]\n${output.slice(-maxCharacters)}`;
 }
 
 function stringValue(value: unknown): string {

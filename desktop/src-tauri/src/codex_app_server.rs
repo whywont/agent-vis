@@ -20,6 +20,7 @@ const RESPONSE_TIMEOUT: Duration = Duration::from_secs(12);
 const SHARED_SERVER_START_TIMEOUT: Duration = Duration::from_secs(8);
 const WRITER_RELEASE_TIMEOUT: Duration = Duration::from_secs(8);
 const WRITER_RELEASE_POLL: Duration = Duration::from_millis(50);
+const ORPHAN_RELEASE_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub(crate) struct CodexAppServerState {
     connections: Mutex<HashMap<String, Arc<CodexAppServerConnection>>>,
@@ -28,6 +29,7 @@ pub(crate) struct CodexAppServerState {
 
 impl CodexAppServerState {
     pub(crate) fn new() -> Self {
+        reap_stale_agent_vis_servers();
         Self {
             connections: Mutex::new(HashMap::new()),
             shared_server: Mutex::new(None),
@@ -145,6 +147,13 @@ pub(crate) struct CodexWriterInfo {
     command: String,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct ProcessIdentity {
+    uid: u32,
+    parent_pid: i32,
+    command_line: String,
+}
+
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct CodexAppServerEvent {
@@ -239,71 +248,210 @@ fn parse_lsof_writer(output: &str) -> Option<CodexWriterInfo> {
     None
 }
 
-fn process_identity(pid: i32) -> Result<(u32, String), String> {
+fn parse_process_identity(output: &str) -> Option<ProcessIdentity> {
+    let mut fields = output.split_whitespace();
+    let uid = fields.next()?.parse::<u32>().ok()?;
+    let parent_pid = fields.next()?.parse::<i32>().ok()?;
+    let command_line = fields.collect::<Vec<_>>().join(" ");
+    (!command_line.is_empty()).then_some(ProcessIdentity {
+        uid,
+        parent_pid,
+        command_line,
+    })
+}
+
+fn process_identity(pid: i32) -> Result<ProcessIdentity, String> {
     if pid <= 1 {
         return Err("Refusing to inspect an unsafe process identifier.".to_owned());
     }
     let output = Command::new("/bin/ps")
-        .args(["-p", &pid.to_string(), "-o", "uid=", "-o", "comm="])
+        .args([
+            "-p",
+            &pid.to_string(),
+            "-o",
+            "uid=",
+            "-o",
+            "ppid=",
+            "-o",
+            "command=",
+        ])
         .output()
         .map_err(|error| format!("Unable to inspect Codex process {pid}: {error}"))?;
     if !output.status.success() {
         return Err(format!("Codex process {pid} is no longer running."));
     }
-    let value = String::from_utf8_lossy(&output.stdout);
-    let mut fields = value.split_whitespace();
-    let uid = fields
-        .next()
-        .and_then(|field| field.parse::<u32>().ok())
-        .ok_or_else(|| format!("Unable to verify the owner of Codex process {pid}."))?;
-    let command = fields
-        .next()
-        .map(str::to_owned)
-        .ok_or_else(|| format!("Unable to verify Codex process {pid}."))?;
-    Ok((uid, command))
+    parse_process_identity(&String::from_utf8_lossy(&output.stdout))
+        .ok_or_else(|| format!("Unable to verify Codex process {pid}."))
 }
 
-fn validate_writer_process(writer: &CodexWriterInfo) -> Result<(), String> {
+fn validate_writer_process(writer: &CodexWriterInfo) -> Result<ProcessIdentity, String> {
     if writer.pid == std::process::id() as i32 {
         return Err("Agent Vis already owns this Codex process.".to_owned());
     }
-    let (uid, command) = process_identity(writer.pid)?;
+    let identity = process_identity(writer.pid)?;
     let current_uid = unsafe { libc::geteuid() };
-    if uid != current_uid {
+    if identity.uid != current_uid {
         return Err("Refusing to stop a Codex process owned by another user.".to_owned());
     }
-    let executable = Path::new(&command)
+    let executable_path = identity
+        .command_line
+        .split_whitespace()
+        .next()
+        .unwrap_or("");
+    let executable = Path::new(executable_path)
         .file_name()
         .and_then(|name| name.to_str())
-        .unwrap_or(&command);
+        .unwrap_or(executable_path);
     if executable != "codex" {
         return Err(format!(
             "Refusing to stop process {} because it is not Codex.",
             writer.pid
         ));
     }
-    Ok(())
+    Ok(identity)
 }
 
-fn find_codex_writer(thread_id: &str) -> Result<Option<CodexWriterInfo>, String> {
-    let lock_path = writer_lock_path(thread_id)?;
-    if !lock_path.is_file() {
-        return Ok(None);
+fn agent_vis_listener_parent(command_line: &str, expected_uid: u32) -> Option<i32> {
+    let mut arguments = command_line.split_whitespace();
+    while let Some(argument) = arguments.next() {
+        if argument != "--listen" {
+            continue;
+        }
+        let address = arguments.next()?;
+        let runtime = address.strip_prefix("unix:///tmp/agent-vis-codex-")?;
+        let (directory, socket) = runtime.split_once('/')?;
+        if socket != "app-server.sock" {
+            return None;
+        }
+        let mut parts = directory.split('-');
+        let uid = parts.next()?.parse::<u32>().ok()?;
+        let parent_pid = parts.next()?.parse::<i32>().ok()?;
+        let attempt = parts.next()?.parse::<u8>().ok()?;
+        if uid != expected_uid || parent_pid <= 1 || parts.next().is_some() || attempt >= 100 {
+            return None;
+        }
+        return Some(parent_pid);
     }
+    None
+}
+
+fn agent_vis_runtime_parent(name: &str, expected_uid: u32) -> Option<i32> {
+    let runtime = name.strip_prefix("agent-vis-codex-")?;
+    let mut parts = runtime.split('-');
+    let uid = parts.next()?.parse::<u32>().ok()?;
+    let parent_pid = parts.next()?.parse::<i32>().ok()?;
+    let attempt = parts.next()?.parse::<u8>().ok()?;
+    if uid != expected_uid || parent_pid <= 1 || parts.next().is_some() || attempt >= 100 {
+        return None;
+    }
+    Some(parent_pid)
+}
+
+fn reap_orphaned_agent_vis_writer(
+    writer: &CodexWriterInfo,
+    identity: &ProcessIdentity,
+) -> Result<bool, String> {
+    // During a dev reload or hard desktop restart, macOS reparents the child
+    // app-server to launchd. It can keep a thread lock forever even though no
+    // Agent Vis process can answer its pending requests. Only reap children
+    // whose exact private listener names a dead Agent Vis parent.
+    if identity.parent_pid != 1 {
+        return Ok(false);
+    }
+    let Some(parent_pid) = agent_vis_listener_parent(&identity.command_line, identity.uid) else {
+        return Ok(false);
+    };
+    if process_is_running(parent_pid) {
+        return Ok(false);
+    }
+    if unsafe { libc::kill(writer.pid, libc::SIGTERM) } != 0 {
+        if std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+            return Ok(true);
+        }
+        return Ok(false);
+    }
+    let started = Instant::now();
+    while process_is_running(writer.pid) && started.elapsed() < ORPHAN_RELEASE_TIMEOUT {
+        std::thread::sleep(WRITER_RELEASE_POLL);
+    }
+    Ok(!process_is_running(writer.pid))
+}
+
+fn read_lsof_process(path: &Path) -> Result<Option<CodexWriterInfo>, String> {
     let lsof = lsof_executable().ok_or_else(|| {
         "Unable to locate lsof, which Agent Vis needs to identify the Codex writer.".to_owned()
     })?;
     let output = Command::new(lsof)
         .args(["-Fpc", "--"])
-        .arg(&lock_path)
+        .arg(path)
         .output()
-        .map_err(|error| format!("Unable to inspect the Codex writer lock: {error}"))?;
+        .map_err(|error| format!("Unable to inspect the Codex process: {error}"))?;
     if !output.status.success() && output.stdout.is_empty() {
         return Ok(None);
     }
-    let writer = parse_lsof_writer(&String::from_utf8_lossy(&output.stdout));
+    Ok(parse_lsof_writer(&String::from_utf8_lossy(&output.stdout)))
+}
+
+fn reap_stale_agent_vis_servers() {
+    let current_uid = unsafe { libc::geteuid() };
+    let Ok(entries) = fs::read_dir("/tmp") else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() || file_type.is_symlink() {
+            continue;
+        }
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let Some(parent_pid) = agent_vis_runtime_parent(name, current_uid) else {
+            continue;
+        };
+        if process_is_running(parent_pid) {
+            continue;
+        }
+        let socket_path = entry.path().join("app-server.sock");
+        let Ok(Some(process)) = read_lsof_process(&socket_path) else {
+            continue;
+        };
+        let Ok(identity) = validate_writer_process(&process) else {
+            continue;
+        };
+        if identity.parent_pid != 1
+            || agent_vis_listener_parent(&identity.command_line, current_uid) != Some(parent_pid)
+        {
+            continue;
+        }
+        if reap_orphaned_agent_vis_writer(&process, &identity).unwrap_or(false) {
+            let _ = fs::remove_file(&socket_path);
+            let _ = fs::remove_dir(entry.path());
+        }
+    }
+}
+
+fn read_codex_writer(thread_id: &str) -> Result<Option<CodexWriterInfo>, String> {
+    let lock_path = writer_lock_path(thread_id)?;
+    if !lock_path.is_file() {
+        return Ok(None);
+    }
+    read_lsof_process(&lock_path)
+}
+
+fn find_codex_writer(thread_id: &str) -> Result<Option<CodexWriterInfo>, String> {
+    let writer = read_codex_writer(thread_id)?;
     if let Some(writer) = writer.as_ref() {
-        validate_writer_process(writer)?;
+        let identity = validate_writer_process(writer)?;
+        if reap_orphaned_agent_vis_writer(writer, &identity)? {
+            let replacement = read_codex_writer(thread_id)?;
+            if let Some(replacement) = replacement.as_ref() {
+                validate_writer_process(replacement)?;
+            }
+            return Ok(replacement);
+        }
     }
     Ok(writer)
 }
@@ -1080,7 +1228,11 @@ pub(crate) fn respond_to_codex_approval(
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_lsof_writer, response_error, validate_thread_id, CodexWriterInfo};
+    use super::{
+        agent_vis_listener_parent, agent_vis_runtime_parent, parse_lsof_writer,
+        parse_process_identity, response_error, validate_thread_id, CodexWriterInfo,
+        ProcessIdentity,
+    };
     use serde_json::json;
 
     #[test]
@@ -1099,6 +1251,51 @@ mod tests {
             response_error(&json!({ "code": -32600, "message": "invalid request" })),
             "invalid request"
         );
+    }
+
+    #[test]
+    fn parses_process_identity_with_full_command_line() {
+        assert_eq!(
+            parse_process_identity(
+                " 501 1 /opt/homebrew/bin/codex app-server --listen unix:///tmp/agent-vis-codex-501-48462-0/app-server.sock\n"
+            ),
+            Some(ProcessIdentity {
+                uid: 501,
+                parent_pid: 1,
+                command_line: "/opt/homebrew/bin/codex app-server --listen unix:///tmp/agent-vis-codex-501-48462-0/app-server.sock".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn recognizes_only_agent_vis_private_listener_parents() {
+        let command = "/opt/homebrew/bin/codex app-server --listen unix:///tmp/agent-vis-codex-501-48462-0/app-server.sock";
+        assert_eq!(agent_vis_listener_parent(command, 501), Some(48462));
+        assert_eq!(agent_vis_listener_parent(command, 502), None);
+        assert_eq!(
+            agent_vis_listener_parent(
+                "codex app-server --listen unix:///tmp/somebody-elses-server.sock",
+                501,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn recognizes_only_current_users_private_runtime_directories() {
+        assert_eq!(
+            agent_vis_runtime_parent("agent-vis-codex-501-48462-0", 501),
+            Some(48462)
+        );
+        assert_eq!(
+            agent_vis_runtime_parent("agent-vis-codex-502-48462-0", 501),
+            None
+        );
+        assert_eq!(
+            agent_vis_runtime_parent("agent-vis-codex-501-1-0", 501),
+            None
+        );
+        assert_eq!(agent_vis_runtime_parent("unrelated", 501), None);
     }
 
     #[test]
