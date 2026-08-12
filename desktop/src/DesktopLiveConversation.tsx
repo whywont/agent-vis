@@ -14,18 +14,12 @@ import {
 import { getHarnessAdapter, type LiveProvider, type ModelOption } from "./harness-adapters";
 import type { LiveStreamEntry } from "./DesktopLiveStream";
 import { unappliedRuntimeEvents } from "./sequenced-runtime-events";
-
-type ApprovalDecision = string | Record<string, unknown>;
-
-type Approval = {
-  id: unknown;
-  kind: "command" | "file" | "permissions";
-  reason: string;
-  details: string;
-  decisions: ApprovalDecision[];
-  permissions?: unknown;
-  command?: string;
-};
+import {
+  codexApprovalResult,
+  decodeCodexServerRequest,
+  type CodexApprovalDecision,
+  type CodexApprovalRequest,
+} from "./codex-server-requests";
 
 type ConnectionState = "idle" | "connecting" | "ready" | "error";
 
@@ -75,7 +69,7 @@ export default function DesktopLiveConversation({
   const [error, setError] = useState("");
   const [externalWriter, setExternalWriter] = useState<CodexWriterInfo | null>(null);
   const [takeControlConfirmation, setTakeControlConfirmation] = useState<{ threadId: string; pid: number } | null>(null);
-  const [approval, setApproval] = useState<Approval | null>(null);
+  const [approval, setApproval] = useState<CodexApprovalRequest | null>(null);
   const [sending, setSending] = useState(false);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const [images, setImages] = useState<ImageAttachment[]>([]);
@@ -286,29 +280,15 @@ export default function DesktopLiveConversation({
         setApproval(null);
         onApprovalChange?.(null);
       }
-      const requestKind = method === "item/commandExecution/requestApproval" ? "command"
-        : method === "item/fileChange/requestApproval" ? "file"
-          : method === "item/permissions/requestApproval" ? "permissions" : null;
-      if (!requestKind || message.id === undefined) return;
-      const command = typeof params.command === "string" ? params.command : undefined;
-      const permissions = params.permissions;
-      const details = command
-        || (typeof params.grantRoot === "string" ? params.grantRoot : "")
-        || (permissions ? JSON.stringify(permissions) : "");
-      setApproval({
-        id: message.id,
-        kind: requestKind,
-        reason: typeof params.reason === "string" ? params.reason : "Codex needs permission to continue.",
-        details,
-        command,
-        permissions,
-        decisions: Array.isArray(params.availableDecisions)
-          ? params.availableDecisions.filter((value): value is ApprovalDecision =>
-            typeof value === "string" || (typeof value === "object" && value !== null),
-          )
-          : requestKind === "permissions" ? ["accept", "decline"] : ["accept", "acceptForSession", "decline", "cancel"],
-      });
-      onApprovalChange?.(command || null);
+      const serverRequest = decodeCodexServerRequest(message);
+      if (!serverRequest) return;
+      if (serverRequest.type === "unsupported") {
+        setState("error");
+        setError(`${serverRequest.description} Agent Vis rejected ${serverRequest.method} so the turn will not hang.`);
+        return;
+      }
+      setApproval(serverRequest);
+      onApprovalChange?.(serverRequest.command || null);
     };
 
     void listen<AgentProviderRuntimeEvent>("agent-provider-runtime-event", (event) => {
@@ -518,13 +498,10 @@ export default function DesktopLiveConversation({
     setImages((current) => [...current, ...nextImages].slice(0, MAX_IMAGE_ATTACHMENTS));
   }
 
-  async function respondToApproval(decision: ApprovalDecision) {
+  async function respondToApproval(decision: CodexApprovalDecision) {
     if (!approval) return;
-    const result = approval.kind === "permissions"
-      ? decision === "accept" ? { permissions: approval.permissions, scope: "turn" } : { permissions: {} }
-      : { decision };
     try {
-      await respondToCodexApproval(sessionKey, approval.id, result);
+      await respondToCodexApproval(sessionKey, approval.id, codexApprovalResult(approval, decision));
       setApproval(null);
       onApprovalChange?.(null);
     } catch (reason) {
@@ -846,22 +823,31 @@ function fileAsDataUrl(file: File): Promise<string> {
   });
 }
 
-function isRenderableApprovalDecision(decision: ApprovalDecision): boolean {
-  if (typeof decision === "string") return ["accept", "acceptForSession", "decline", "cancel"].includes(decision);
-  return "acceptWithExecpolicyAmendment" in decision || "applyNetworkPolicyAmendment" in decision;
+function isRenderableApprovalDecision(decision: CodexApprovalDecision): boolean {
+  if (typeof decision === "string") return [
+    "accept", "acceptForSession", "decline", "cancel",
+    "approved", "approved_for_session", "denied", "abort",
+  ].includes(decision);
+  return "acceptWithExecpolicyAmendment" in decision
+    || "applyNetworkPolicyAmendment" in decision
+    || "approved_execpolicy_amendment" in decision
+    || "network_policy_amendment" in decision;
 }
 
-function approvalDecisionKey(decision: ApprovalDecision): string {
+function approvalDecisionKey(decision: CodexApprovalDecision): string {
   return typeof decision === "string" ? decision : JSON.stringify(decision);
 }
 
-function approvalDecisionLabel(decision: ApprovalDecision, index: number): string {
-  if (decision === "accept") return "1. Approve";
-  if (decision === "acceptForSession" || (typeof decision === "object" && (
-    "acceptWithExecpolicyAmendment" in decision || "applyNetworkPolicyAmendment" in decision
+function approvalDecisionLabel(decision: CodexApprovalDecision, index: number): string {
+  if (decision === "accept" || decision === "approved") return "1. Approve";
+  if (decision === "acceptForSession" || decision === "approved_for_session" || (typeof decision === "object" && (
+    "acceptWithExecpolicyAmendment" in decision
+    || "applyNetworkPolicyAmendment" in decision
+    || "approved_execpolicy_amendment" in decision
+    || "network_policy_amendment" in decision
   ))) return "2. Approve, don't ask again";
-  if (decision === "decline") return "Decline";
-  if (decision === "cancel") return "Cancel turn";
+  if (decision === "decline" || decision === "denied") return "Decline";
+  if (decision === "cancel" || decision === "abort") return "Cancel turn";
   return `${index + 1}. Approve`;
 }
 

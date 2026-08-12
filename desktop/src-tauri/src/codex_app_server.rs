@@ -189,6 +189,33 @@ fn response_error(error: &Value) -> String {
     message.to_owned()
 }
 
+fn supports_interactive_server_request(method: &str) -> bool {
+    matches!(
+        method,
+        "item/commandExecution/requestApproval"
+            | "item/fileRead/requestApproval"
+            | "item/fileChange/requestApproval"
+            | "item/permissions/requestApproval"
+            | "applyPatchApproval"
+            | "execCommandApproval"
+    )
+}
+
+fn unsupported_server_request_response(message: &Value) -> Option<Value> {
+    let method = message.get("method")?.as_str()?;
+    let id = message.get("id")?.clone();
+    (!supports_interactive_server_request(method)).then(|| {
+        json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": {
+                "code": -32601,
+                "message": format!("Agent Vis does not support Codex server request {method} yet.")
+            }
+        })
+    })
+}
+
 fn validate_thread_id(thread_id: &str) -> Result<&str, String> {
     let thread_id = thread_id.trim();
     if thread_id.is_empty()
@@ -613,7 +640,17 @@ fn start_connection(
                 Err(_) => break,
             };
             let Some(message) = message else { continue };
-            if let Some(id) = message.get("id").and_then(Value::as_u64) {
+            let method = message.get("method").and_then(Value::as_str);
+            // JSON-RPC permits both peers to originate requests with the same
+            // numeric IDs. A server request has a method and must never satisfy
+            // one of our outbound response waiters merely because its ID
+            // happens to collide.
+            if method.is_none() {
+                let Some(id) = message.get("id").and_then(Value::as_u64) else {
+                    update_active_turn(&reader_connection, &message);
+                    emit_event(&app, &session_key, message);
+                    continue;
+                };
                 if let Ok(mut waiters) = reader_connection.waiters.lock() {
                     if let Some(waiter) = waiters.remove(&id) {
                         let result = if let Some(error) = message.get("error") {
@@ -626,7 +663,6 @@ fn start_connection(
                 }
             }
             update_active_turn(&reader_connection, &message);
-            let method = message.get("method").and_then(Value::as_str);
             let completed_file_change = method == Some("item/completed")
                 && message
                     .get("params")
@@ -637,7 +673,16 @@ fn start_connection(
             if completed_file_change || method == Some("turn/completed") {
                 crate::session_history::capture_session_history_now(&app, &session_key);
             }
+            let rejection = unsupported_server_request_response(&message);
             emit_event(&app, &session_key, message);
+            if let Some(rejection) = rejection {
+                let Ok(text) = serde_json::to_string(&rejection) else {
+                    continue;
+                };
+                if websocket.send(Message::text(text)).is_err() {
+                    break;
+                }
+            }
         }
         reader_connection.connected.store(false, Ordering::Release);
         if let Ok(mut waiters) = reader_connection.waiters.lock() {
@@ -1230,8 +1275,8 @@ pub(crate) fn respond_to_codex_approval(
 mod tests {
     use super::{
         agent_vis_listener_parent, agent_vis_runtime_parent, parse_lsof_writer,
-        parse_process_identity, response_error, validate_thread_id, CodexWriterInfo,
-        ProcessIdentity,
+        parse_process_identity, response_error, supports_interactive_server_request,
+        unsupported_server_request_response, validate_thread_id, CodexWriterInfo, ProcessIdentity,
     };
     use serde_json::json;
 
@@ -1296,6 +1341,48 @@ mod tests {
             None
         );
         assert_eq!(agent_vis_runtime_parent("unrelated", 501), None);
+    }
+
+    #[test]
+    fn server_request_dispatch_covers_modern_and_legacy_approvals() {
+        for method in [
+            "item/commandExecution/requestApproval",
+            "item/fileRead/requestApproval",
+            "item/fileChange/requestApproval",
+            "item/permissions/requestApproval",
+            "applyPatchApproval",
+            "execCommandApproval",
+        ] {
+            assert!(supports_interactive_server_request(method));
+        }
+        assert!(!supports_interactive_server_request(
+            "item/tool/requestUserInput"
+        ));
+    }
+
+    #[test]
+    fn unsupported_server_requests_receive_a_json_rpc_error() {
+        assert_eq!(
+            unsupported_server_request_response(&json!({
+                "jsonrpc": "2.0",
+                "id": "server-7",
+                "method": "item/tool/requestUserInput",
+                "params": {}
+            })),
+            Some(json!({
+                "jsonrpc": "2.0",
+                "id": "server-7",
+                "error": {
+                    "code": -32601,
+                    "message": "Agent Vis does not support Codex server request item/tool/requestUserInput yet."
+                }
+            }))
+        );
+        assert!(unsupported_server_request_response(&json!({
+            "id": 4,
+            "result": {}
+        }))
+        .is_none());
     }
 
     #[test]
