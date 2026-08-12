@@ -13,6 +13,9 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, State};
 use tungstenite::{client, Error as WebSocketError, Message};
 
+use crate::provider_runtime::emit_provider_runtime_event;
+use crate::shell_environment::apply_desktop_shell_environment;
+
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(12);
 const SHARED_SERVER_START_TIMEOUT: Duration = Duration::from_secs(8);
 const WRITER_RELEASE_TIMEOUT: Duration = Duration::from_secs(8);
@@ -67,19 +70,19 @@ struct CodexConnectionLifecycle {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CodexThreadRequest {
-    session_key: String,
-    thread_id: String,
-    cwd: String,
+    pub(crate) session_key: String,
+    pub(crate) thread_id: String,
+    pub(crate) cwd: String,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CodexTurnRequest {
-    session_key: String,
-    thread_id: String,
-    turn_id: Option<String>,
-    text: String,
-    image_urls: Vec<String>,
+    pub(crate) session_key: String,
+    pub(crate) thread_id: String,
+    pub(crate) turn_id: Option<String>,
+    pub(crate) text: String,
+    pub(crate) image_urls: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -110,16 +113,16 @@ pub(crate) struct CodexInterruptRequest {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct NewCodexSessionRequest {
-    session_key: String,
-    cwd: String,
-    model: Option<String>,
-    effort: Option<String>,
+    pub(crate) session_key: String,
+    pub(crate) cwd: String,
+    pub(crate) model: Option<String>,
+    pub(crate) effort: Option<String>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct NewCodexSession {
-    id: String,
+    pub(crate) id: String,
 }
 
 #[derive(Serialize)]
@@ -150,6 +153,7 @@ struct CodexAppServerEvent {
 }
 
 fn emit_event(app: &AppHandle, session_key: &str, message: Value) {
+    emit_provider_runtime_event(app, "codex", session_key, &message);
     let _ = app.emit(
         "codex-app-server-event",
         CodexAppServerEvent {
@@ -592,7 +596,8 @@ fn ensure_shared_codex_app_server(state: &CodexAppServerState) -> Result<PathBuf
     let socket_path = socket_dir.join("app-server.sock");
     let listen_address = format!("unix://{}", socket_path.display());
     let executable = resolve_codex_executable();
-    let child = Command::new(executable)
+    let mut command = Command::new(executable);
+    let child = apply_desktop_shell_environment(&mut command)
         .args(["app-server", "--listen"])
         .arg(listen_address)
         .stdin(Stdio::null())

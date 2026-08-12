@@ -4,12 +4,14 @@ mod collab;
 mod collab_coordinator;
 mod explain;
 mod mesh;
+mod provider_runtime;
 mod search;
 mod secrets;
 mod semantic;
 mod session_history;
 mod sessions;
 mod settings;
+mod shell_environment;
 mod terminal;
 mod workspace;
 
@@ -33,6 +35,11 @@ use explain::explain_diff;
 use mesh::{
     connect_mesh_peer, get_mesh_status, regenerate_mesh_identity, sync_all_mesh_peers, MeshState,
 };
+use provider_runtime::{
+    list_agent_provider_drivers, list_agent_provider_inventory, read_agent_provider_runtime_events,
+    refresh_agent_provider_inventory, resume_agent_provider_session, send_agent_provider_turn,
+    start_agent_provider_session, ProviderRuntimeState,
+};
 use search::{search_sessions, SearchIndexState};
 use session_history::{
     bind_session_history, capture_session_history, read_session_file_history, start_session_history,
@@ -51,6 +58,7 @@ use workspace::{
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    shell_environment::initialize_desktop_shell_environment();
     tauri::Builder::default()
         .setup(|app| {
             let search = SearchIndexState::new(app.handle())?;
@@ -59,6 +67,9 @@ pub fn run() {
             app.manage(TerminalState::new());
             app.manage(CodexAppServerState::new());
             app.manage(ClaudeStreamState::new());
+            let provider_runtime = ProviderRuntimeState::new();
+            provider_runtime.start_background_inventory(app.handle().clone());
+            app.manage(provider_runtime);
             app.manage(MeshState::new(app.handle().clone())?);
             Ok(())
         })
@@ -126,6 +137,13 @@ pub fn run() {
             connect_claude_thread,
             start_claude_session,
             send_claude_turn,
+            list_agent_provider_drivers,
+            list_agent_provider_inventory,
+            refresh_agent_provider_inventory,
+            read_agent_provider_runtime_events,
+            start_agent_provider_session,
+            resume_agent_provider_session,
+            send_agent_provider_turn,
         ])
         .run(tauri::generate_context!())
         .expect("error while running agent-vis desktop");

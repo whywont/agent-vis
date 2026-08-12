@@ -6,6 +6,9 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, State};
 
+use crate::provider_runtime::emit_provider_runtime_event;
+use crate::shell_environment::apply_desktop_shell_environment;
+
 pub(crate) struct ClaudeStreamState {
     connections: Mutex<HashMap<String, Arc<ClaudeStreamConnection>>>,
 }
@@ -37,27 +40,27 @@ impl ClaudeStreamConnection {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ClaudeThreadRequest {
-    session_key: String,
-    thread_id: String,
-    cwd: String,
+    pub(crate) session_key: String,
+    pub(crate) thread_id: String,
+    pub(crate) cwd: String,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ClaudeTurnRequest {
-    session_key: String,
-    text: String,
-    image_urls: Vec<String>,
+    pub(crate) session_key: String,
+    pub(crate) text: String,
+    pub(crate) image_urls: Vec<String>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct NewClaudeSessionRequest {
-    session_key: String,
-    thread_id: String,
-    cwd: String,
-    model: Option<String>,
-    effort: Option<String>,
+    pub(crate) session_key: String,
+    pub(crate) thread_id: String,
+    pub(crate) cwd: String,
+    pub(crate) model: Option<String>,
+    pub(crate) effort: Option<String>,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -68,6 +71,7 @@ struct ClaudeStreamEvent {
 }
 
 fn emit_event(app: &AppHandle, session_key: &str, message: Value) {
+    emit_provider_runtime_event(app, "claude-code", session_key, &message);
     let _ = app.emit(
         "claude-stream-event",
         ClaudeStreamEvent {
@@ -106,17 +110,19 @@ fn start_connection(
     effort: Option<&str>,
 ) -> Result<Arc<ClaudeStreamConnection>, String> {
     let mut command = Command::new(claude_executable());
-    command.current_dir(cwd).args([
-        "-p",
-        "--verbose",
-        "--input-format",
-        "stream-json",
-        "--output-format",
-        "stream-json",
-        "--include-partial-messages",
-        "--permission-mode",
-        "manual",
-    ]);
+    apply_desktop_shell_environment(&mut command)
+        .current_dir(cwd)
+        .args([
+            "-p",
+            "--verbose",
+            "--input-format",
+            "stream-json",
+            "--output-format",
+            "stream-json",
+            "--include-partial-messages",
+            "--permission-mode",
+            "manual",
+        ]);
     if let Some(thread_id) = resume_thread_id {
         command.args(["--resume", thread_id]);
     } else {

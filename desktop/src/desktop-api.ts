@@ -47,6 +47,97 @@ export interface SyncAllMeshPeersResponse {
   peers: MeshPeerStatus[];
 }
 
+export type ProviderRuntimeOperation =
+  | "startSession"
+  | "resumeSession"
+  | "sendTurn"
+  | "interruptTurn"
+  | "respondToApproval"
+  | "respondToUserInput"
+  | "stopSession"
+  | "listSessions"
+  | "readThread"
+  | "rollbackThread"
+  | "changeModel";
+
+export type ProviderTransport =
+  | "codexAppServer"
+  | "claudeStreamJson"
+  | "agentClientProtocol"
+  | "openCodeServer";
+
+export interface AgentProviderDriver {
+  instanceId: string;
+  driver: string;
+  displayName: string;
+  executable: string;
+  transport: ProviderTransport;
+  supportsMultipleInstances: boolean;
+  runtimeAvailable: boolean;
+  requiredOperations: ProviderRuntimeOperation[];
+  inventory: {
+    method: "appServer" | "cliAndInit" | "cliAndAcp" | "cliAndHttp";
+    version: boolean;
+    authentication: boolean;
+    models: boolean;
+    slashCommands: boolean;
+    skills: boolean;
+  };
+}
+
+export interface AgentProviderSnapshot {
+  instanceId: string;
+  status: "checking" | "ready" | "warning" | "unavailable";
+  installed: boolean | null;
+  version: string | null;
+  detail: string | null;
+  checkedAtMs: number | null;
+}
+
+export interface AgentProviderRuntimeEvent {
+  providerInstanceId: string;
+  sessionKey: string;
+  sequence: number;
+  message: unknown;
+}
+
+export interface AgentProviderRuntimeReplay {
+  events: AgentProviderRuntimeEvent[];
+  oldestAvailableSequence: number;
+  latestSequence: number;
+  resetRequired: boolean;
+}
+
+export interface StartAgentProviderSessionRequest {
+  providerInstanceId: string;
+  sessionKey: string;
+  threadId?: string;
+  cwd: string;
+  model?: string;
+  effort?: string;
+}
+
+export interface StartedAgentProviderSession {
+  providerInstanceId: string;
+  threadId: string;
+}
+
+export interface ResumeAgentProviderSessionRequest {
+  providerInstanceId: string;
+  sessionKey: string;
+  threadId: string;
+  cwd: string;
+}
+
+export interface SendAgentProviderTurnRequest {
+  providerInstanceId: string;
+  sessionKey: string;
+  threadId: string;
+  turnId?: string;
+  text: string;
+  imageUrls: string[];
+}
+
 export interface DesktopSettings {
   appearance: DesktopAppearance;
   provider: ExplainProvider;
@@ -342,6 +433,42 @@ export function stopTerminal(terminalId: string): Promise<void> {
 
 export function ensureCodexSharedAppServer(): Promise<string> {
   return invoke<string>("ensure_codex_shared_app_server");
+}
+
+export function listAgentProviderDrivers(): Promise<AgentProviderDriver[]> {
+  return invoke<AgentProviderDriver[]>("list_agent_provider_drivers");
+}
+
+export function listAgentProviderInventory(): Promise<AgentProviderSnapshot[]> {
+  return invoke<AgentProviderSnapshot[]>("list_agent_provider_inventory");
+}
+
+export function refreshAgentProviderInventory(): Promise<boolean> {
+  return invoke<boolean>("refresh_agent_provider_inventory");
+}
+
+export function readAgentProviderRuntimeEvents(
+  providerInstanceId: string,
+  sessionKey: string,
+  afterSequence?: number,
+): Promise<AgentProviderRuntimeReplay> {
+  return invoke<AgentProviderRuntimeReplay>("read_agent_provider_runtime_events", {
+    request: { providerInstanceId, sessionKey, afterSequence },
+  });
+}
+
+export function startAgentProviderSession(
+  request: StartAgentProviderSessionRequest,
+): Promise<StartedAgentProviderSession> {
+  return invoke<StartedAgentProviderSession>("start_agent_provider_session", { request });
+}
+
+export function resumeAgentProviderSession(request: ResumeAgentProviderSessionRequest): Promise<void> {
+  return invoke<void>("resume_agent_provider_session", { request });
+}
+
+export function sendAgentProviderTurn(request: SendAgentProviderTurnRequest): Promise<void> {
+  return invoke<void>("send_agent_provider_turn", { request });
 }
 
 export function connectCodexThread(sessionKey: string, threadId: string, cwd: string): Promise<void> {

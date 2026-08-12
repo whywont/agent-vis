@@ -5,12 +5,15 @@ import {
   getActiveCodexTurn,
   getCodexThreadWriter,
   interruptCodexTurn,
+  readAgentProviderRuntimeEvents,
   respondToCodexApproval,
   takeOverCodexThread,
+  type AgentProviderRuntimeEvent,
   type CodexWriterInfo,
 } from "./desktop-api";
 import { getHarnessAdapter, type LiveProvider, type ModelOption } from "./harness-adapters";
 import type { LiveStreamEntry } from "./DesktopLiveStream";
+import { unappliedRuntimeEvents } from "./sequenced-runtime-events";
 
 type ApprovalDecision = string | Record<string, unknown>;
 
@@ -23,20 +26,6 @@ type Approval = {
   permissions?: unknown;
   command?: string;
 };
-
-interface AppServerEvent {
-  sessionKey: string;
-  message: {
-    id?: unknown;
-    method?: string;
-    params?: Record<string, unknown>;
-  };
-}
-
-interface ClaudeStreamEvent {
-  sessionKey: string;
-  message: Record<string, unknown>;
-}
 
 type ConnectionState = "idle" | "connecting" | "ready" | "error";
 
@@ -85,6 +74,7 @@ export default function DesktopLiveConversation({
   const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [externalWriter, setExternalWriter] = useState<CodexWriterInfo | null>(null);
+  const [takeControlConfirmation, setTakeControlConfirmation] = useState<{ threadId: string; pid: number } | null>(null);
   const [approval, setApproval] = useState<Approval | null>(null);
   const [sending, setSending] = useState(false);
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -97,6 +87,7 @@ export default function DesktopLiveConversation({
   const [interrupted, setInterrupted] = useState(false);
   const pendingSlashCommand = useRef<{ command: string; callId: string; output: string } | null>(null);
   const connection = useRef<Promise<boolean> | null>(null);
+  const runtimeSequence = useRef({ scope: "", sequence: 0 });
   const slashInput = draft.startsWith("/") ? draft.slice(1).trimStart() : null;
   const slashQuery = slashInput?.split(/\s/, 1)[0].toLowerCase() ?? null;
   const matchingCommands = slashQuery === null ? [] : slashCommands.filter((command) => command.includes(slashQuery));
@@ -129,11 +120,21 @@ export default function DesktopLiveConversation({
   useEffect(() => {
     let cancelled = false;
     let unlisten: UnlistenFn | undefined;
-    if (provider === "claude-code") {
-      void listen<ClaudeStreamEvent>("claude-stream-event", (event) => {
-        if (event.payload.sessionKey !== sessionKey) return;
-        onActivity?.();
-        const message = event.payload.message;
+    let catchingUp = true;
+    const queuedLiveEvents: AgentProviderRuntimeEvent[] = [];
+    const scope = `${provider}:${sessionKey}`;
+    if (runtimeSequence.current.scope !== scope) {
+      runtimeSequence.current = { scope, sequence: 0 };
+    }
+
+    const applyRuntimeEvent = (runtimeEvent: AgentProviderRuntimeEvent) => {
+      if (runtimeEvent.sequence <= runtimeSequence.current.sequence) return;
+      const message = asRecord(runtimeEvent.message);
+      if (!message) return;
+      runtimeSequence.current = { scope, sequence: runtimeEvent.sequence };
+      onActivity?.();
+
+      if (provider === "claude-code") {
         if (message.type === "agent-vis/disconnected") {
           setState("error");
           setError("Claude disconnected");
@@ -204,32 +205,23 @@ export default function DesktopLiveConversation({
           }
           onTurnCompleted?.();
         }
-      }).then((stop) => {
-        if (cancelled) stop();
-        else unlisten = stop;
-      });
-      return () => {
-        cancelled = true;
-        unlisten?.();
-      };
-    }
-    void listen<AppServerEvent>("codex-app-server-event", (event) => {
-      if (event.payload.sessionKey !== sessionKey) return;
-      onActivity?.();
-      const { message } = event.payload;
-      const params = message.params || {};
-      if (message.method === "agent-vis/disconnected") {
+        return;
+      }
+
+      const method = typeof message.method === "string" ? message.method : undefined;
+      const params = asRecord(message.params) || {};
+      if (method === "agent-vis/disconnected") {
         setState("error");
         setError("Codex disconnected");
         return;
       }
-      if (message.method === "turn/started") {
+      if (method === "turn/started") {
         const turn = params.turn as { id?: string } | undefined;
         setActiveTurnId(turn?.id || null);
         setInterrupted(false);
         onStreamEvent?.(streamEntry("system", "Codex is working.", `codex:turn:${turn?.id || "current"}:started`));
       }
-      if (message.method === "turn/completed") {
+      if (method === "turn/completed") {
         setActiveTurnId(null);
         const turn = params.turn as { id?: string; status?: string; error?: { message?: string } | string } | undefined;
         const error = typeof turn?.error === "string"
@@ -246,22 +238,22 @@ export default function DesktopLiveConversation({
         ));
         onTurnCompleted?.();
       }
-      if (message.method === "thread/status/changed") {
+      if (method === "thread/status/changed") {
         const status = params.status as { type?: string } | undefined;
         if (status?.type === "idle") setActiveTurnId(null);
       }
-      if (message.method === "item/started" && isCodexCompaction(params.item)) {
+      if (method === "item/started" && isCodexCompaction(params.item)) {
         onContextCompaction?.();
       }
-      const streamEvent = codexStreamEvent(message.method, params);
+      const streamEvent = codexStreamEvent(method, params);
       if (streamEvent) onStreamEvent?.(streamEvent);
-      if (message.method === "serverRequest/resolved") {
+      if (method === "serverRequest/resolved") {
         setApproval(null);
         onApprovalChange?.(null);
       }
-      const requestKind = message.method === "item/commandExecution/requestApproval" ? "command"
-        : message.method === "item/fileChange/requestApproval" ? "file"
-          : message.method === "item/permissions/requestApproval" ? "permissions" : null;
+      const requestKind = method === "item/commandExecution/requestApproval" ? "command"
+        : method === "item/fileChange/requestApproval" ? "file"
+          : method === "item/permissions/requestApproval" ? "permissions" : null;
       if (!requestKind || message.id === undefined) return;
       const command = typeof params.command === "string" ? params.command : undefined;
       const permissions = params.permissions;
@@ -282,9 +274,42 @@ export default function DesktopLiveConversation({
           : requestKind === "permissions" ? ["accept", "decline"] : ["accept", "acceptForSession", "decline", "cancel"],
       });
       onApprovalChange?.(command || null);
-    }).then((stop) => {
-      if (cancelled) stop();
-      else unlisten = stop;
+    };
+
+    void listen<AgentProviderRuntimeEvent>("agent-provider-runtime-event", (event) => {
+      const runtimeEvent = event.payload;
+      if (runtimeEvent.providerInstanceId !== provider || runtimeEvent.sessionKey !== sessionKey) return;
+      if (catchingUp) queuedLiveEvents.push(runtimeEvent);
+      else applyRuntimeEvent(runtimeEvent);
+    }).then(async (stop) => {
+      if (cancelled) {
+        stop();
+        return;
+      }
+      unlisten = stop;
+      const afterSequence = runtimeSequence.current.sequence || undefined;
+      try {
+        const replay = await readAgentProviderRuntimeEvents(provider, sessionKey, afterSequence);
+        if (cancelled) return;
+        if (replay.resetRequired) {
+          runtimeSequence.current = { scope, sequence: replay.oldestAvailableSequence - 1 };
+          onTurnCompleted?.();
+        }
+        for (const runtimeEvent of unappliedRuntimeEvents(runtimeSequence.current.sequence, replay.events)) {
+          applyRuntimeEvent(runtimeEvent);
+        }
+      } catch {
+        // The live subscription remains useful if catch-up is unavailable
+        // during a backend restart. Its first event establishes the watermark.
+      } finally {
+        catchingUp = false;
+        if (!cancelled) {
+          for (const runtimeEvent of unappliedRuntimeEvents(runtimeSequence.current.sequence, queuedLiveEvents)) {
+            applyRuntimeEvent(runtimeEvent);
+          }
+        }
+        queuedLiveEvents.length = 0;
+      }
     });
     return () => {
       cancelled = true;
@@ -408,10 +433,7 @@ export default function DesktopLiveConversation({
 
   async function takeControlAndRetry() {
     if (!externalWriter || sending) return;
-    const confirmed = window.confirm(
-      `Take control of this Codex thread?\n\nCodex process ${externalWriter.pid} will exit and its terminal will return to the shell. Any in-flight work in that terminal will stop. The conversation history will be preserved.`,
-    );
-    if (!confirmed) return;
+    setTakeControlConfirmation(null);
     setSending(true);
     setError("");
     setState("connecting");
@@ -652,7 +674,7 @@ export default function DesktopLiveConversation({
           <button
             type="button"
             className="desktop-codex-take-control"
-            onClick={() => void takeControlAndRetry()}
+            onClick={() => setTakeControlConfirmation({ threadId, pid: externalWriter.pid })}
             disabled={sending}
             title={`Exit Codex PID ${externalWriter.pid}, resume this thread in Agent Vis, and send the current message`}
           >
@@ -664,6 +686,20 @@ export default function DesktopLiveConversation({
           </button>
         )}
         {error && <span className="desktop-codex-live-error" title={error}>{error}</span>}
+        {externalWriter
+          && takeControlConfirmation?.threadId === threadId
+          && takeControlConfirmation.pid === externalWriter.pid
+          && !sending && (
+          <div className="desktop-codex-take-control-confirm" role="alertdialog" aria-modal="true" aria-label="Confirm Codex takeover">
+            <span>
+              Exit Codex PID {externalWriter.pid}? Its terminal will return to the shell and any in-flight work there will stop. History is preserved.
+            </span>
+            <button type="button" className="danger" onClick={() => void takeControlAndRetry()}>
+              Exit and resume here
+            </button>
+            <button type="button" onClick={() => setTakeControlConfirmation(null)}>Cancel</button>
+          </div>
+        )}
       </div>
       {images.length > 0 && (
         <div className="desktop-codex-image-attachments" aria-label="Attached images">
@@ -691,6 +727,12 @@ export default function DesktopLiveConversation({
       )}
     </section>
   );
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
 }
 
 function streamEntry(kind: LiveStreamEntry["kind"], text: string, id: string = crypto.randomUUID()): LiveStreamEntry {
