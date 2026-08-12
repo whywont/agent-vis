@@ -42,7 +42,8 @@ use provider_runtime::{
 };
 use search::{search_sessions, SearchIndexState};
 use session_history::{
-    bind_session_history, capture_session_history, read_session_file_history, start_session_history,
+    bind_session_history, capture_active_session_histories_now, capture_session_history,
+    read_session_file_history, start_session_history, SessionHistoryState,
 };
 use sessions::{delete_session, get_session_modified, list_sessions, read_session_records};
 use settings::{
@@ -67,11 +68,17 @@ pub fn run() {
             app.manage(TerminalState::new());
             app.manage(CodexAppServerState::new());
             app.manage(ClaudeStreamState::new());
+            app.manage(SessionHistoryState::new());
             let provider_runtime = ProviderRuntimeState::new();
             provider_runtime.start_background_inventory(app.handle().clone());
             app.manage(provider_runtime);
             app.manage(MeshState::new(app.handle().clone())?);
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                capture_active_session_histories_now(window.app_handle());
+            }
         })
         .invoke_handler(tauri::generate_handler![
             list_sessions,

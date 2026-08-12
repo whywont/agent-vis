@@ -592,7 +592,12 @@ export default function DesktopSessionDetail({
                   </button>
                 )}
                 {filePanelView === "patches" ? (
-                  <DesktopFileTree events={events} sessionCwd={cwd} onJumpToPatch={jumpToPatch} />
+                  <DesktopFileTree
+                    events={events}
+                    sessionCwd={cwd}
+                    onJumpToPatch={jumpToPatch}
+                    onOpenFile={(path) => void openTimelineFileInEditor(path)}
+                  />
                 ) : (
                 <DesktopLiveStream
                     entries={liveStream.scope === liveStreamScope ? liveStream.entries : []}
