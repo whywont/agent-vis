@@ -14,18 +14,14 @@ import {
 import { getHarnessAdapter, type LiveProvider, type ModelOption } from "./harness-adapters";
 import type { LiveStreamEntry } from "./DesktopLiveStream";
 import { unappliedRuntimeEvents } from "./sequenced-runtime-events";
-
-type ApprovalDecision = string | Record<string, unknown>;
-
-type Approval = {
-  id: unknown;
-  kind: "command" | "file" | "permissions";
-  reason: string;
-  details: string;
-  decisions: ApprovalDecision[];
-  permissions?: unknown;
-  command?: string;
-};
+import {
+  codexApprovalResult,
+  codexUserInputResult,
+  decodeCodexServerRequest,
+  type CodexApprovalDecision,
+  type CodexApprovalRequest,
+  type CodexUserInputRequest,
+} from "./codex-server-requests";
 
 type ConnectionState = "idle" | "connecting" | "ready" | "error";
 
@@ -75,7 +71,11 @@ export default function DesktopLiveConversation({
   const [error, setError] = useState("");
   const [externalWriter, setExternalWriter] = useState<CodexWriterInfo | null>(null);
   const [takeControlConfirmation, setTakeControlConfirmation] = useState<{ threadId: string; pid: number } | null>(null);
-  const [approval, setApproval] = useState<Approval | null>(null);
+  const [approval, setApproval] = useState<CodexApprovalRequest | null>(null);
+  const [userInput, setUserInput] = useState<CodexUserInputRequest | null>(null);
+  const [userInputAnswers, setUserInputAnswers] = useState<Record<string, string>>({});
+  const [userInputOther, setUserInputOther] = useState<Record<string, boolean>>({});
+  const [respondingToRequest, setRespondingToRequest] = useState(false);
   const [sending, setSending] = useState(false);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const [images, setImages] = useState<ImageAttachment[]>([]);
@@ -87,6 +87,7 @@ export default function DesktopLiveConversation({
   const [interrupted, setInterrupted] = useState(false);
   const pendingSlashCommand = useRef<{ command: string; callId: string; output: string } | null>(null);
   const connection = useRef<Promise<boolean> | null>(null);
+  const reconnect = useRef<() => Promise<boolean>>(async () => false);
   const runtimeSequence = useRef({ scope: "", sequence: 0 });
   const slashInput = draft.startsWith("/") ? draft.slice(1).trimStart() : null;
   const slashQuery = slashInput?.split(/\s/, 1)[0].toLowerCase() ?? null;
@@ -95,8 +96,8 @@ export default function DesktopLiveConversation({
   const slashHasArguments = Boolean(slashInput && /\s/.test(slashInput));
   const showSlashPicker = matchingCommands.length > 0 && !slashHasArguments;
   useEffect(() => {
-    if (approval) onNeedsAttention?.();
-  }, [approval, onNeedsAttention]);
+    if (approval || userInput) onNeedsAttention?.();
+  }, [approval, onNeedsAttention, userInput]);
 
   useEffect(() => {
     if (!draft) composerRef.current?.style.removeProperty("height");
@@ -116,6 +117,40 @@ export default function DesktopLiveConversation({
     }).catch(() => {});
     return () => { cancelled = true; };
   }, [cwd, provider, sessionKey, threadId]);
+
+  useEffect(() => {
+    if (provider !== "codex" || !externalWriter) return;
+    let cancelled = false;
+    let timer: number | undefined;
+    const recheck = async () => {
+      try {
+        const writer = await getCodexThreadWriter(threadId);
+        if (cancelled) return;
+        if (!writer) {
+          setExternalWriter(null);
+          setTakeControlConfirmation(null);
+          setError("");
+          setState("idle");
+          connection.current = null;
+          void reconnect.current();
+          return;
+        }
+        if (writer.pid !== externalWriter.pid) {
+          setExternalWriter(writer);
+          setTakeControlConfirmation(null);
+          setError(`Codex is open in another terminal (PID ${writer.pid}).`);
+        }
+      } catch {
+        // Keep the confirmed owner visible if a transient inspection fails.
+      }
+      if (!cancelled) timer = window.setTimeout(recheck, 1000);
+    };
+    void recheck();
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [externalWriter, provider, threadId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -249,31 +284,28 @@ export default function DesktopLiveConversation({
       if (streamEvent) onStreamEvent?.(streamEvent);
       if (method === "serverRequest/resolved") {
         setApproval(null);
+        setUserInput(null);
+        setRespondingToRequest(false);
         onApprovalChange?.(null);
       }
-      const requestKind = method === "item/commandExecution/requestApproval" ? "command"
-        : method === "item/fileChange/requestApproval" ? "file"
-          : method === "item/permissions/requestApproval" ? "permissions" : null;
-      if (!requestKind || message.id === undefined) return;
-      const command = typeof params.command === "string" ? params.command : undefined;
-      const permissions = params.permissions;
-      const details = command
-        || (typeof params.grantRoot === "string" ? params.grantRoot : "")
-        || (permissions ? JSON.stringify(permissions) : "");
-      setApproval({
-        id: message.id,
-        kind: requestKind,
-        reason: typeof params.reason === "string" ? params.reason : "Codex needs permission to continue.",
-        details,
-        command,
-        permissions,
-        decisions: Array.isArray(params.availableDecisions)
-          ? params.availableDecisions.filter((value): value is ApprovalDecision =>
-            typeof value === "string" || (typeof value === "object" && value !== null),
-          )
-          : requestKind === "permissions" ? ["accept", "decline"] : ["accept", "acceptForSession", "decline", "cancel"],
-      });
-      onApprovalChange?.(command || null);
+      const serverRequest = decodeCodexServerRequest(message);
+      if (!serverRequest) return;
+      if (serverRequest.type === "unsupported") {
+        setState("error");
+        setError(`${serverRequest.description} Agent Vis rejected ${serverRequest.method} so the turn will not hang.`);
+        return;
+      }
+      if (serverRequest.type === "approval") {
+        setUserInput(null);
+        setApproval(serverRequest);
+        onApprovalChange?.(serverRequest.command || null);
+      } else {
+        setApproval(null);
+        setUserInput(serverRequest);
+        setUserInputAnswers({});
+        setUserInputOther({});
+        onApprovalChange?.(null);
+      }
     };
 
     void listen<AgentProviderRuntimeEvent>("agent-provider-runtime-event", (event) => {
@@ -354,6 +386,7 @@ export default function DesktopLiveConversation({
     connection.current = attempt;
     return attempt;
   }
+  reconnect.current = connect;
 
   async function submit(textOverride?: string, alreadyConnected = false) {
     const text = (textOverride ?? draft).trim();
@@ -482,17 +515,33 @@ export default function DesktopLiveConversation({
     setImages((current) => [...current, ...nextImages].slice(0, MAX_IMAGE_ATTACHMENTS));
   }
 
-  async function respondToApproval(decision: ApprovalDecision) {
+  async function respondToApproval(decision: CodexApprovalDecision) {
     if (!approval) return;
-    const result = approval.kind === "permissions"
-      ? decision === "accept" ? { permissions: approval.permissions, scope: "turn" } : { permissions: {} }
-      : { decision };
     try {
-      await respondToCodexApproval(sessionKey, approval.id, result);
+      await respondToCodexApproval(sessionKey, approval.id, codexApprovalResult(approval, decision));
       setApproval(null);
       onApprovalChange?.(null);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
+    }
+  }
+
+  async function respondToUserInput(skip = false) {
+    if (!userInput || respondingToRequest) return;
+    setRespondingToRequest(true);
+    try {
+      await respondToCodexApproval(
+        sessionKey,
+        userInput.id,
+        codexUserInputResult(skip ? {} : userInputAnswers),
+      );
+      setUserInput(null);
+      setUserInputAnswers({});
+      setUserInputOther({});
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setRespondingToRequest(false);
     }
   }
 
@@ -550,8 +599,8 @@ export default function DesktopLiveConversation({
           </span>
         ) : (
           <span
-            className={`desktop-codex-live-dot ${approval ? "running" : state}`}
-            aria-label={approval ? "Codex needs approval" : `${provider === "codex" ? "Codex" : "Claude"} ready`}
+            className={`desktop-codex-live-dot ${approval || userInput ? "running" : state}`}
+            aria-label={approval || userInput ? "Codex needs input" : `${provider === "codex" ? "Codex" : "Claude"} ready`}
             role="status"
           />
         )}
@@ -731,6 +780,82 @@ export default function DesktopLiveConversation({
           </div>
         </aside>
       )}
+      {userInput && (
+        <aside className="desktop-codex-approval desktop-codex-user-input" aria-live="assertive">
+          <span>Blocked - answer needed</span>
+          <form onSubmit={(event) => { event.preventDefault(); void respondToUserInput(); }}>
+            {userInput.questions.map((question) => (
+              <fieldset key={question.id}>
+                <legend>{question.header}</legend>
+                <p>{question.question}</p>
+                {question.options.map((option) => (
+                  <label key={option.label}>
+                    <input
+                      type="radio"
+                      name={`codex-question-${question.id}`}
+                      value={option.label}
+                      checked={!userInputOther[question.id] && userInputAnswers[question.id] === option.label}
+                      onChange={() => {
+                        setUserInputAnswers((current) => ({ ...current, [question.id]: option.label }));
+                        setUserInputOther((current) => ({ ...current, [question.id]: false }));
+                      }}
+                    />
+                    <span><strong>{option.label}</strong><small>{option.description}</small></span>
+                  </label>
+                ))}
+                {question.options.length === 0 && (
+                  <input
+                    className="desktop-codex-user-input-text"
+                    type={question.isSecret ? "password" : "text"}
+                    autoComplete="off"
+                    value={userInputAnswers[question.id] || ""}
+                    onChange={(event) => setUserInputAnswers((current) => ({ ...current, [question.id]: event.target.value }))}
+                    aria-label={question.header}
+                  />
+                )}
+                {question.options.length > 0 && question.isOther && (
+                  <label>
+                    <input
+                      type="radio"
+                      name={`codex-question-${question.id}`}
+                      checked={userInputOther[question.id] === true}
+                      onChange={() => {
+                        setUserInputAnswers((current) => ({ ...current, [question.id]: "" }));
+                        setUserInputOther((current) => ({ ...current, [question.id]: true }));
+                      }}
+                    />
+                    <span className="desktop-codex-user-input-other">
+                      <strong>Other</strong>
+                      <input
+                        className="desktop-codex-user-input-text"
+                        type={question.isSecret ? "password" : "text"}
+                        autoComplete="off"
+                        value={userInputOther[question.id] ? userInputAnswers[question.id] || "" : ""}
+                        onFocus={() => setUserInputOther((current) => ({ ...current, [question.id]: true }))}
+                        onChange={(event) => {
+                          setUserInputOther((current) => ({ ...current, [question.id]: true }));
+                          setUserInputAnswers((current) => ({ ...current, [question.id]: event.target.value }));
+                        }}
+                        aria-label={`${question.header} other answer`}
+                      />
+                    </span>
+                  </label>
+                )}
+              </fieldset>
+            ))}
+            {userInput.questions.length === 0 && <p>Codex sent an empty question set.</p>}
+            <div className="desktop-codex-user-input-actions">
+              <button
+                type="submit"
+                disabled={respondingToRequest || userInput.questions.length === 0 || userInput.questions.some((question) => !userInputAnswers[question.id]?.trim())}
+              >
+                Submit answers
+              </button>
+              <button type="button" disabled={respondingToRequest} onClick={() => void respondToUserInput(true)}>Skip</button>
+            </div>
+          </form>
+        </aside>
+      )}
     </section>
   );
 }
@@ -749,7 +874,7 @@ function codexStreamEvent(method: string | undefined, params: Record<string, unk
   if (!method) return null;
   const item = params.item;
   if (method === "item/started" || method === "item/completed") {
-    const formatted = formatCodexItem(item);
+    const formatted = formatCodexItem(item, method === "item/completed");
     return formatted ? streamEntry(formatted.kind, formatted.text, `codex:${formatted.id}`) : null;
   }
   const delta = typeof params.delta === "string" ? params.delta : "";
@@ -761,7 +886,7 @@ function codexStreamEvent(method: string | undefined, params: Record<string, unk
   return null;
 }
 
-function formatCodexItem(item: unknown): { id: string; kind: LiveStreamEntry["kind"]; text: string } | null {
+function formatCodexItem(item: unknown, completed = false): { id: string; kind: LiveStreamEntry["kind"]; text: string } | null {
   if (typeof item !== "object" || item === null) return null;
   const record = item as Record<string, unknown>;
   const id = typeof record.id === "string" ? record.id : crypto.randomUUID();
@@ -769,10 +894,32 @@ function formatCodexItem(item: unknown): { id: string; kind: LiveStreamEntry["ki
   const text = stringValue(record.text) || stringValue(record.content) || stringValue(record.command) || stringValue(record.query);
   if (type === "agentMessage" && text) return { id, kind: "assistant", text };
   if (type === "reasoning" && text) return { id, kind: "reasoning", text };
-  if (type === "commandExecution") return { id, kind: "tool", text: text ? `$ ${text}` : "Running command..." };
+  if (type === "commandExecution") {
+    if (completed) {
+      const output = stringValue(record.aggregatedOutput);
+      const status = stringValue(record.status);
+      const exitCode = typeof record.exitCode === "number" ? record.exitCode : null;
+      if (output) return { id: `${id}:result`, kind: "output", text: boundedCommandOutput(output) };
+      if (status === "failed" || (exitCode !== null && exitCode !== 0)) {
+        return {
+          id: `${id}:result`,
+          kind: "output",
+          text: `Command failed${exitCode === null ? "." : ` with exit code ${exitCode}.`}`,
+        };
+      }
+      return null;
+    }
+    return { id, kind: "tool", text: text ? `$ ${text}` : "Running command..." };
+  }
   if (type === "fileChange") return { id, kind: "tool", text: "Applying file changes..." };
   if (type === "webSearch") return { id, kind: "tool", text: text ? `Searching: ${text}` : "Searching the web..." };
   return null;
+}
+
+function boundedCommandOutput(output: string): string {
+  const maxCharacters = 12_000;
+  if (output.length <= maxCharacters) return output;
+  return `[Earlier command output omitted]\n${output.slice(-maxCharacters)}`;
 }
 
 function stringValue(value: unknown): string {
@@ -788,22 +935,31 @@ function fileAsDataUrl(file: File): Promise<string> {
   });
 }
 
-function isRenderableApprovalDecision(decision: ApprovalDecision): boolean {
-  if (typeof decision === "string") return ["accept", "acceptForSession", "decline", "cancel"].includes(decision);
-  return "acceptWithExecpolicyAmendment" in decision || "applyNetworkPolicyAmendment" in decision;
+function isRenderableApprovalDecision(decision: CodexApprovalDecision): boolean {
+  if (typeof decision === "string") return [
+    "accept", "acceptForSession", "decline", "cancel",
+    "approved", "approved_for_session", "denied", "abort",
+  ].includes(decision);
+  return "acceptWithExecpolicyAmendment" in decision
+    || "applyNetworkPolicyAmendment" in decision
+    || "approved_execpolicy_amendment" in decision
+    || "network_policy_amendment" in decision;
 }
 
-function approvalDecisionKey(decision: ApprovalDecision): string {
+function approvalDecisionKey(decision: CodexApprovalDecision): string {
   return typeof decision === "string" ? decision : JSON.stringify(decision);
 }
 
-function approvalDecisionLabel(decision: ApprovalDecision, index: number): string {
-  if (decision === "accept") return "1. Approve";
-  if (decision === "acceptForSession" || (typeof decision === "object" && (
-    "acceptWithExecpolicyAmendment" in decision || "applyNetworkPolicyAmendment" in decision
+function approvalDecisionLabel(decision: CodexApprovalDecision, index: number): string {
+  if (decision === "accept" || decision === "approved") return "1. Approve";
+  if (decision === "acceptForSession" || decision === "approved_for_session" || (typeof decision === "object" && (
+    "acceptWithExecpolicyAmendment" in decision
+    || "applyNetworkPolicyAmendment" in decision
+    || "approved_execpolicy_amendment" in decision
+    || "network_policy_amendment" in decision
   ))) return "2. Approve, don't ask again";
-  if (decision === "decline") return "Decline";
-  if (decision === "cancel") return "Cancel turn";
+  if (decision === "decline" || decision === "denied") return "Decline";
+  if (decision === "cancel" || decision === "abort") return "Cancel turn";
   return `${index + 1}. Approve`;
 }
 
