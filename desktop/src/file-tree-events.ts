@@ -51,3 +51,25 @@ export function remapDesktopFileEntries(
   }
   return output;
 }
+
+export function patchForDesktopFile(
+  patch: string,
+  filepath: string,
+  sessionCwd: string,
+): string {
+  const target = workspaceRelativePath(filepath, sessionCwd).replace(/^\/+/, "");
+  const lines: string[] = [];
+  let collecting = false;
+  for (const line of patch.split("\n")) {
+    if (line === "*** Begin Patch" || line === "*** End Patch") continue;
+    const header = line.match(/^\*\*\* (Update|Add|Delete) File: (.+)$/);
+    if (header) {
+      const headerPath = workspaceRelativePath(header[2].trim(), sessionCwd).replace(/^\/+/, "");
+      collecting = headerPath === target;
+    }
+    if (collecting) lines.push(line);
+  }
+  return lines.length
+    ? ["*** Begin Patch", ...lines, "*** End Patch"].join("\n")
+    : "";
+}

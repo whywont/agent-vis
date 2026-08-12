@@ -5,7 +5,12 @@ import { formatTime } from "@/utils/format";
 import DesktopDiffView from "./DesktopDiffView";
 import { precedingUserRequest } from "./explain-context";
 import { workspaceRelativePath } from "./workspace-path";
-import { desktopFileEntries, remapDesktopFileEntries, type DesktopFileEntry } from "./file-tree-events";
+import {
+  desktopFileEntries,
+  patchForDesktopFile,
+  remapDesktopFileEntries,
+  type DesktopFileEntry,
+} from "./file-tree-events";
 import { resolveWorkspaceFilepaths } from "./desktop-api";
 
 type FileEntry = DesktopFileEntry;
@@ -155,6 +160,7 @@ export default function DesktopFileTree({
         <div className="desktop-file-history-path">{historyFile.displayPath}</div>
         {historyFile.changes.map((change) => {
           const info = change.files.find((file) => pathsMatch(file.path, historyFile.path, sessionCwd));
+          const filePatch = patchForDesktopFile(change.patch, info?.path || historyFile.path, sessionCwd);
           return (
             <div className="desktop-file-history-entry" key={timelineEventIdentity(change)}>
               <button
@@ -167,7 +173,7 @@ export default function DesktopFileTree({
                 <span>{formatTime(change.ts)}</span>
               </button>
               <DesktopDiffView
-                patch={change.patch}
+                patch={filePatch}
                 contextText={precedingUserRequest(events, change.ts)}
                 workspaceRoot={sessionCwd}
               />

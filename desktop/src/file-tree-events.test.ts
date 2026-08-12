@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AppEvent } from "@/lib/types";
-import { desktopFileEntries, remapDesktopFileEntries } from "./file-tree-events";
+import { desktopFileEntries, patchForDesktopFile, remapDesktopFileEntries } from "./file-tree-events";
 
 describe("desktopFileEntries", () => {
   it("keeps multiple patches for one file and removes exact duplicates", () => {
@@ -45,5 +45,25 @@ describe("desktopFileEntries", () => {
 
     expect([...visible.keys()]).toEqual(["desktop/src/DesktopLiveConversation.tsx"]);
     expect(visible.get("desktop/src/DesktopLiveConversation.tsx")?.changes).toHaveLength(2);
+  });
+
+  it("extracts only the selected file from a multi-file history patch", () => {
+    const patch = [
+      "*** Begin Patch",
+      "*** Add File: /repo/Cargo.toml",
+      "+[workspace]",
+      "*** Add File: /repo/server/Cargo.toml",
+      "+[package]",
+      "*** Add File: /repo/server/src/main.rs",
+      "+fn main() {}",
+      "*** End Patch",
+    ].join("\n");
+
+    expect(patchForDesktopFile(patch, "server/src/main.rs", "/repo")).toBe([
+      "*** Begin Patch",
+      "*** Add File: /repo/server/src/main.rs",
+      "+fn main() {}",
+      "*** End Patch",
+    ].join("\n"));
   });
 });
