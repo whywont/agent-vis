@@ -13,6 +13,28 @@ export type CodexApprovalRequest = {
   legacy: boolean;
 };
 
+export type CodexUserInputOption = {
+  label: string;
+  description: string;
+};
+
+export type CodexUserInputQuestion = {
+  id: string;
+  header: string;
+  question: string;
+  options: CodexUserInputOption[];
+  isOther: boolean;
+  isSecret: boolean;
+};
+
+export type CodexUserInputRequest = {
+  type: "user_input";
+  id: unknown;
+  method: "item/tool/requestUserInput";
+  questions: CodexUserInputQuestion[];
+  autoResolutionMs?: number;
+};
+
 export type CodexUnsupportedRequest = {
   type: "unsupported";
   id: unknown;
@@ -20,7 +42,7 @@ export type CodexUnsupportedRequest = {
   description: string;
 };
 
-export type CodexServerRequest = CodexApprovalRequest | CodexUnsupportedRequest;
+export type CodexServerRequest = CodexApprovalRequest | CodexUserInputRequest | CodexUnsupportedRequest;
 
 const MODERN_DECISIONS: CodexApprovalDecision[] = [
   "accept",
@@ -41,6 +63,21 @@ export function decodeCodexServerRequest(message: Record<string, unknown>): Code
   if (!method || message.id === undefined) return null;
   const params = asRecord(message.params) || {};
   const reason = stringValue(params.reason) || "Codex needs permission to continue.";
+
+  if (method === "item/tool/requestUserInput") {
+    const questions = Array.isArray(params.questions)
+      ? params.questions.map(decodeUserInputQuestion).filter((question) => question !== null)
+      : [];
+    return {
+      type: "user_input",
+      id: message.id,
+      method,
+      questions,
+      ...(typeof params.autoResolutionMs === "number" && params.autoResolutionMs >= 0
+        ? { autoResolutionMs: params.autoResolutionMs }
+        : {}),
+    };
+  }
 
   if (method === "item/commandExecution/requestApproval") {
     const command = stringValue(params.command);
@@ -88,6 +125,47 @@ export function codexApprovalResult(
       : { permissions: {} };
   }
   return { decision };
+}
+
+export function codexUserInputResult(
+  answers: Record<string, string>,
+): { answers: Record<string, { answers: string[] }> } {
+  const entries: Array<[string, { answers: string[] }]> = [];
+  for (const [questionId, value] of Object.entries(answers)) {
+    const answer = value.trim();
+    if (answer) entries.push([questionId, { answers: [answer] }]);
+  }
+  return {
+    answers: Object.fromEntries(entries),
+  };
+}
+
+function decodeUserInputQuestion(value: unknown): CodexUserInputQuestion | null {
+  const question = asRecord(value);
+  if (!question) return null;
+  const id = stringValue(question.id);
+  const header = stringValue(question.header);
+  const prompt = stringValue(question.question);
+  if (!id || !header || !prompt) return null;
+  const options = Array.isArray(question.options)
+    ? question.options.map(decodeUserInputOption).filter((option) => option !== null)
+    : [];
+  return {
+    id,
+    header,
+    question: prompt,
+    options,
+    isOther: question.isOther === true,
+    isSecret: question.isSecret === true,
+  };
+}
+
+function decodeUserInputOption(value: unknown): CodexUserInputOption | null {
+  const option = asRecord(value);
+  if (!option) return null;
+  const label = stringValue(option.label);
+  const description = stringValue(option.description);
+  return label && description ? { label, description } : null;
 }
 
 function approval(

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { codexApprovalResult, decodeCodexServerRequest } from "./codex-server-requests";
+import {
+  codexApprovalResult,
+  codexUserInputResult,
+  decodeCodexServerRequest,
+} from "./codex-server-requests";
 
 describe("Codex server request dispatch", () => {
   it("decodes modern command approvals", () => {
@@ -53,17 +57,40 @@ describe("Codex server request dispatch", () => {
     expect(codexApprovalResult(request, "decline")).toEqual({ permissions: {} });
   });
 
-  it("classifies unimplemented requests instead of silently ignoring them", () => {
+  it("decodes structured user input and builds the app-server response", () => {
     expect(decodeCodexServerRequest({
       id: 12,
       method: "item/tool/requestUserInput",
-      params: { questions: [] },
-    })).toEqual({
-      type: "unsupported",
+      params: {
+        autoResolutionMs: 30000,
+        questions: [{
+          id: "scope",
+          header: "Scope",
+          question: "Which files?",
+          options: [{ label: "Changed", description: "Only changed files" }],
+          isOther: true,
+          isSecret: false,
+        }],
+      },
+    })).toMatchObject({
+      type: "user_input",
       id: 12,
       method: "item/tool/requestUserInput",
-      description: "Codex requested structured user input.",
+      autoResolutionMs: 30000,
+      questions: [{
+        id: "scope",
+        options: [{ label: "Changed", description: "Only changed files" }],
+        isOther: true,
+      }],
     });
+    expect(codexUserInputResult({ scope: " Changed ", empty: "  " })).toEqual({
+      answers: { scope: { answers: ["Changed"] } },
+    });
+  });
+
+  it("classifies other unimplemented requests instead of silently ignoring them", () => {
+    expect(decodeCodexServerRequest({ id: 13, method: "item/tool/call", params: {} }))
+      .toMatchObject({ type: "unsupported", method: "item/tool/call" });
   });
 
   it("ignores notifications and responses", () => {

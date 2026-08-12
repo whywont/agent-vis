@@ -196,6 +196,7 @@ fn supports_interactive_server_request(method: &str) -> bool {
             | "item/fileRead/requestApproval"
             | "item/fileChange/requestApproval"
             | "item/permissions/requestApproval"
+            | "item/tool/requestUserInput"
             | "applyPatchApproval"
             | "execCommandApproval"
     )
@@ -1344,20 +1345,19 @@ mod tests {
     }
 
     #[test]
-    fn server_request_dispatch_covers_modern_and_legacy_approvals() {
+    fn server_request_dispatch_covers_interactive_requests() {
         for method in [
             "item/commandExecution/requestApproval",
             "item/fileRead/requestApproval",
             "item/fileChange/requestApproval",
             "item/permissions/requestApproval",
+            "item/tool/requestUserInput",
             "applyPatchApproval",
             "execCommandApproval",
         ] {
             assert!(supports_interactive_server_request(method));
         }
-        assert!(!supports_interactive_server_request(
-            "item/tool/requestUserInput"
-        ));
+        assert!(!supports_interactive_server_request("item/tool/call"));
     }
 
     #[test]
@@ -1366,7 +1366,7 @@ mod tests {
             unsupported_server_request_response(&json!({
                 "jsonrpc": "2.0",
                 "id": "server-7",
-                "method": "item/tool/requestUserInput",
+                "method": "item/tool/call",
                 "params": {}
             })),
             Some(json!({
@@ -1374,7 +1374,7 @@ mod tests {
                 "id": "server-7",
                 "error": {
                     "code": -32601,
-                    "message": "Agent Vis does not support Codex server request item/tool/requestUserInput yet."
+                    "message": "Agent Vis does not support Codex server request item/tool/call yet."
                 }
             }))
         );

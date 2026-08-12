@@ -16,9 +16,11 @@ import type { LiveStreamEntry } from "./DesktopLiveStream";
 import { unappliedRuntimeEvents } from "./sequenced-runtime-events";
 import {
   codexApprovalResult,
+  codexUserInputResult,
   decodeCodexServerRequest,
   type CodexApprovalDecision,
   type CodexApprovalRequest,
+  type CodexUserInputRequest,
 } from "./codex-server-requests";
 
 type ConnectionState = "idle" | "connecting" | "ready" | "error";
@@ -70,6 +72,10 @@ export default function DesktopLiveConversation({
   const [externalWriter, setExternalWriter] = useState<CodexWriterInfo | null>(null);
   const [takeControlConfirmation, setTakeControlConfirmation] = useState<{ threadId: string; pid: number } | null>(null);
   const [approval, setApproval] = useState<CodexApprovalRequest | null>(null);
+  const [userInput, setUserInput] = useState<CodexUserInputRequest | null>(null);
+  const [userInputAnswers, setUserInputAnswers] = useState<Record<string, string>>({});
+  const [userInputOther, setUserInputOther] = useState<Record<string, boolean>>({});
+  const [respondingToRequest, setRespondingToRequest] = useState(false);
   const [sending, setSending] = useState(false);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const [images, setImages] = useState<ImageAttachment[]>([]);
@@ -90,8 +96,8 @@ export default function DesktopLiveConversation({
   const slashHasArguments = Boolean(slashInput && /\s/.test(slashInput));
   const showSlashPicker = matchingCommands.length > 0 && !slashHasArguments;
   useEffect(() => {
-    if (approval) onNeedsAttention?.();
-  }, [approval, onNeedsAttention]);
+    if (approval || userInput) onNeedsAttention?.();
+  }, [approval, onNeedsAttention, userInput]);
 
   useEffect(() => {
     if (!draft) composerRef.current?.style.removeProperty("height");
@@ -278,6 +284,8 @@ export default function DesktopLiveConversation({
       if (streamEvent) onStreamEvent?.(streamEvent);
       if (method === "serverRequest/resolved") {
         setApproval(null);
+        setUserInput(null);
+        setRespondingToRequest(false);
         onApprovalChange?.(null);
       }
       const serverRequest = decodeCodexServerRequest(message);
@@ -287,8 +295,17 @@ export default function DesktopLiveConversation({
         setError(`${serverRequest.description} Agent Vis rejected ${serverRequest.method} so the turn will not hang.`);
         return;
       }
-      setApproval(serverRequest);
-      onApprovalChange?.(serverRequest.command || null);
+      if (serverRequest.type === "approval") {
+        setUserInput(null);
+        setApproval(serverRequest);
+        onApprovalChange?.(serverRequest.command || null);
+      } else {
+        setApproval(null);
+        setUserInput(serverRequest);
+        setUserInputAnswers({});
+        setUserInputOther({});
+        onApprovalChange?.(null);
+      }
     };
 
     void listen<AgentProviderRuntimeEvent>("agent-provider-runtime-event", (event) => {
@@ -509,6 +526,25 @@ export default function DesktopLiveConversation({
     }
   }
 
+  async function respondToUserInput(skip = false) {
+    if (!userInput || respondingToRequest) return;
+    setRespondingToRequest(true);
+    try {
+      await respondToCodexApproval(
+        sessionKey,
+        userInput.id,
+        codexUserInputResult(skip ? {} : userInputAnswers),
+      );
+      setUserInput(null);
+      setUserInputAnswers({});
+      setUserInputOther({});
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setRespondingToRequest(false);
+    }
+  }
+
   function selectSlashCommand(command: string) {
     setDraft(`/${command} `);
     setSlashSelection(0);
@@ -563,8 +599,8 @@ export default function DesktopLiveConversation({
           </span>
         ) : (
           <span
-            className={`desktop-codex-live-dot ${approval ? "running" : state}`}
-            aria-label={approval ? "Codex needs approval" : `${provider === "codex" ? "Codex" : "Claude"} ready`}
+            className={`desktop-codex-live-dot ${approval || userInput ? "running" : state}`}
+            aria-label={approval || userInput ? "Codex needs input" : `${provider === "codex" ? "Codex" : "Claude"} ready`}
             role="status"
           />
         )}
@@ -742,6 +778,82 @@ export default function DesktopLiveConversation({
               </button>
             ))}
           </div>
+        </aside>
+      )}
+      {userInput && (
+        <aside className="desktop-codex-approval desktop-codex-user-input" aria-live="assertive">
+          <span>Blocked - answer needed</span>
+          <form onSubmit={(event) => { event.preventDefault(); void respondToUserInput(); }}>
+            {userInput.questions.map((question) => (
+              <fieldset key={question.id}>
+                <legend>{question.header}</legend>
+                <p>{question.question}</p>
+                {question.options.map((option) => (
+                  <label key={option.label}>
+                    <input
+                      type="radio"
+                      name={`codex-question-${question.id}`}
+                      value={option.label}
+                      checked={!userInputOther[question.id] && userInputAnswers[question.id] === option.label}
+                      onChange={() => {
+                        setUserInputAnswers((current) => ({ ...current, [question.id]: option.label }));
+                        setUserInputOther((current) => ({ ...current, [question.id]: false }));
+                      }}
+                    />
+                    <span><strong>{option.label}</strong><small>{option.description}</small></span>
+                  </label>
+                ))}
+                {question.options.length === 0 && (
+                  <input
+                    className="desktop-codex-user-input-text"
+                    type={question.isSecret ? "password" : "text"}
+                    autoComplete="off"
+                    value={userInputAnswers[question.id] || ""}
+                    onChange={(event) => setUserInputAnswers((current) => ({ ...current, [question.id]: event.target.value }))}
+                    aria-label={question.header}
+                  />
+                )}
+                {question.options.length > 0 && question.isOther && (
+                  <label>
+                    <input
+                      type="radio"
+                      name={`codex-question-${question.id}`}
+                      checked={userInputOther[question.id] === true}
+                      onChange={() => {
+                        setUserInputAnswers((current) => ({ ...current, [question.id]: "" }));
+                        setUserInputOther((current) => ({ ...current, [question.id]: true }));
+                      }}
+                    />
+                    <span className="desktop-codex-user-input-other">
+                      <strong>Other</strong>
+                      <input
+                        className="desktop-codex-user-input-text"
+                        type={question.isSecret ? "password" : "text"}
+                        autoComplete="off"
+                        value={userInputOther[question.id] ? userInputAnswers[question.id] || "" : ""}
+                        onFocus={() => setUserInputOther((current) => ({ ...current, [question.id]: true }))}
+                        onChange={(event) => {
+                          setUserInputOther((current) => ({ ...current, [question.id]: true }));
+                          setUserInputAnswers((current) => ({ ...current, [question.id]: event.target.value }));
+                        }}
+                        aria-label={`${question.header} other answer`}
+                      />
+                    </span>
+                  </label>
+                )}
+              </fieldset>
+            ))}
+            {userInput.questions.length === 0 && <p>Codex sent an empty question set.</p>}
+            <div className="desktop-codex-user-input-actions">
+              <button
+                type="submit"
+                disabled={respondingToRequest || userInput.questions.length === 0 || userInput.questions.some((question) => !userInputAnswers[question.id]?.trim())}
+              >
+                Submit answers
+              </button>
+              <button type="button" disabled={respondingToRequest} onClick={() => void respondToUserInput(true)}>Skip</button>
+            </div>
+          </form>
         </aside>
       )}
     </section>
