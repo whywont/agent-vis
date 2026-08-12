@@ -8,6 +8,7 @@ import {
   removeDiffExplanation,
   saveDiffExplanation,
 } from "./diff-explanation-cache";
+import { compactWorkspacePath } from "./workspace-path";
 
 interface DiffBlock {
   action: "update" | "add" | "delete";
@@ -247,12 +248,13 @@ function DesktopDiffBlock({
   }
 
   const addedLines = useMemo(() => computeAddedLineNumbers(block.lines), [block.lines]);
+  const displayPath = compactWorkspacePath(block.filepath, workspaceRoot);
 
   return (
     <div className="diff-block">
       <div className="diff-file-header">
         <span className={`diff-file-action action-${block.action}`}>{block.action}</span>
-        <button type="button" className="desktop-diff-path" disabled={!onOpenFile || block.action === "delete"} onClick={() => onOpenFile?.(block.filepath)} title={block.action === "delete" ? `${block.filepath} was deleted` : `Open ${block.filepath} in Editor`}>{block.filepath}</button>
+        <button type="button" className="desktop-diff-path" disabled={!onOpenFile || block.action === "delete"} onClick={() => onOpenFile?.(block.filepath)} title={block.action === "delete" ? `${block.filepath} was deleted` : `Open ${block.filepath} in Editor`}>{displayPath}</button>
         <div className="desktop-diff-actions">
           {editError && <span className="diff-edit-error" title={editError}>{editError}</span>}
           {editing ? (

@@ -91,10 +91,12 @@ export default function DesktopFileTree({
   events,
   sessionCwd,
   onJumpToPatch,
+  onOpenFile,
 }: {
   events: AppEvent[];
   sessionCwd: string;
   onJumpToPatch: (event: FileChangeEvent) => void;
+  onOpenFile?: (filepath: string) => void;
 }) {
   const [historyFile, setHistoryFile] = useState<FileEntry | null>(null);
   const [resolvedPaths, setResolvedPaths] = useState<Map<string, string | null> | null>(null);
@@ -176,6 +178,7 @@ export default function DesktopFileTree({
                 patch={filePatch}
                 contextText={precedingUserRequest(events, change.ts)}
                 workspaceRoot={sessionCwd}
+                onOpenFile={onOpenFile}
               />
             </div>
           );

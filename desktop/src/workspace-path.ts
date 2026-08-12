@@ -11,3 +11,9 @@ export function workspaceRelativePath(filepath: string, workspaceRoot: string): 
   if (path.startsWith(`${root}/`)) return path.slice(root.length + 1);
   return path;
 }
+
+export function compactWorkspacePath(filepath: string, workspaceRoot: string): string {
+  const relative = workspaceRelativePath(filepath, workspaceRoot);
+  const parts = relative.split("/").filter(Boolean);
+  return parts.length > 3 ? parts.slice(-3).join("/") : relative;
+}
