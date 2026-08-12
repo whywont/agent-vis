@@ -7,6 +7,7 @@ import { html } from "@codemirror/lang-html";
 import { javascript } from "@codemirror/lang-javascript";
 import { json } from "@codemirror/lang-json";
 import { markdown } from "@codemirror/lang-markdown";
+import { rust } from "@codemirror/lang-rust";
 import { bracketMatching, HighlightStyle, indentOnInput, syntaxHighlighting } from "@codemirror/language";
 import {
   crosshairCursor,
@@ -139,6 +140,7 @@ function expandedWithParents(current: Set<string>, filepath: string): Set<string
 }
 
 function languageForPath(path: string) {
+  if (/\.rs$/.test(path)) return rust();
   if (/\.(ts|tsx|js|jsx|mjs|cjs)$/.test(path)) return javascript({ jsx: /\.(tsx|jsx)$/.test(path), typescript: /\.(ts|tsx)$/.test(path) });
   if (/\.(json|jsonc)$/.test(path)) return json();
   if (/\.css$/.test(path)) return css();
