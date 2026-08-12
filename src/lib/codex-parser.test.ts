@@ -197,6 +197,33 @@ describe("parseEvent - event_msg unknown subtype", () => {
   });
 });
 
+describe("parseEvent - response_item user message", () => {
+  it("returns text-only user messages from current Codex rollouts", () => {
+    expect(parseEvent({
+      timestamp: "2026-08-12T03:40:35.867Z",
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "push please" }],
+      },
+    })).toEqual({
+      kind: "user_message",
+      ts: "2026-08-12T03:40:35.867Z",
+      text: "push please",
+      images: [],
+    });
+  });
+
+  it("ignores empty user message records", () => {
+    expect(parseEvent({
+      timestamp: "2026-08-12T03:40:35.867Z",
+      type: "response_item",
+      payload: { type: "message", role: "user", content: [] },
+    })).toBeNull();
+  });
+});
+
 describe("parseEvent - context compaction", () => {
   it("surfaces Codex's durable handoff summary", () => {
     const result = parseEvent({

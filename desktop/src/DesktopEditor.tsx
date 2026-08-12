@@ -8,7 +8,19 @@ import { javascript } from "@codemirror/lang-javascript";
 import { json } from "@codemirror/lang-json";
 import { markdown } from "@codemirror/lang-markdown";
 import { bracketMatching, HighlightStyle, indentOnInput, syntaxHighlighting } from "@codemirror/language";
-import { Decoration, drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers, WidgetType } from "@codemirror/view";
+import {
+  crosshairCursor,
+  Decoration,
+  drawSelection,
+  dropCursor,
+  EditorView,
+  highlightActiveLine,
+  highlightActiveLineGutter,
+  keymap,
+  lineNumbers,
+  rectangularSelection,
+  WidgetType,
+} from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 import { formatTime } from "@/utils/format";
 import { explainDiff, listWorkspaceFiles, readSessionFileHistory, readWorkspaceFile, saveWorkspaceFile, stopTerminal, type SessionFileVersion, type WorkspaceTreeEntry } from "./desktop-api";
@@ -350,9 +362,11 @@ export default function DesktopEditor({ workspaceRoot, navigation, threadId }: {
       state: EditorState.create({
         doc: displayedContent,
         extensions: [
-          history(), drawSelection(), indentOnInput(), bracketMatching(), highlightActiveLine(), highlightActiveLineGutter(),
+          history(), drawSelection(), dropCursor(), rectangularSelection(), crosshairCursor(),
+          indentOnInput(), bracketMatching(), highlightActiveLine(), highlightActiveLineGutter(),
           syntaxHighlighting(editorHighlightStyle, { fallback: true }), lineNumbers(), languageForPath(activePath),
-          EditorState.readOnly.of(readOnly), EditorView.editable.of(!readOnly), overlayExtension,
+          EditorState.allowMultipleSelections.of(true), EditorState.readOnly.of(readOnly),
+          EditorView.editable.of(!readOnly), overlayExtension,
           keymap.of(readOnly ? [] : [...defaultKeymap, ...historyKeymap, indentWithTab, { key: "Mod-s", run: () => { void save(); return true; } }]),
           EditorView.updateListener.of((update) => {
             if (!readOnly && update.docChanged) setContent(update.state.doc.toString());

@@ -404,6 +404,12 @@ export default function DesktopLiveConversation({
         await adapter.sendTurn({ sessionKey, threadId, cwd, activeTurnId, tokenUsage }, text, imageUrls);
         // Do not show a local input as delivered until the harness has accepted
         // it; otherwise a rejected request becomes a misleading ghost entry.
+        onTimelineEvent?.({
+          kind: "user_message",
+          ts: new Date().toISOString(),
+          text,
+          ...(imageUrls.length ? { images: imageUrls } : {}),
+        });
         onStreamEvent?.(streamEntry("input", streamInput));
         if (provider === "codex" && !activeTurnId) {
           // The app-server's turn/started notification normally replaces this

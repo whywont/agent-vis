@@ -222,11 +222,12 @@ export function parseEvent(obj: Record<string, unknown>): AppEvent | null {
           if (c.type === "input_image" && c.image_url) images.push(c.image_url);
         }
       }
-      if (images.length > 0) {
+      const text = textParts.join("\n");
+      if (text || images.length > 0) {
         return {
           kind: "user_message",
           ts,
-          text: textParts.join("\n"),
+          text,
           images,
         };
       }
