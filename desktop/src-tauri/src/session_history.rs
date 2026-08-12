@@ -6,10 +6,38 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::SystemTime;
 use tauri::{AppHandle, Emitter, Manager};
 
 const HISTORY_DATABASE: &str = "session-file-history.sqlite3";
+
+#[derive(Default)]
+pub(crate) struct SessionHistoryState {
+    active_sessions: Mutex<HashSet<String>>,
+}
+
+impl SessionHistoryState {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    fn mark_active(&self, session_key: &str) {
+        self.active_sessions
+            .lock()
+            .unwrap_or_else(|value| value.into_inner())
+            .insert(session_key.to_owned());
+    }
+
+    fn active_sessions(&self) -> Vec<String> {
+        self.active_sessions
+            .lock()
+            .unwrap_or_else(|value| value.into_inner())
+            .iter()
+            .cloned()
+            .collect()
+    }
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -86,6 +114,42 @@ fn connection(app: &AppHandle) -> Result<Connection, String> {
          CREATE INDEX IF NOT EXISTS history_versions_path ON history_versions(session_key, filepath, version);",
     ).map_err(|error| error.to_string())?;
     Ok(database)
+}
+
+fn provider_thread_id(reference: &str) -> Option<&str> {
+    ["codex:", "claude-code:", "claude:"]
+        .iter()
+        .find_map(|prefix| reference.strip_prefix(prefix))
+        .filter(|thread_id| !thread_id.is_empty())
+}
+
+fn resolve_history_session(
+    database: &Connection,
+    reference: &str,
+) -> Result<Option<(String, String)>, String> {
+    for (column, value) in [
+        ("session_key", Some(reference)),
+        ("thread_id", Some(reference)),
+        ("thread_id", provider_thread_id(reference)),
+    ] {
+        let Some(value) = value else { continue };
+        let query =
+            format!("SELECT session_key, workspace_root FROM history_sessions WHERE {column} = ?1");
+        let resolved = database
+            .query_row(&query, [value], |row| Ok((row.get(0)?, row.get(1)?)))
+            .optional()
+            .map_err(|error| error.to_string())?;
+        if resolved.is_some() {
+            return Ok(resolved);
+        }
+    }
+    Ok(None)
+}
+
+fn mark_history_session_active(app: &AppHandle, session_key: &str) {
+    if let Some(state) = app.try_state::<SessionHistoryState>() {
+        state.mark_active(session_key);
+    }
 }
 
 fn snapshot_root(workspace_root: &str) -> Result<PathBuf, String> {
@@ -385,17 +449,15 @@ fn latest_versions(
 
 fn persist_snapshot(app: &AppHandle, session_key: &str, timestamp: &str) -> Result<usize, String> {
     let mut database = connection(app)?;
-    let workspace_root: String = database
-        .query_row(
-            "SELECT workspace_root FROM history_sessions WHERE session_key = ?1",
-            [session_key],
-            |row| row.get(0),
-        )
-        .map_err(|_| "Session file history is unavailable.".to_owned())?;
+    let Some((session_key, workspace_root)) = resolve_history_session(&database, session_key)?
+    else {
+        return Err("Session file history is unavailable.".to_owned());
+    };
+    mark_history_session_active(app, &session_key);
     let root = snapshot_root(&workspace_root)?;
     let snapshots = snapshot_workspace(&root)?;
     let transaction = database.transaction().map_err(|error| error.to_string())?;
-    let latest = latest_versions(&transaction, session_key)?;
+    let latest = latest_versions(&transaction, &session_key)?;
     let current_paths: HashSet<String> = snapshots
         .iter()
         .map(|snapshot| snapshot.path.clone())
@@ -447,6 +509,16 @@ pub(crate) fn capture_session_history_now(app: &AppHandle, session_key: &str) {
     let _ = persist_snapshot(app, session_key, &system_time_iso(SystemTime::now()));
 }
 
+pub(crate) fn capture_active_session_histories_now(app: &AppHandle) {
+    let Some(state) = app.try_state::<SessionHistoryState>() else {
+        return;
+    };
+    let timestamp = system_time_iso(SystemTime::now());
+    for session_key in state.active_sessions() {
+        let _ = persist_snapshot(app, &session_key, &timestamp);
+    }
+}
+
 #[tauri::command]
 pub(crate) fn start_session_history(
     app: AppHandle,
@@ -493,17 +565,10 @@ pub(crate) fn read_session_file_history(
     request: ReadSessionHistoryRequest,
 ) -> Result<Vec<SessionFileVersion>, String> {
     let database = connection(&app)?;
-    let session_key: Option<String> = database
-        .query_row(
-            "SELECT session_key FROM history_sessions WHERE thread_id = ?1 OR session_key = ?1",
-            [request.thread_id],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|error| error.to_string())?;
-    let Some(session_key) = session_key else {
+    let Some((session_key, _)) = resolve_history_session(&database, &request.thread_id)? else {
         return Ok(Vec::new());
     };
+    mark_history_session_active(&app, &session_key);
     let filepath = request
         .filepath
         .replace('\\', "/")
@@ -536,7 +601,8 @@ pub(crate) fn read_session_file_history(
 
 #[cfg(test)]
 mod tests {
-    use super::{hash_content, should_snapshot_file};
+    use super::{hash_content, provider_thread_id, resolve_history_session, should_snapshot_file};
+    use rusqlite::Connection;
     use std::path::Path;
 
     #[test]
@@ -571,5 +637,35 @@ mod tests {
         ] {
             assert!(!should_snapshot_file(Path::new(path)), "included {path}");
         }
+    }
+
+    #[test]
+    fn resolves_resumed_provider_session_keys_through_the_thread_id() {
+        let database = Connection::open_in_memory().unwrap();
+        database
+            .execute_batch(
+                "CREATE TABLE history_sessions(
+                    session_key TEXT PRIMARY KEY,
+                    thread_id TEXT UNIQUE,
+                    workspace_root TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                INSERT INTO history_sessions VALUES(
+                    'codex:launch-id', 'thread-id', '/repo', '2026-08-12T00:00:00Z'
+                );",
+            )
+            .unwrap();
+
+        for reference in ["codex:launch-id", "thread-id", "codex:thread-id"] {
+            assert_eq!(
+                resolve_history_session(&database, reference).unwrap(),
+                Some(("codex:launch-id".to_owned(), "/repo".to_owned()))
+            );
+        }
+        assert_eq!(
+            resolve_history_session(&database, "codex:missing").unwrap(),
+            None
+        );
+        assert_eq!(provider_thread_id("not-a-provider-key"), None);
     }
 }
