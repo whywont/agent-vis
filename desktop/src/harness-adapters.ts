@@ -7,11 +7,25 @@ import {
   listCodexModels,
   listCodexSkills,
   readCodexThreadStatus,
+  respondToClaudeServerRequest,
+  respondToCodexServerRequest,
   sendClaudeTurn,
   sendCodexTurn,
   setCodexThreadModel,
   startCodexReview,
 } from "./desktop-api";
+import {
+  claudeElicitationCompletionResponse,
+  claudeServerRequestResult,
+  decodeClaudeServerRequest,
+  isClaudeServerRequestResolved,
+} from "./claude-server-requests";
+import { codexServerRequestResult, decodeCodexServerRequest } from "./codex-server-requests";
+import type {
+  DecodedInteractiveAgentRequest,
+  InteractiveAgentRequest,
+  InteractiveAgentResponse,
+} from "./interactive-agent-requests";
 
 export type LiveProvider = "codex" | "claude-code";
 export type ModelOption = readonly [id: string, description: string];
@@ -45,6 +59,19 @@ export interface HarnessAdapter {
   selectModel(context: HarnessContext, model: string): Promise<ModelSelection>;
   executeCommand?(command: string, context: HarnessContext): Promise<string | null>;
   commandDescription(command: string): string;
+  interactiveRequests?: {
+    decode(message: Record<string, unknown>): DecodedInteractiveAgentRequest | null;
+    isResolved?(message: Record<string, unknown>, request: InteractiveAgentRequest | null): boolean;
+    completionResponse?(
+      message: Record<string, unknown>,
+      request: InteractiveAgentRequest | null,
+    ): InteractiveAgentResponse | null;
+    respond(
+      context: HarnessContext,
+      request: InteractiveAgentRequest,
+      response: InteractiveAgentResponse,
+    ): Promise<void>;
+  };
 }
 
 const CODEX_COMMANDS: readonly HarnessCommand[] = [
@@ -113,6 +140,17 @@ const codexAdapter: HarnessAdapter = {
   },
   executeCommand: executeCodexCommand,
   commandDescription: commandDescription(CODEX_COMMANDS),
+  interactiveRequests: {
+    decode: decodeCodexServerRequest,
+    isResolved: (message) => message.method === "serverRequest/resolved",
+    async respond(context, request, response) {
+      await respondToCodexServerRequest(
+        context.sessionKey,
+        request.requestId,
+        codexServerRequestResult(request, response),
+      );
+    },
+  },
 };
 
 const claudeAdapter: HarnessAdapter = {
@@ -124,6 +162,18 @@ const claudeAdapter: HarnessAdapter = {
   models: async () => CLAUDE_MODEL_OPTIONS,
   selectModel: async (_context, model) => ({ type: "send", command: `/model ${model}` }),
   commandDescription: commandDescription(CLAUDE_COMMANDS),
+  interactiveRequests: {
+    decode: decodeClaudeServerRequest,
+    isResolved: isClaudeServerRequestResolved,
+    completionResponse: claudeElicitationCompletionResponse,
+    async respond(context, request, response) {
+      await respondToClaudeServerRequest(
+        context.sessionKey,
+        request.requestId,
+        claudeServerRequestResult(request, response),
+      );
+    },
+  },
 };
 
 export function getHarnessAdapter(provider: LiveProvider): HarnessAdapter {

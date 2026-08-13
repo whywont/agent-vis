@@ -12,18 +12,20 @@ mod session_history;
 mod sessions;
 mod settings;
 mod shell_environment;
+mod sleep_inhibitor;
 mod terminal;
 mod workspace;
 
 use claude_stream::{
-    connect_claude_thread, send_claude_turn, start_claude_session, ClaudeStreamState,
+    connect_claude_thread, respond_to_claude_server_request, send_claude_turn,
+    start_claude_session, ClaudeStreamState,
 };
 use codex_app_server::{
     compact_codex_thread, connect_codex_thread, ensure_codex_shared_app_server,
     get_active_codex_turn, get_codex_thread_writer, interrupt_codex_turn, list_codex_mcp_servers,
-    list_codex_models, list_codex_skills, read_codex_thread_status, respond_to_codex_approval,
-    send_codex_turn, set_codex_thread_model, start_codex_review, start_codex_session,
-    take_over_codex_thread, CodexAppServerState,
+    list_codex_models, list_codex_skills, read_codex_thread_status,
+    respond_to_codex_server_request, send_codex_turn, set_codex_thread_model, start_codex_review,
+    start_codex_session, take_over_codex_thread, CodexAppServerState,
 };
 use collab::{create_collab_room, delete_collab_room, list_collab_rooms};
 use collab_coordinator::{
@@ -43,7 +45,7 @@ use provider_runtime::{
 use search::{search_sessions, SearchIndexState};
 use session_history::{
     bind_session_history, capture_active_session_histories_now, capture_session_history,
-    read_session_file_history, start_session_history, SessionHistoryState,
+    ensure_session_history, read_session_file_history, start_session_history, SessionHistoryState,
 };
 use sessions::{delete_session, get_session_modified, list_sessions, read_session_records};
 use settings::{
@@ -61,6 +63,7 @@ use workspace::{
 pub fn run() {
     shell_environment::initialize_desktop_shell_environment();
     tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let search = SearchIndexState::new(app.handle())?;
             search.start_background_index();
@@ -102,6 +105,7 @@ pub fn run() {
             search_sessions,
             read_session_records,
             start_session_history,
+            ensure_session_history,
             bind_session_history,
             capture_session_history,
             read_session_file_history,
@@ -140,10 +144,11 @@ pub fn run() {
             list_codex_mcp_servers,
             start_codex_review,
             interrupt_codex_turn,
-            respond_to_codex_approval,
+            respond_to_codex_server_request,
             connect_claude_thread,
             start_claude_session,
             send_claude_turn,
+            respond_to_claude_server_request,
             list_agent_provider_drivers,
             list_agent_provider_inventory,
             refresh_agent_provider_inventory,

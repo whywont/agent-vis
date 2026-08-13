@@ -9,6 +9,18 @@ use tauri::{AppHandle, Emitter, State};
 use crate::provider_runtime::emit_provider_runtime_event;
 use crate::shell_environment::apply_desktop_shell_environment;
 
+const CLAUDE_STREAM_ARGS: [&str; 9] = [
+    "-p",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--output-format",
+    "stream-json",
+    "--include-partial-messages",
+    "--permission-prompt-tool",
+    "stdio",
+];
+
 pub(crate) struct ClaudeStreamState {
     connections: Mutex<HashMap<String, Arc<ClaudeStreamConnection>>>,
 }
@@ -55,6 +67,14 @@ pub(crate) struct ClaudeTurnRequest {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct ClaudeServerRequestResponse {
+    session_key: String,
+    request_id: Value,
+    result: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct NewClaudeSessionRequest {
     pub(crate) session_key: String,
     pub(crate) thread_id: String,
@@ -91,6 +111,39 @@ fn write_message(connection: &ClaudeStreamConnection, value: &Value) -> Result<(
     stdin.flush().map_err(|error| error.to_string())
 }
 
+fn unsupported_control_request_response(message: &Value) -> Option<Value> {
+    if message.get("type").and_then(Value::as_str) != Some("control_request") {
+        return None;
+    }
+    let request_id = message.get("request_id")?.clone();
+    let subtype = message
+        .get("request")
+        .and_then(|request| request.get("subtype"))
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    (!matches!(subtype, "can_use_tool" | "elicitation")).then(|| {
+        json!({
+            "type": "control_response",
+            "response": {
+                "subtype": "error",
+                "request_id": request_id,
+                "error": format!("Agent Vis does not support Claude control request {subtype} yet.")
+            }
+        })
+    })
+}
+
+fn control_request_response(request_id: Value, result: Value) -> Value {
+    json!({
+        "type": "control_response",
+        "response": {
+            "subtype": "success",
+            "request_id": request_id,
+            "response": result
+        }
+    })
+}
+
 fn claude_executable() -> String {
     for candidate in ["/opt/homebrew/bin/claude", "/usr/local/bin/claude"] {
         if std::path::Path::new(candidate).is_file() {
@@ -112,17 +165,7 @@ fn start_connection(
     let mut command = Command::new(claude_executable());
     apply_desktop_shell_environment(&mut command)
         .current_dir(cwd)
-        .args([
-            "-p",
-            "--verbose",
-            "--input-format",
-            "stream-json",
-            "--output-format",
-            "stream-json",
-            "--include-partial-messages",
-            "--permission-mode",
-            "manual",
-        ]);
+        .args(CLAUDE_STREAM_ARGS);
     if let Some(thread_id) = resume_thread_id {
         command.args(["--resume", thread_id]);
     } else {
@@ -154,6 +197,7 @@ fn start_connection(
         child: Mutex::new(child),
         stdin: Mutex::new(stdin),
     });
+    let reader_connection = Arc::clone(&connection);
     std::thread::spawn(move || {
         for line in BufReader::new(stdout).lines() {
             let Ok(line) = line else { break };
@@ -161,7 +205,11 @@ fn start_connection(
                 if message.get("type").and_then(Value::as_str) == Some("result") {
                     crate::session_history::capture_session_history_now(&app, &session_key);
                 }
+                let rejection = unsupported_control_request_response(&message);
                 emit_event(&app, &session_key, message);
+                if let Some(rejection) = rejection {
+                    let _ = write_message(&reader_connection, &rejection);
+                }
             }
         }
         emit_event(
@@ -268,6 +316,24 @@ pub(crate) fn send_claude_turn(
     )
 }
 
+#[tauri::command]
+pub(crate) fn respond_to_claude_server_request(
+    state: State<'_, ClaudeStreamState>,
+    response: ClaudeServerRequestResponse,
+) -> Result<(), String> {
+    let connection = state
+        .connections
+        .lock()
+        .map_err(|_| "Claude stream state is unavailable.".to_owned())?
+        .get(&response.session_key)
+        .cloned()
+        .ok_or_else(|| "Open the Claude session before answering its request.".to_owned())?;
+    write_message(
+        &connection,
+        &control_request_response(response.request_id, response.result),
+    )
+}
+
 fn claude_image_input(url: String) -> Option<Value> {
     let (header, data) = url.split_once(",")?;
     let media_type = header.strip_prefix("data:")?.strip_suffix(";base64")?;
@@ -283,5 +349,84 @@ impl Drop for ClaudeStreamConnection {
             let _ = child.kill();
             let _ = child.wait();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        control_request_response, unsupported_control_request_response, CLAUDE_STREAM_ARGS,
+    };
+    use serde_json::json;
+
+    #[test]
+    fn leaves_tool_permission_requests_open_for_the_interactive_bridge() {
+        assert_eq!(
+            unsupported_control_request_response(&json!({
+                "type": "control_request",
+                "request_id": "permission-1",
+                "request": { "subtype": "can_use_tool" }
+            })),
+            None
+        );
+        assert_eq!(
+            unsupported_control_request_response(&json!({
+                "type": "control_request",
+                "request_id": "elicitation-1",
+                "request": { "subtype": "elicitation" }
+            })),
+            None
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_control_requests_instead_of_hanging_claude() {
+        assert_eq!(
+            unsupported_control_request_response(&json!({
+                "type": "control_request",
+                "request_id": "control-7",
+                "request": { "subtype": "future_request" }
+            })),
+            Some(json!({
+                "type": "control_response",
+                "response": {
+                    "subtype": "error",
+                    "request_id": "control-7",
+                    "error": "Agent Vis does not support Claude control request future_request yet."
+                }
+            }))
+        );
+    }
+
+    #[test]
+    fn launches_claude_with_the_bidirectional_permission_channel() {
+        assert!(CLAUDE_STREAM_ARGS
+            .windows(2)
+            .any(|args| args == ["--permission-prompt-tool", "stdio"]));
+        assert!(!CLAUDE_STREAM_ARGS.contains(&"--permission-mode"));
+    }
+
+    #[test]
+    fn wraps_interactive_results_in_the_claude_control_protocol() {
+        assert_eq!(
+            control_request_response(
+                json!("question-1"),
+                json!({
+                    "behavior": "allow",
+                    "updatedInput": { "answers": { "Which files?": "Changed" } }
+                }),
+            ),
+            json!({
+                "type": "control_response",
+                "response": {
+                    "subtype": "success",
+                    "request_id": "question-1",
+                    "response": {
+                        "behavior": "allow",
+                        "updatedInput": { "answers": { "Which files?": "Changed" } }
+                    }
+                }
+            })
+        );
     }
 }

@@ -1,4 +1,4 @@
-import type { FileChangeEvent } from "@/lib/types";
+import type { AppEvent, FileChangeEvent } from "@/lib/types";
 import { workspaceRelativePath } from "./workspace-path";
 
 interface PatchHunk {
@@ -40,6 +40,14 @@ export function snapshotHistoryOverlay(previousContent: string | null, content: 
   };
 }
 
+export function recordedSnapshotOverlay(
+  previousContent: string | null,
+  content: string | null,
+  baseline: boolean,
+): HistoryOverlay {
+  return baseline ? { addedLines: [], changeBlocks: [] } : snapshotHistoryOverlay(previousContent, content);
+}
+
 function comparablePath(filepath: string, workspaceRoot: string): string {
   return workspaceRelativePath(filepath, workspaceRoot).replace(/^\/+/, "");
 }
@@ -48,6 +56,15 @@ function pathsMatch(left: string, right: string, workspaceRoot: string): boolean
   const leftPath = comparablePath(left, workspaceRoot);
   const rightPath = comparablePath(right, workspaceRoot);
   return leftPath === rightPath || leftPath.endsWith(`/${rightPath}`) || rightPath.endsWith(`/${leftPath}`);
+}
+
+export function historyChangesForFile(
+  events: AppEvent[],
+  filepath: string,
+  workspaceRoot: string,
+): FileChangeEvent[] {
+  return events.filter((event): event is FileChangeEvent => event.kind === "file_change"
+    && event.files.some((file) => pathsMatch(file.path, filepath, workspaceRoot)));
 }
 
 function parseFilePatch(patch: string, filepath: string, workspaceRoot: string): FilePatch | null {

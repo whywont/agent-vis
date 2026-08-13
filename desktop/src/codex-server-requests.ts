@@ -1,57 +1,25 @@
-export type CodexApprovalDecision = string | Record<string, unknown>;
+import type {
+  DecodedInteractiveAgentRequest,
+  InteractiveAgentRequest,
+  InteractiveAgentResponse,
+  InteractiveApprovalDecision,
+  InteractiveApprovalRequest,
+  InteractiveMcpElicitationValue,
+  InteractiveUserInputOption,
+  InteractiveUserInputQuestion,
+} from "./interactive-agent-requests";
+import { decodeMcpElicitationRequest } from "./mcp-elicitation-requests";
 
-export type CodexApprovalRequest = {
-  type: "approval";
-  id: unknown;
-  method: string;
-  kind: "command" | "file" | "permissions";
-  reason: string;
-  details: string;
-  decisions: CodexApprovalDecision[];
-  permissions?: unknown;
-  command?: string;
-  legacy: boolean;
-};
+export type CodexServerRequest = DecodedInteractiveAgentRequest;
 
-export type CodexUserInputOption = {
-  label: string;
-  description: string;
-};
-
-export type CodexUserInputQuestion = {
-  id: string;
-  header: string;
-  question: string;
-  options: CodexUserInputOption[];
-  isOther: boolean;
-  isSecret: boolean;
-};
-
-export type CodexUserInputRequest = {
-  type: "user_input";
-  id: unknown;
-  method: "item/tool/requestUserInput";
-  questions: CodexUserInputQuestion[];
-  autoResolutionMs?: number;
-};
-
-export type CodexUnsupportedRequest = {
-  type: "unsupported";
-  id: unknown;
-  method: string;
-  description: string;
-};
-
-export type CodexServerRequest = CodexApprovalRequest | CodexUserInputRequest | CodexUnsupportedRequest;
-
-const MODERN_DECISIONS: CodexApprovalDecision[] = [
+const MODERN_DECISIONS: InteractiveApprovalDecision[] = [
   "accept",
   "acceptForSession",
   "decline",
   "cancel",
 ];
 
-const LEGACY_DECISIONS: CodexApprovalDecision[] = [
+const LEGACY_DECISIONS: InteractiveApprovalDecision[] = [
   "approved",
   "approved_for_session",
   "denied",
@@ -70,13 +38,17 @@ export function decodeCodexServerRequest(message: Record<string, unknown>): Code
       : [];
     return {
       type: "user_input",
-      id: message.id,
+      requestId: message.id,
       method,
       questions,
       ...(typeof params.autoResolutionMs === "number" && params.autoResolutionMs >= 0
         ? { autoResolutionMs: params.autoResolutionMs }
         : {}),
     };
+  }
+
+  if (method === "mcpServer/elicitation/request") {
+    return decodeMcpElicitationRequest(message.id, method, params);
   }
 
   if (method === "item/commandExecution/requestApproval") {
@@ -109,15 +81,15 @@ export function decodeCodexServerRequest(message: Record<string, unknown>): Code
 
   return {
     type: "unsupported",
-    id: message.id,
+    requestId: message.id,
     method,
     description: unsupportedRequestDescription(method),
   };
 }
 
 export function codexApprovalResult(
-  request: CodexApprovalRequest,
-  decision: CodexApprovalDecision,
+  request: InteractiveApprovalRequest,
+  decision: InteractiveApprovalDecision,
 ): Record<string, unknown> {
   if (request.kind === "permissions") {
     return decision === "accept"
@@ -140,7 +112,32 @@ export function codexUserInputResult(
   };
 }
 
-function decodeUserInputQuestion(value: unknown): CodexUserInputQuestion | null {
+export function codexMcpElicitationResult(
+  action: "accept" | "decline" | "cancel",
+  content: Record<string, InteractiveMcpElicitationValue> = {},
+): { action: "accept" | "decline" | "cancel"; content?: Record<string, InteractiveMcpElicitationValue> } {
+  if (action !== "accept") return { action };
+  return { action, content };
+}
+
+export function codexServerRequestResult(
+  request: InteractiveAgentRequest,
+  response: InteractiveAgentResponse,
+): Record<string, unknown> {
+  if (request.type !== response.type) throw new Error("Interactive response does not match the active Codex request.");
+  if (request.type === "approval" && response.type === "approval") {
+    return codexApprovalResult(request, response.decision);
+  }
+  if (request.type === "user_input" && response.type === "user_input") {
+    return codexUserInputResult(response.answers);
+  }
+  if (request.type === "mcp_elicitation" && response.type === "mcp_elicitation") {
+    return codexMcpElicitationResult(response.action, response.content);
+  }
+  throw new Error("Interactive response does not match the active Codex request.");
+}
+
+function decodeUserInputQuestion(value: unknown): InteractiveUserInputQuestion | null {
   const question = asRecord(value);
   if (!question) return null;
   const id = stringValue(question.id);
@@ -157,10 +154,11 @@ function decodeUserInputQuestion(value: unknown): CodexUserInputQuestion | null 
     options,
     isOther: question.isOther === true,
     isSecret: question.isSecret === true,
+    multiSelect: question.multiSelect === true,
   };
 }
 
-function decodeUserInputOption(value: unknown): CodexUserInputOption | null {
+function decodeUserInputOption(value: unknown): InteractiveUserInputOption | null {
   const option = asRecord(value);
   if (!option) return null;
   const label = stringValue(option.label);
@@ -171,16 +169,16 @@ function decodeUserInputOption(value: unknown): CodexUserInputOption | null {
 function approval(
   id: unknown,
   method: string,
-  kind: CodexApprovalRequest["kind"],
+  kind: InteractiveApprovalRequest["kind"],
   reason: string,
   details: string,
   params: Record<string, unknown>,
   legacy: boolean,
-): CodexApprovalRequest {
+): InteractiveApprovalRequest {
   const command = kind === "command" ? details || undefined : undefined;
   return {
     type: "approval",
-    id,
+    requestId: id,
     method,
     kind,
     reason,
@@ -194,9 +192,9 @@ function approval(
   };
 }
 
-function decisionList(value: unknown, fallback: CodexApprovalDecision[]): CodexApprovalDecision[] {
+function decisionList(value: unknown, fallback: InteractiveApprovalDecision[]): InteractiveApprovalDecision[] {
   if (!Array.isArray(value)) return fallback;
-  const decisions = value.filter((decision): decision is CodexApprovalDecision =>
+  const decisions = value.filter((decision): decision is InteractiveApprovalDecision =>
     typeof decision === "string" || (typeof decision === "object" && decision !== null),
   );
   return decisions.length ? decisions : fallback;

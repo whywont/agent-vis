@@ -507,6 +507,10 @@ export function startSessionHistory(sessionKey: string, workspaceRoot: string): 
   return invoke<number>("start_session_history", { sessionKey, workspaceRoot });
 }
 
+export function ensureSessionHistory(threadId: string, workspaceRoot: string): Promise<number> {
+  return invoke<number>("ensure_session_history", { threadId, workspaceRoot });
+}
+
 export function bindSessionHistory(sessionKey: string, threadId: string): Promise<void> {
   return invoke<void>("bind_session_history", { request: { sessionKey, threadId } });
 }
@@ -584,8 +588,8 @@ export function interruptCodexTurn(sessionKey: string, threadId: string, turnId:
   return invoke<void>("interrupt_codex_turn", { requestData: { sessionKey, threadId, turnId } });
 }
 
-export function respondToCodexApproval(sessionKey: string, requestId: unknown, result: unknown): Promise<void> {
-  return invoke<void>("respond_to_codex_approval", { response: { sessionKey, requestId, result } });
+export function respondToCodexServerRequest(sessionKey: string, requestId: unknown, result: unknown): Promise<void> {
+  return invoke<void>("respond_to_codex_server_request", { response: { sessionKey, requestId, result } });
 }
 
 export function connectClaudeThread(sessionKey: string, threadId: string, cwd: string): Promise<void> {
@@ -598,6 +602,10 @@ export function startClaudeSession(sessionKey: string, threadId: string, cwd: st
 
 export function sendClaudeTurn(sessionKey: string, text: string, imageUrls: string[]): Promise<void> {
   return invoke<void>("send_claude_turn", { requestData: { sessionKey, text, imageUrls } });
+}
+
+export function respondToClaudeServerRequest(sessionKey: string, requestId: unknown, result: unknown): Promise<void> {
+  return invoke<void>("respond_to_claude_server_request", { response: { sessionKey, requestId, result } });
 }
 
 export function getDesktopSettings(): Promise<DesktopSettings> {

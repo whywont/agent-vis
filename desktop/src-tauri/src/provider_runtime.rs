@@ -10,6 +10,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::shell_environment::apply_desktop_shell_environment;
+use crate::sleep_inhibitor::AgentTurnSleepInhibitor;
 use crate::{
     claude_stream::{
         connect_claude_thread, send_claude_turn, start_claude_session, ClaudeStreamState,
@@ -361,6 +362,7 @@ pub(crate) struct ProviderRuntimeState {
     snapshots: Arc<Mutex<Vec<AgentProviderSnapshot>>>,
     refreshing: Arc<AtomicBool>,
     runtime_events: Mutex<RuntimeEventStore>,
+    sleep_inhibitor: Mutex<AgentTurnSleepInhibitor>,
 }
 
 impl ProviderRuntimeState {
@@ -373,6 +375,7 @@ impl ProviderRuntimeState {
             snapshots: Arc::new(Mutex::new(snapshots)),
             refreshing: Arc::new(AtomicBool::new(false)),
             runtime_events: Mutex::new(RuntimeEventStore::default()),
+            sleep_inhibitor: Mutex::new(AgentTurnSleepInhibitor::new()),
         }
     }
 
@@ -432,6 +435,10 @@ impl ProviderRuntimeState {
         session_key: &str,
         message: &Value,
     ) -> AgentProviderRuntimeEvent {
+        self.sleep_inhibitor
+            .lock()
+            .unwrap_or_else(|value| value.into_inner())
+            .observe(provider_instance_id, session_key, message);
         self.runtime_events
             .lock()
             .unwrap_or_else(|value| value.into_inner())

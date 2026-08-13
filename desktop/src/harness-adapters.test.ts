@@ -7,6 +7,31 @@ describe("harness adapters", () => {
     expect(getHarnessAdapter("claude-code").initialCommands.map((command) => command.id)).toContain("model");
   });
 
+  it("exposes interactive requests as an optional provider bridge", () => {
+    const codex = getHarnessAdapter("codex");
+    const claude = getHarnessAdapter("claude-code");
+    expect(claude.interactiveRequests).toBeDefined();
+    expect(claude.interactiveRequests?.decode({
+      type: "control_request",
+      request_id: "claude-question-1",
+      request: {
+        subtype: "can_use_tool",
+        tool_name: "AskUserQuestion",
+        input: { questions: [{ header: "Scope", question: "Which files?", options: [] }] },
+      },
+    })).toMatchObject({ type: "user_input", requestId: "claude-question-1" });
+    expect(codex.interactiveRequests?.decode({
+      jsonrpc: "2.0",
+      id: "approval-7",
+      method: "item/commandExecution/requestApproval",
+      params: { command: "cargo check" },
+    })).toMatchObject({
+      type: "approval",
+      requestId: "approval-7",
+      command: "cargo check",
+    });
+  });
+
   it("formats nested structured skill data without dumping JSON", () => {
     expect(formatStructuredList({
       data: [{
