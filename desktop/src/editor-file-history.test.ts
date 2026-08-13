@@ -1,12 +1,24 @@
 import { describe, expect, it } from "vitest";
 import type { FileChangeEvent } from "@/lib/types";
-import { buildFileHistorySnapshot, snapshotHistoryOverlay } from "./editor-file-history";
+import { buildFileHistorySnapshot, historyChangesForFile, recordedSnapshotOverlay, snapshotHistoryOverlay } from "./editor-file-history";
 
 function change(ts: string, patch: string): FileChangeEvent {
   return { kind: "file_change", ts, patch, files: [{ action: "update", path: "src/app.ts" }] };
 }
 
 describe("buildFileHistorySnapshot", () => {
+  it("exposes every matching timeline revision to the editor", () => {
+    const changes = Array.from({ length: 12 }, (_value, index) => change(
+      String(index + 1),
+      `*** Update File: src/app.ts\n@@ -1 +1 @@\n-${index}\n+${index + 1}`,
+    ));
+    expect(historyChangesForFile(
+      [{ kind: "user_message", ts: "0", text: "change it" }, ...changes],
+      "src/app.ts",
+      "/repo",
+    )).toHaveLength(12);
+  });
+
   it("overlays the selected patch on the current complete file", () => {
     const changes = [
       change("1", "*** Update File: src/app.ts\n@@ -1,2 +1,2 @@\n-const value = 1;\n+const value = 2;\n const tail = true;"),
@@ -45,6 +57,13 @@ describe("buildFileHistorySnapshot", () => {
 });
 
 describe("snapshotHistoryOverlay", () => {
+  it("keeps the reference baseline clean", () => {
+    expect(recordedSnapshotOverlay(null, "one\ntwo", true)).toEqual({
+      addedLines: [],
+      changeBlocks: [],
+    });
+  });
+
   it("marks the changed portion between complete file snapshots", () => {
     expect(snapshotHistoryOverlay("one\ntwo\nthree", "one\nchanged\nthree")).toEqual({
       addedLines: [2],

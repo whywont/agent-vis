@@ -23,13 +23,21 @@ import {
   WidgetType,
 } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
+import type { AppEvent } from "@/lib/types";
 import { formatTime } from "@/utils/format";
-import { explainDiff, listWorkspaceFiles, readSessionFileHistory, readWorkspaceFile, saveWorkspaceFile, stopTerminal, type SessionFileVersion, type WorkspaceTreeEntry } from "./desktop-api";
+import { captureSessionHistory, explainDiff, listWorkspaceFiles, readSessionFileHistory, readWorkspaceFile, saveWorkspaceFile, stopTerminal, type SessionFileVersion, type WorkspaceTreeEntry } from "./desktop-api";
 import DesktopTerminal from "./DesktopTerminal";
-import { snapshotHistoryOverlay, type HistoryOverlay } from "./editor-file-history";
+import { buildFileHistorySnapshot, historyChangesForFile, recordedSnapshotOverlay, type HistoryOverlay } from "./editor-file-history";
 
 interface TreeNode { children: Map<string, TreeNode>; path?: string; }
 interface ExplainTarget { startLine: number; endLine: number; text: string; top: number; }
+interface EditorHistoryEntry {
+  key: string;
+  label: string;
+  timestamp: string;
+  baseline: boolean;
+  snapshot: { content: string; overlay: HistoryOverlay };
+}
 
 class PatchLinesWidget extends WidgetType {
   constructor(private readonly removedLines: string[], private readonly addedLines: string[]) { super(); }
@@ -180,10 +188,11 @@ function explainTargetForView(view: EditorView, hostElement: HTMLDivElement | nu
   };
 }
 
-export default function DesktopEditor({ workspaceRoot, navigation, threadId }: {
+export default function DesktopEditor({ workspaceRoot, navigation, threadId, events }: {
   workspaceRoot: string;
   navigation?: { path: string; requestId: number } | null;
   threadId: string;
+  events: AppEvent[];
 }) {
   const [files, setFiles] = useState<WorkspaceTreeEntry[]>([]);
   const [activePath, setActivePath] = useState<string | null>(null);
@@ -205,7 +214,7 @@ export default function DesktopEditor({ workspaceRoot, navigation, threadId }: {
   const [activeTerminalPane, setActiveTerminalPane] = useState<string | null>(null);
   const [terminalSplit, setTerminalSplit] = useState(false);
   const [historyVisible, setHistoryVisible] = useState(false);
-  const [historySelection, setHistorySelection] = useState<{ path: string; index: number } | null>(null);
+  const [historySelection, setHistorySelection] = useState<{ path: string; key: string } | null>(null);
   const [historyVersions, setHistoryVersions] = useState<SessionFileVersion[]>([]);
   const [historyRefresh, setHistoryRefresh] = useState(0);
   const contentRef = useRef(content);
@@ -219,18 +228,49 @@ export default function DesktopEditor({ workspaceRoot, navigation, threadId }: {
   const dirty = content !== savedContent;
   const tree = useMemo(() => makeTree(files), [files]);
   const terminalId = useMemo(() => editorTerminalId(workspaceRoot), [workspaceRoot]);
-  const selectedHistoryIndex = historySelection?.path === activePath ? historySelection.index : null;
-  const selectedHistory = selectedHistoryIndex === null ? null : historyVersions[selectedHistoryIndex] ?? null;
-  const historySnapshot = useMemo(() => selectedHistory ? {
-    content: selectedHistory.content ?? "",
-    overlay: snapshotHistoryOverlay(
-      selectedHistoryIndex && selectedHistoryIndex > 0 ? historyVersions[selectedHistoryIndex - 1]?.content ?? null : null,
-      selectedHistory.content,
-    ),
-  } : null, [historyVersions, selectedHistory, selectedHistoryIndex]);
-  const historySlots = historyVersions.length + 1;
-  const activeHistorySlot = selectedHistoryIndex === null ? 0 : historyVersions.length - selectedHistoryIndex;
-  const hasRecordedHistory = historyVersions.length > 1 || historyVersions.some((version) => !version.baseline);
+  const timelineChanges = useMemo(() => {
+    if (!activePath) return [];
+    return historyChangesForFile(events, activePath, workspaceRoot);
+  }, [activePath, events, workspaceRoot]);
+  const historyEntries = useMemo<EditorHistoryEntry[]>(() => {
+    if (!activePath) return [];
+    const snapshots = historyVersions.map((version, index): EditorHistoryEntry => ({
+      key: `snapshot:${version.version}:${version.timestamp}`,
+      label: version.baseline ? "baseline" : formatTime(version.timestamp),
+      timestamp: version.timestamp,
+      baseline: version.baseline,
+      snapshot: {
+        content: version.content ?? "",
+        // A baseline is the reference snapshot, not an "add file" revision.
+        // Highlighting it against null paints the entire file green and makes
+        // it look like a duplicate of the first real creation patch.
+        overlay: recordedSnapshotOverlay(
+          index > 0 ? historyVersions[index - 1]?.content ?? null : null,
+          version.content,
+          version.baseline,
+        ),
+      },
+    }));
+    const changes = timelineChanges.map((change, index): EditorHistoryEntry => ({
+      key: `change:${change.ts}:${index}`,
+      label: `v${index + 1}`,
+      timestamp: change.ts,
+      baseline: false,
+      snapshot: buildFileHistorySnapshot(content, timelineChanges, index, activePath, workspaceRoot),
+    }));
+    return [...snapshots, ...changes].sort((left, right) => {
+      if (left.baseline !== right.baseline) return left.baseline ? -1 : 1;
+      return Date.parse(left.timestamp) - Date.parse(right.timestamp);
+    });
+  }, [activePath, content, historyVersions, timelineChanges, workspaceRoot]);
+  const selectedHistoryIndex = historySelection?.path === activePath
+    ? historyEntries.findIndex((entry) => entry.key === historySelection.key)
+    : -1;
+  const selectedHistory = selectedHistoryIndex >= 0 ? historyEntries[selectedHistoryIndex] : null;
+  const historySnapshot = selectedHistory?.snapshot ?? null;
+  const historySlots = historyEntries.length + 1;
+  const activeHistorySlot = selectedHistoryIndex < 0 ? 0 : historyEntries.length - selectedHistoryIndex;
+  const hasRecordedHistory = historyEntries.length > 0;
 
   useEffect(() => { contentRef.current = content; }, [content]);
   useEffect(() => { savedContentRef.current = savedContent; }, [savedContent]);
@@ -339,9 +379,10 @@ export default function DesktopEditor({ workspaceRoot, navigation, threadId }: {
     try {
       const saved = await saveWorkspaceFile(workspaceRoot, path, savedContentRef.current, contentRef.current);
       setContent(saved); setSavedContent(saved);
+      await captureSessionHistory(threadId).catch(() => 0);
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setSaving(false); }
-  }, [workspaceRoot]);
+  }, [threadId, workspaceRoot]);
 
   const explainSelection = useCallback(async (target: ExplainTarget) => {
     const path = activePathRef.current;
@@ -401,7 +442,7 @@ export default function DesktopEditor({ workspaceRoot, navigation, threadId }: {
     const nextSlot = Math.max(0, Math.min(historySlots - 1, slot));
     setHistorySelection(nextSlot === 0 || !activePath
       ? null
-      : { path: activePath, index: historyVersions.length - nextSlot });
+      : { path: activePath, key: historyEntries[historyEntries.length - nextSlot].key });
   }
 
   function toggleDirectory(path: string) {
@@ -494,9 +535,9 @@ export default function DesktopEditor({ workspaceRoot, navigation, threadId }: {
           </header>
           {historyVisible && hasRecordedHistory && <div className="desktop-editor-version-strip">
             <button type="button" className={!selectedHistory ? "active" : ""} onClick={() => selectHistorySlot(0)}>current</button>
-            {[...historyVersions].reverse().map((version, reverseIndex) => {
-              const index = historyVersions.length - reverseIndex - 1;
-              return <button type="button" className={selectedHistoryIndex === index ? "active" : ""} key={`${version.version}:${version.timestamp}`} onClick={() => setHistorySelection(activePath ? { path: activePath, index } : null)} title={`Recorded file from ${formatTime(version.timestamp)}`}>{version.baseline ? "start" : formatTime(version.timestamp)}</button>;
+            {[...historyEntries].reverse().map((entry, reverseIndex) => {
+              const index = historyEntries.length - reverseIndex - 1;
+              return <button type="button" className={selectedHistoryIndex === index ? "active" : ""} key={entry.key} onClick={() => setHistorySelection(activePath ? { path: activePath, key: entry.key } : null)} title={`Recorded file change from ${formatTime(entry.timestamp)}`}>{entry.label}</button>;
             })}
             <div className="desktop-editor-version-cycle" aria-label="Cycle file versions">
               <button type="button" onClick={() => selectHistorySlot(activeHistorySlot + 1)} disabled={activeHistorySlot >= historySlots - 1} title="Older version" aria-label="Older version">‹</button>

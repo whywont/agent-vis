@@ -152,6 +152,34 @@ fn mark_history_session_active(app: &AppHandle, session_key: &str) {
     }
 }
 
+fn ensure_history_session_record(
+    database: &Connection,
+    thread_id: &str,
+    workspace_root: &Path,
+    timestamp: &str,
+) -> Result<String, String> {
+    let thread_id = thread_id.trim();
+    if thread_id.is_empty() {
+        return Err("Session identifier is unavailable.".to_owned());
+    }
+    if let Some((session_key, _)) = resolve_history_session(database, thread_id)? {
+        return Ok(session_key);
+    }
+    let session_key = format!("tracked:{thread_id}");
+    database
+        .execute(
+            "INSERT INTO history_sessions(session_key, thread_id, workspace_root, created_at) VALUES (?1, ?2, ?3, ?4)",
+            params![
+                session_key,
+                thread_id,
+                workspace_root.to_string_lossy(),
+                timestamp
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(session_key)
+}
+
 fn snapshot_root(workspace_root: &str) -> Result<PathBuf, String> {
     let path = Path::new(workspace_root.trim());
     if !path.is_absolute() {
@@ -535,6 +563,23 @@ pub(crate) fn start_session_history(
 }
 
 #[tauri::command]
+pub(crate) fn ensure_session_history(
+    app: AppHandle,
+    thread_id: String,
+    workspace_root: String,
+) -> Result<usize, String> {
+    let root = snapshot_root(&workspace_root)?;
+    let timestamp = system_time_iso(SystemTime::now());
+    let database = connection(&app)?;
+    let session_key = ensure_history_session_record(&database, &thread_id, &root, &timestamp)?;
+    drop(database);
+    // Capture on selection as well as shutdown. This establishes a baseline
+    // for imported sessions and records changes made while Agent Vis was not
+    // running before the editor asks for versions.
+    persist_snapshot(&app, &session_key, &timestamp)
+}
+
+#[tauri::command]
 pub(crate) fn bind_session_history(
     app: AppHandle,
     request: BindSessionHistoryRequest,
@@ -601,7 +646,10 @@ pub(crate) fn read_session_file_history(
 
 #[cfg(test)]
 mod tests {
-    use super::{hash_content, provider_thread_id, resolve_history_session, should_snapshot_file};
+    use super::{
+        ensure_history_session_record, hash_content, provider_thread_id, resolve_history_session,
+        should_snapshot_file,
+    };
     use rusqlite::Connection;
     use std::path::Path;
 
@@ -667,5 +715,49 @@ mod tests {
             None
         );
         assert_eq!(provider_thread_id("not-a-provider-key"), None);
+    }
+
+    #[test]
+    fn registers_imported_sessions_without_replacing_existing_history() {
+        let database = Connection::open_in_memory().unwrap();
+        database
+            .execute_batch(
+                "CREATE TABLE history_sessions(
+                    session_key TEXT PRIMARY KEY,
+                    thread_id TEXT UNIQUE,
+                    workspace_root TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );",
+            )
+            .unwrap();
+        let root = Path::new("/repo");
+        let first = ensure_history_session_record(
+            &database,
+            "external-thread",
+            root,
+            "2026-08-12T00:00:00Z",
+        )
+        .unwrap();
+        let second = ensure_history_session_record(
+            &database,
+            "external-thread",
+            root,
+            "2026-08-12T01:00:00Z",
+        )
+        .unwrap();
+        assert_eq!(first, "tracked:external-thread");
+        assert_eq!(second, first);
+        assert_eq!(
+            resolve_history_session(&database, "external-thread").unwrap(),
+            Some(("tracked:external-thread".to_owned(), "/repo".to_owned()))
+        );
+        let created_at: String = database
+            .query_row(
+                "SELECT created_at FROM history_sessions WHERE thread_id = ?1",
+                ["external-thread"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(created_at, "2026-08-12T00:00:00Z");
     }
 }

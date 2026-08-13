@@ -45,7 +45,7 @@ use provider_runtime::{
 use search::{search_sessions, SearchIndexState};
 use session_history::{
     bind_session_history, capture_active_session_histories_now, capture_session_history,
-    read_session_file_history, start_session_history, SessionHistoryState,
+    ensure_session_history, read_session_file_history, start_session_history, SessionHistoryState,
 };
 use sessions::{delete_session, get_session_modified, list_sessions, read_session_records};
 use settings::{
@@ -105,6 +105,7 @@ pub fn run() {
             search_sessions,
             read_session_records,
             start_session_history,
+            ensure_session_history,
             bind_session_history,
             capture_session_history,
             read_session_file_history,

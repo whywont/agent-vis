@@ -507,6 +507,10 @@ export function startSessionHistory(sessionKey: string, workspaceRoot: string): 
   return invoke<number>("start_session_history", { sessionKey, workspaceRoot });
 }
 
+export function ensureSessionHistory(threadId: string, workspaceRoot: string): Promise<number> {
+  return invoke<number>("ensure_session_history", { threadId, workspaceRoot });
+}
+
 export function bindSessionHistory(sessionKey: string, threadId: string): Promise<void> {
   return invoke<void>("bind_session_history", { request: { sessionKey, threadId } });
 }

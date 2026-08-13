@@ -12,7 +12,7 @@ import DesktopTimeline from "./DesktopTimeline";
 import DesktopTerminal from "./DesktopTerminal";
 import DesktopLiveConversation from "./DesktopLiveConversation";
 import DesktopLiveStream, { type LiveStreamEntry } from "./DesktopLiveStream";
-import { captureSessionHistory, getGitBranch, readSession, resolveWorkspaceFilepaths, stopTerminal } from "./desktop-api";
+import { captureSessionHistory, ensureSessionHistory, getGitBranch, readSession, resolveWorkspaceFilepaths, stopTerminal } from "./desktop-api";
 import { startWindowDrag } from "./window-drag";
 import { workspaceRelativePath } from "./workspace-path";
 
@@ -291,6 +291,10 @@ export default function DesktopSessionDetail({
   const id = meta?.kind === "session_start" ? meta.id : session.id;
   const timestamp = meta?.kind === "session_start" ? meta.ts : session.timestamp;
   const currentSessionKey = terminalSessionKey(session, session.id);
+  useEffect(() => {
+    if (transcriptOnly || !id || !cwd) return;
+    void ensureSessionHistory(id, cwd).catch(() => {});
+  }, [cwd, id, transcriptOnly]);
   const approvalTimelineTarget = useMemo(() => {
     if (!approvalCommand) return null;
     const matchingEvent = [...events].reverse().find((event) =>
@@ -346,9 +350,9 @@ export default function DesktopSessionDetail({
     }, 160);
   }, [liveStreamScope]);
   const handleLiveTurnCompleted = useCallback(() => {
-    if (liveSessionKey) void captureSessionHistory(liveSessionKey).catch(() => {});
+    if (!transcriptOnly) void captureSessionHistory(id).catch(() => {});
     window.dispatchEvent(new Event("live-session-turn-completed"));
-  }, [liveSessionKey]);
+  }, [id, transcriptOnly]);
   const tokenUsage = useMemo(() => {
     const latest = [...events].reverse().find((event) => event.kind === "token_usage");
     return latest?.kind === "token_usage"
@@ -539,7 +543,7 @@ export default function DesktopSessionDetail({
         <DesktopTestingCanvas events={events} sessionCwd={cwd} onOpenFile={(path) => void openTimelineFileInEditor(path)} />
       ) : activeTab === "editor" && !splitView && !transcriptOnly ? (
         <Suspense fallback={<div className="desktop-detail-state">Loading editor...</div>}>
-          <DesktopEditor workspaceRoot={cwd} navigation={editorNavigation} threadId={id} />
+          <DesktopEditor workspaceRoot={cwd} navigation={editorNavigation} threadId={id} events={events} />
         </Suspense>
       ) : (
         <div className="detail-body">
