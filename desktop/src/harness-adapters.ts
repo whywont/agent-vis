@@ -7,12 +7,18 @@ import {
   listCodexModels,
   listCodexSkills,
   readCodexThreadStatus,
+  respondToClaudeServerRequest,
   respondToCodexServerRequest,
   sendClaudeTurn,
   sendCodexTurn,
   setCodexThreadModel,
   startCodexReview,
 } from "./desktop-api";
+import {
+  claudeServerRequestResult,
+  decodeClaudeServerRequest,
+  isClaudeServerRequestResolved,
+} from "./claude-server-requests";
 import { codexServerRequestResult, decodeCodexServerRequest } from "./codex-server-requests";
 import type {
   DecodedInteractiveAgentRequest,
@@ -54,6 +60,7 @@ export interface HarnessAdapter {
   commandDescription(command: string): string;
   interactiveRequests?: {
     decode(message: Record<string, unknown>): DecodedInteractiveAgentRequest | null;
+    isResolved?(message: Record<string, unknown>): boolean;
     respond(
       context: HarnessContext,
       request: InteractiveAgentRequest,
@@ -130,6 +137,7 @@ const codexAdapter: HarnessAdapter = {
   commandDescription: commandDescription(CODEX_COMMANDS),
   interactiveRequests: {
     decode: decodeCodexServerRequest,
+    isResolved: (message) => message.method === "serverRequest/resolved",
     async respond(context, request, response) {
       await respondToCodexServerRequest(
         context.sessionKey,
@@ -149,6 +157,17 @@ const claudeAdapter: HarnessAdapter = {
   models: async () => CLAUDE_MODEL_OPTIONS,
   selectModel: async (_context, model) => ({ type: "send", command: `/model ${model}` }),
   commandDescription: commandDescription(CLAUDE_COMMANDS),
+  interactiveRequests: {
+    decode: decodeClaudeServerRequest,
+    isResolved: isClaudeServerRequestResolved,
+    async respond(context, request, response) {
+      await respondToClaudeServerRequest(
+        context.sessionKey,
+        request.requestId,
+        claudeServerRequestResult(request, response),
+      );
+    },
+  },
 };
 
 export function getHarnessAdapter(provider: LiveProvider): HarnessAdapter {

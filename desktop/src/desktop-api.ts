@@ -600,6 +600,10 @@ export function sendClaudeTurn(sessionKey: string, text: string, imageUrls: stri
   return invoke<void>("send_claude_turn", { requestData: { sessionKey, text, imageUrls } });
 }
 
+export function respondToClaudeServerRequest(sessionKey: string, requestId: unknown, result: unknown): Promise<void> {
+  return invoke<void>("respond_to_claude_server_request", { response: { sessionKey, requestId, result } });
+}
+
 export function getDesktopSettings(): Promise<DesktopSettings> {
   return invoke<DesktopSettings>("get_desktop_settings");
 }

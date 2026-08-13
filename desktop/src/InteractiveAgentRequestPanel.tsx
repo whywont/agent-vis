@@ -53,15 +53,36 @@ function UserInputPanel({ request, responding, onRespond }: {
 }) {
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [other, setOther] = useState<Record<string, boolean>>({});
+  const [multiSelections, setMultiSelections] = useState<Record<string, string[]>>({});
+  const submittedAnswers = composeUserInputAnswers(request, answers, multiSelections);
   return (
     <aside className="desktop-codex-approval desktop-codex-user-input" aria-live="assertive">
       <span>Blocked - answer needed</span>
-      <form onSubmit={(event) => { event.preventDefault(); onRespond({ type: "user_input", answers }); }}>
+      <form onSubmit={(event) => { event.preventDefault(); onRespond({ type: "user_input", answers: submittedAnswers }); }}>
         {request.questions.map((question) => (
           <fieldset key={question.id}>
             <legend>{question.header}</legend>
             <p>{question.question}</p>
-            {question.options.map((option) => (
+            {question.options.map((option) => question.multiSelect ? (
+              <label key={option.label}>
+                <input
+                  type="checkbox"
+                  name={`agent-question-${question.id}`}
+                  value={option.label}
+                  checked={multiSelections[question.id]?.includes(option.label) === true}
+                  onChange={(event) => setMultiSelections((current) => {
+                    const selected = current[question.id] || [];
+                    return {
+                      ...current,
+                      [question.id]: event.target.checked
+                        ? [...selected, option.label]
+                        : selected.filter((label) => label !== option.label),
+                    };
+                  })}
+                />
+                <span><strong>{option.label}</strong><small>{option.description}</small></span>
+              </label>
+            ) : (
               <label key={option.label}>
                 <input
                   type="radio"
@@ -86,7 +107,22 @@ function UserInputPanel({ request, responding, onRespond }: {
                 aria-label={question.header}
               />
             )}
-            {question.options.length > 0 && question.isOther && (
+            {question.options.length > 0 && question.isOther && question.multiSelect && (
+              <label>
+                <span className="desktop-codex-user-input-other">
+                  <strong>Other</strong>
+                  <input
+                    className="desktop-codex-user-input-text"
+                    type={question.isSecret ? "password" : "text"}
+                    autoComplete="off"
+                    value={answers[question.id] || ""}
+                    onChange={(event) => setAnswers((current) => ({ ...current, [question.id]: event.target.value }))}
+                    aria-label={`${question.header} other answer`}
+                  />
+                </span>
+              </label>
+            )}
+            {question.options.length > 0 && question.isOther && !question.multiSelect && (
               <label>
                 <input
                   type="radio"
@@ -120,7 +156,7 @@ function UserInputPanel({ request, responding, onRespond }: {
         <div className="desktop-codex-user-input-actions">
           <button
             type="submit"
-            disabled={responding || request.questions.length === 0 || request.questions.some((question) => !answers[question.id]?.trim())}
+            disabled={responding || request.questions.length === 0 || request.questions.some((question) => !submittedAnswers[question.id]?.trim())}
           >
             Submit answers
           </button>
@@ -129,6 +165,20 @@ function UserInputPanel({ request, responding, onRespond }: {
       </form>
     </aside>
   );
+}
+
+export function composeUserInputAnswers(
+  request: Extract<InteractiveAgentRequest, { type: "user_input" }>,
+  answers: Record<string, string>,
+  multiSelections: Record<string, string[]>,
+): Record<string, string> {
+  return Object.fromEntries(request.questions.map((question) => {
+    if (!question.multiSelect) return [question.id, answers[question.id] || ""];
+    const values = [...(multiSelections[question.id] || [])];
+    const custom = answers[question.id]?.trim();
+    if (custom) values.push(custom);
+    return [question.id, values.join(", ")];
+  }));
 }
 
 function McpElicitationPanel({ request, responding, onRespond }: {

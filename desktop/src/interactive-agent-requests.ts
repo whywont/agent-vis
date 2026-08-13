@@ -9,6 +9,7 @@ export type InteractiveApprovalRequest = {
   details: string;
   decisions: InteractiveApprovalDecision[];
   permissions?: unknown;
+  providerData?: unknown;
   command?: string;
   legacy: boolean;
 };
@@ -25,6 +26,7 @@ export type InteractiveUserInputQuestion = {
   options: InteractiveUserInputOption[];
   isOther: boolean;
   isSecret: boolean;
+  multiSelect: boolean;
 };
 
 export type InteractiveUserInputRequest = {
@@ -32,6 +34,7 @@ export type InteractiveUserInputRequest = {
   requestId: unknown;
   method: string;
   questions: InteractiveUserInputQuestion[];
+  providerData?: unknown;
   autoResolutionMs?: number;
 };
 

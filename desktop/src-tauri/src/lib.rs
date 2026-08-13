@@ -17,7 +17,8 @@ mod terminal;
 mod workspace;
 
 use claude_stream::{
-    connect_claude_thread, send_claude_turn, start_claude_session, ClaudeStreamState,
+    connect_claude_thread, respond_to_claude_server_request, send_claude_turn,
+    start_claude_session, ClaudeStreamState,
 };
 use codex_app_server::{
     compact_codex_thread, connect_codex_thread, ensure_codex_shared_app_server,
@@ -145,6 +146,7 @@ pub fn run() {
             connect_claude_thread,
             start_claude_session,
             send_claude_turn,
+            respond_to_claude_server_request,
             list_agent_provider_drivers,
             list_agent_provider_inventory,
             refresh_agent_provider_inventory,

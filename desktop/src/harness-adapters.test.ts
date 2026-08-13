@@ -10,7 +10,16 @@ describe("harness adapters", () => {
   it("exposes interactive requests as an optional provider bridge", () => {
     const codex = getHarnessAdapter("codex");
     const claude = getHarnessAdapter("claude-code");
-    expect(claude.interactiveRequests).toBeUndefined();
+    expect(claude.interactiveRequests).toBeDefined();
+    expect(claude.interactiveRequests?.decode({
+      type: "control_request",
+      request_id: "claude-question-1",
+      request: {
+        subtype: "can_use_tool",
+        tool_name: "AskUserQuestion",
+        input: { questions: [{ header: "Scope", question: "Which files?", options: [] }] },
+      },
+    })).toMatchObject({ type: "user_input", requestId: "claude-question-1" });
     expect(codex.interactiveRequests?.decode({
       jsonrpc: "2.0",
       id: "approval-7",

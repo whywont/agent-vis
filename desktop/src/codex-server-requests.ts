@@ -311,6 +311,7 @@ function decodeUserInputQuestion(value: unknown): InteractiveUserInputQuestion |
     options,
     isOther: question.isOther === true,
     isSecret: question.isSecret === true,
+    multiSelect: question.multiSelect === true,
   };
 }
 

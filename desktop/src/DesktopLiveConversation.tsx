@@ -159,8 +159,27 @@ export default function DesktopLiveConversation({
       runtimeSequence.current = { scope, sequence: runtimeEvent.sequence };
       onActivity?.();
 
+      if (adapter.interactiveRequests?.isResolved?.(message)) {
+        setInteractiveRequest(null);
+        setRespondingToRequest(false);
+        onApprovalChange?.(null);
+      }
+      const serverRequest = adapter.interactiveRequests?.decode(message);
+      if (serverRequest?.type === "unsupported") {
+        setState("error");
+        setError(`${serverRequest.description} Agent Vis rejected ${serverRequest.method} so the turn will not hang.`);
+        return;
+      }
+      if (serverRequest) {
+        setInteractiveRequest(serverRequest);
+        onApprovalChange?.(serverRequest.type === "approval" ? serverRequest.command || null : null);
+      }
+
       if (provider === "claude-code") {
         if (message.type === "agent-vis/disconnected") {
+          setInteractiveRequest(null);
+          setRespondingToRequest(false);
+          onApprovalChange?.(null);
           setState("error");
           setError("Claude disconnected");
           setActiveTurnId(null);
@@ -209,6 +228,9 @@ export default function DesktopLiveConversation({
           if (output) onStreamEvent?.(streamEntry("assistant", output));
         }
         if (message.type === "result") {
+          setInteractiveRequest(null);
+          setRespondingToRequest(false);
+          onApprovalChange?.(null);
           const pending = pendingSlashCommand.current;
           const result = typeof message.result === "string" ? message.result.trim() : "";
           if (pending && result && result !== pending.output) {
@@ -236,6 +258,9 @@ export default function DesktopLiveConversation({
       const method = typeof message.method === "string" ? message.method : undefined;
       const params = asRecord(message.params) || {};
       if (method === "agent-vis/disconnected") {
+        setInteractiveRequest(null);
+        setRespondingToRequest(false);
+        onApprovalChange?.(null);
         setState("error");
         setError("Codex disconnected");
         return;
@@ -247,6 +272,9 @@ export default function DesktopLiveConversation({
         onStreamEvent?.(streamEntry("system", "Codex is working.", `codex:turn:${turn?.id || "current"}:started`));
       }
       if (method === "turn/completed") {
+        setInteractiveRequest(null);
+        setRespondingToRequest(false);
+        onApprovalChange?.(null);
         setActiveTurnId(null);
         const turn = params.turn as { id?: string; status?: string; error?: { message?: string } | string } | undefined;
         const error = typeof turn?.error === "string"
@@ -272,20 +300,6 @@ export default function DesktopLiveConversation({
       }
       const streamEvent = codexStreamEvent(method, params);
       if (streamEvent) onStreamEvent?.(streamEvent);
-      if (method === "serverRequest/resolved") {
-        setInteractiveRequest(null);
-        setRespondingToRequest(false);
-        onApprovalChange?.(null);
-      }
-      const serverRequest = adapter.interactiveRequests?.decode(message);
-      if (!serverRequest) return;
-      if (serverRequest.type === "unsupported") {
-        setState("error");
-        setError(`${serverRequest.description} Agent Vis rejected ${serverRequest.method} so the turn will not hang.`);
-        return;
-      }
-      setInteractiveRequest(serverRequest);
-      onApprovalChange?.(serverRequest.type === "approval" ? serverRequest.command || null : null);
     };
 
     void listen<AgentProviderRuntimeEvent>("agent-provider-runtime-event", (event) => {
