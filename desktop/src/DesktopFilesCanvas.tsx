@@ -34,7 +34,7 @@ export default function DesktopFilesCanvas({ events, sessionCwd, threadId }: { e
   );
   const groups = useMemo(() => groupFileChanges(fileChanges, sessionCwd), [fileChanges, sessionCwd]);
   const layout = useMemo(() => computeFilesCanvasLayout(groups), [groups]);
-  const edges = useMemo(() => buildImportEdges(groups), [groups]);
+  const edges = useMemo(() => buildImportEdges(groups, sessionCwd), [groups, sessionCwd]);
   const cardPositions = useMemo(() => {
     const positions = new Map<string, CardLayout>();
     for (const directory of layout.directories) {
