@@ -73,4 +73,27 @@ describe("shared interactive request panel", () => {
     expect(html).toContain("deploy-tools");
     expect(html).toContain("Submit to server");
   });
+
+  it("renders URL elicitations as an explicit system-browser action", () => {
+    const html = renderToStaticMarkup(
+      <InteractiveAgentRequestPanel
+        responding={false}
+        onRespond={() => {}}
+        request={{
+          type: "mcp_elicitation",
+          requestId: "mcp-url-1",
+          method: "mcpServer/elicitation/request",
+          mode: "url",
+          serverName: "identity-provider",
+          message: "Complete sign-in",
+          url: "https://example.com/authorize",
+          canAccept: true,
+          fields: [],
+        }}
+      />,
+    );
+    expect(html).toContain("Open secure request");
+    expect(html).toContain("I completed it");
+    expect(html).not.toContain('target="_blank"');
+  });
 });

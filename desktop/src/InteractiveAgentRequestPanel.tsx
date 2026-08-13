@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   mcpElicitationContent,
   mcpElicitationDefaults,
@@ -187,6 +188,8 @@ function McpElicitationPanel({ request, responding, onRespond }: {
   onRespond: (response: InteractiveAgentResponse) => void;
 }) {
   const [values, setValues] = useState<Record<string, InteractiveMcpElicitationValue>>(() => mcpElicitationDefaults(request));
+  const [openError, setOpenError] = useState("");
+  const elicitationUrl = request.mode === "url" ? request.url : undefined;
   const respond = (action: "accept" | "decline" | "cancel") => onRespond({
     type: "mcp_elicitation",
     action,
@@ -196,9 +199,21 @@ function McpElicitationPanel({ request, responding, onRespond }: {
     <aside className="desktop-codex-approval desktop-codex-user-input desktop-mcp-elicitation" aria-live="assertive">
       <span>Blocked - MCP input needed</span>
       <p><strong>{request.serverName}</strong> · {request.message}</p>
-      {request.mode === "url" && request.url && (
-        <a href={request.url} target="_blank" rel="noopener noreferrer">Open secure request</a>
+      {elicitationUrl && (
+        <button
+          type="button"
+          disabled={responding}
+          onClick={() => {
+            setOpenError("");
+            void openUrl(elicitationUrl).catch((reason: unknown) => {
+              setOpenError(reason instanceof Error ? reason.message : String(reason));
+            });
+          }}
+        >
+          Open secure request
+        </button>
       )}
+      {openError && <p className="desktop-mcp-elicitation-warning">Unable to open request: {openError}</p>}
       {request.unsupportedReason && <p className="desktop-mcp-elicitation-warning">{request.unsupportedReason}</p>}
       {request.mode === "form" && (
         <form onSubmit={(event) => { event.preventDefault(); respond("accept"); }}>

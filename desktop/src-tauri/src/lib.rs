@@ -63,6 +63,7 @@ use workspace::{
 pub fn run() {
     shell_environment::initialize_desktop_shell_environment();
     tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let search = SearchIndexState::new(app.handle())?;
             search.start_background_index();

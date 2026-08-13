@@ -872,17 +872,26 @@ fn initialize_connection(connection: &CodexAppServerConnection) -> Result<(), St
     if lifecycle.initialized {
         return Ok(());
     }
-    request(
-        connection,
-        "initialize",
-        json!({ "clientInfo": { "name": "agent_vis", "title": "Agent Vis", "version": env!("CARGO_PKG_VERSION") } }),
-    )?;
+    request(connection, "initialize", initialize_params())?;
     write_message(
         connection,
         &json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }),
     )?;
     lifecycle.initialized = true;
     Ok(())
+}
+
+fn initialize_params() -> Value {
+    json!({
+        "clientInfo": {
+            "name": "agent_vis",
+            "title": "Agent Vis",
+            "version": env!("CARGO_PKG_VERSION")
+        },
+        "capabilities": {
+            "experimentalApi": true
+        }
+    })
 }
 
 fn rollout_status_in_dir(dir: &Path, thread_id: &str) -> Option<Value> {
@@ -1276,7 +1285,7 @@ pub(crate) fn respond_to_codex_server_request(
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_vis_listener_parent, agent_vis_runtime_parent, parse_lsof_writer,
+        agent_vis_listener_parent, agent_vis_runtime_parent, initialize_params, parse_lsof_writer,
         parse_process_identity, response_error, supports_interactive_server_request,
         unsupported_server_request_response, validate_thread_id, CodexWriterInfo, ProcessIdentity,
     };
@@ -1360,6 +1369,16 @@ mod tests {
             assert!(supports_interactive_server_request(method));
         }
         assert!(!supports_interactive_server_request("item/tool/call"));
+    }
+
+    #[test]
+    fn initializes_with_experimental_server_requests_enabled() {
+        assert_eq!(
+            initialize_params()
+                .get("capabilities")
+                .and_then(|capabilities| capabilities.get("experimentalApi")),
+            Some(&json!(true))
+        );
     }
 
     #[test]
