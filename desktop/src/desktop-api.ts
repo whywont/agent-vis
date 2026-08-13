@@ -584,8 +584,8 @@ export function interruptCodexTurn(sessionKey: string, threadId: string, turnId:
   return invoke<void>("interrupt_codex_turn", { requestData: { sessionKey, threadId, turnId } });
 }
 
-export function respondToCodexApproval(sessionKey: string, requestId: unknown, result: unknown): Promise<void> {
-  return invoke<void>("respond_to_codex_approval", { response: { sessionKey, requestId, result } });
+export function respondToCodexServerRequest(sessionKey: string, requestId: unknown, result: unknown): Promise<void> {
+  return invoke<void>("respond_to_codex_server_request", { response: { sessionKey, requestId, result } });
 }
 
 export function connectClaudeThread(sessionKey: string, threadId: string, cwd: string): Promise<void> {

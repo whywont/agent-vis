@@ -6,22 +6,15 @@ import {
   getCodexThreadWriter,
   interruptCodexTurn,
   readAgentProviderRuntimeEvents,
-  respondToCodexApproval,
   takeOverCodexThread,
   type AgentProviderRuntimeEvent,
   type CodexWriterInfo,
 } from "./desktop-api";
 import { getHarnessAdapter, type LiveProvider, type ModelOption } from "./harness-adapters";
 import type { LiveStreamEntry } from "./DesktopLiveStream";
+import InteractiveAgentRequestPanel from "./InteractiveAgentRequestPanel";
 import { unappliedRuntimeEvents } from "./sequenced-runtime-events";
-import {
-  codexApprovalResult,
-  codexUserInputResult,
-  decodeCodexServerRequest,
-  type CodexApprovalDecision,
-  type CodexApprovalRequest,
-  type CodexUserInputRequest,
-} from "./codex-server-requests";
+import type { InteractiveAgentRequest, InteractiveAgentResponse } from "./interactive-agent-requests";
 
 type ConnectionState = "idle" | "connecting" | "ready" | "error";
 
@@ -71,10 +64,7 @@ export default function DesktopLiveConversation({
   const [error, setError] = useState("");
   const [externalWriter, setExternalWriter] = useState<CodexWriterInfo | null>(null);
   const [takeControlConfirmation, setTakeControlConfirmation] = useState<{ threadId: string; pid: number } | null>(null);
-  const [approval, setApproval] = useState<CodexApprovalRequest | null>(null);
-  const [userInput, setUserInput] = useState<CodexUserInputRequest | null>(null);
-  const [userInputAnswers, setUserInputAnswers] = useState<Record<string, string>>({});
-  const [userInputOther, setUserInputOther] = useState<Record<string, boolean>>({});
+  const [interactiveRequest, setInteractiveRequest] = useState<InteractiveAgentRequest | null>(null);
   const [respondingToRequest, setRespondingToRequest] = useState(false);
   const [sending, setSending] = useState(false);
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -96,8 +86,8 @@ export default function DesktopLiveConversation({
   const slashHasArguments = Boolean(slashInput && /\s/.test(slashInput));
   const showSlashPicker = matchingCommands.length > 0 && !slashHasArguments;
   useEffect(() => {
-    if (approval || userInput) onNeedsAttention?.();
-  }, [approval, onNeedsAttention, userInput]);
+    if (interactiveRequest) onNeedsAttention?.();
+  }, [interactiveRequest, onNeedsAttention]);
 
   useEffect(() => {
     if (!draft) composerRef.current?.style.removeProperty("height");
@@ -283,29 +273,19 @@ export default function DesktopLiveConversation({
       const streamEvent = codexStreamEvent(method, params);
       if (streamEvent) onStreamEvent?.(streamEvent);
       if (method === "serverRequest/resolved") {
-        setApproval(null);
-        setUserInput(null);
+        setInteractiveRequest(null);
         setRespondingToRequest(false);
         onApprovalChange?.(null);
       }
-      const serverRequest = decodeCodexServerRequest(message);
+      const serverRequest = adapter.interactiveRequests?.decode(message);
       if (!serverRequest) return;
       if (serverRequest.type === "unsupported") {
         setState("error");
         setError(`${serverRequest.description} Agent Vis rejected ${serverRequest.method} so the turn will not hang.`);
         return;
       }
-      if (serverRequest.type === "approval") {
-        setUserInput(null);
-        setApproval(serverRequest);
-        onApprovalChange?.(serverRequest.command || null);
-      } else {
-        setApproval(null);
-        setUserInput(serverRequest);
-        setUserInputAnswers({});
-        setUserInputOther({});
-        onApprovalChange?.(null);
-      }
+      setInteractiveRequest(serverRequest);
+      onApprovalChange?.(serverRequest.type === "approval" ? serverRequest.command || null : null);
     };
 
     void listen<AgentProviderRuntimeEvent>("agent-provider-runtime-event", (event) => {
@@ -347,7 +327,7 @@ export default function DesktopLiveConversation({
       cancelled = true;
       unlisten?.();
     };
-  }, [onActivity, onApprovalChange, onContextCompaction, onStreamEvent, onTimelineEvent, onTurnCompleted, provider, sessionKey]);
+  }, [adapter.interactiveRequests, onActivity, onApprovalChange, onContextCompaction, onStreamEvent, onTimelineEvent, onTurnCompleted, provider, sessionKey]);
 
   async function connect(): Promise<boolean> {
     if (connection.current) return connection.current;
@@ -515,29 +495,17 @@ export default function DesktopLiveConversation({
     setImages((current) => [...current, ...nextImages].slice(0, MAX_IMAGE_ATTACHMENTS));
   }
 
-  async function respondToApproval(decision: CodexApprovalDecision) {
-    if (!approval) return;
-    try {
-      await respondToCodexApproval(sessionKey, approval.id, codexApprovalResult(approval, decision));
-      setApproval(null);
-      onApprovalChange?.(null);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    }
-  }
-
-  async function respondToUserInput(skip = false) {
-    if (!userInput || respondingToRequest) return;
+  async function respondToInteractiveRequest(response: InteractiveAgentResponse) {
+    if (!interactiveRequest || !adapter.interactiveRequests || respondingToRequest) return;
     setRespondingToRequest(true);
     try {
-      await respondToCodexApproval(
-        sessionKey,
-        userInput.id,
-        codexUserInputResult(skip ? {} : userInputAnswers),
+      await adapter.interactiveRequests.respond(
+        { sessionKey, threadId, cwd, activeTurnId, tokenUsage },
+        interactiveRequest,
+        response,
       );
-      setUserInput(null);
-      setUserInputAnswers({});
-      setUserInputOther({});
+      setInteractiveRequest(null);
+      onApprovalChange?.(null);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -599,8 +567,8 @@ export default function DesktopLiveConversation({
           </span>
         ) : (
           <span
-            className={`desktop-codex-live-dot ${approval || userInput ? "running" : state}`}
-            aria-label={approval || userInput ? "Codex needs input" : `${provider === "codex" ? "Codex" : "Claude"} ready`}
+            className={`desktop-codex-live-dot ${interactiveRequest ? "running" : state}`}
+            aria-label={interactiveRequest ? `${adapter.label} needs input` : `${adapter.label} ready`}
             role="status"
           />
         )}
@@ -766,95 +734,13 @@ export default function DesktopLiveConversation({
           ))}
         </div>
       )}
-      {approval && (
-        <aside className="desktop-codex-approval" aria-live="assertive">
-          <span>Blocked - permission needed</span>
-          <p>{approval.reason}</p>
-          {approval.details && <code>{approval.details}</code>}
-          <div>
-            {approval.decisions.filter(isRenderableApprovalDecision).map((decision, index) => (
-              <button key={approvalDecisionKey(decision)} type="button" onClick={() => void respondToApproval(decision)}>
-                {approvalDecisionLabel(decision, index)}
-              </button>
-            ))}
-          </div>
-        </aside>
-      )}
-      {userInput && (
-        <aside className="desktop-codex-approval desktop-codex-user-input" aria-live="assertive">
-          <span>Blocked - answer needed</span>
-          <form onSubmit={(event) => { event.preventDefault(); void respondToUserInput(); }}>
-            {userInput.questions.map((question) => (
-              <fieldset key={question.id}>
-                <legend>{question.header}</legend>
-                <p>{question.question}</p>
-                {question.options.map((option) => (
-                  <label key={option.label}>
-                    <input
-                      type="radio"
-                      name={`codex-question-${question.id}`}
-                      value={option.label}
-                      checked={!userInputOther[question.id] && userInputAnswers[question.id] === option.label}
-                      onChange={() => {
-                        setUserInputAnswers((current) => ({ ...current, [question.id]: option.label }));
-                        setUserInputOther((current) => ({ ...current, [question.id]: false }));
-                      }}
-                    />
-                    <span><strong>{option.label}</strong><small>{option.description}</small></span>
-                  </label>
-                ))}
-                {question.options.length === 0 && (
-                  <input
-                    className="desktop-codex-user-input-text"
-                    type={question.isSecret ? "password" : "text"}
-                    autoComplete="off"
-                    value={userInputAnswers[question.id] || ""}
-                    onChange={(event) => setUserInputAnswers((current) => ({ ...current, [question.id]: event.target.value }))}
-                    aria-label={question.header}
-                  />
-                )}
-                {question.options.length > 0 && question.isOther && (
-                  <label>
-                    <input
-                      type="radio"
-                      name={`codex-question-${question.id}`}
-                      checked={userInputOther[question.id] === true}
-                      onChange={() => {
-                        setUserInputAnswers((current) => ({ ...current, [question.id]: "" }));
-                        setUserInputOther((current) => ({ ...current, [question.id]: true }));
-                      }}
-                    />
-                    <span className="desktop-codex-user-input-other">
-                      <strong>Other</strong>
-                      <input
-                        className="desktop-codex-user-input-text"
-                        type={question.isSecret ? "password" : "text"}
-                        autoComplete="off"
-                        value={userInputOther[question.id] ? userInputAnswers[question.id] || "" : ""}
-                        onFocus={() => setUserInputOther((current) => ({ ...current, [question.id]: true }))}
-                        onChange={(event) => {
-                          setUserInputOther((current) => ({ ...current, [question.id]: true }));
-                          setUserInputAnswers((current) => ({ ...current, [question.id]: event.target.value }));
-                        }}
-                        aria-label={`${question.header} other answer`}
-                      />
-                    </span>
-                  </label>
-                )}
-              </fieldset>
-            ))}
-            {userInput.questions.length === 0 && <p>Codex sent an empty question set.</p>}
-            <div className="desktop-codex-user-input-actions">
-              <button
-                type="submit"
-                disabled={respondingToRequest || userInput.questions.length === 0 || userInput.questions.some((question) => !userInputAnswers[question.id]?.trim())}
-              >
-                Submit answers
-              </button>
-              <button type="button" disabled={respondingToRequest} onClick={() => void respondToUserInput(true)}>Skip</button>
-            </div>
-          </form>
-        </aside>
+      {interactiveRequest && (
+        <InteractiveAgentRequestPanel
+          key={`${provider}:${String(interactiveRequest.requestId)}`}
+          request={interactiveRequest}
+          responding={respondingToRequest}
+          onRespond={(response) => void respondToInteractiveRequest(response)}
+        />
       )}
     </section>
   );
@@ -933,34 +819,6 @@ function fileAsDataUrl(file: File): Promise<string> {
     reader.onerror = () => reject(new Error("Could not read image."));
     reader.readAsDataURL(file);
   });
-}
-
-function isRenderableApprovalDecision(decision: CodexApprovalDecision): boolean {
-  if (typeof decision === "string") return [
-    "accept", "acceptForSession", "decline", "cancel",
-    "approved", "approved_for_session", "denied", "abort",
-  ].includes(decision);
-  return "acceptWithExecpolicyAmendment" in decision
-    || "applyNetworkPolicyAmendment" in decision
-    || "approved_execpolicy_amendment" in decision
-    || "network_policy_amendment" in decision;
-}
-
-function approvalDecisionKey(decision: CodexApprovalDecision): string {
-  return typeof decision === "string" ? decision : JSON.stringify(decision);
-}
-
-function approvalDecisionLabel(decision: CodexApprovalDecision, index: number): string {
-  if (decision === "accept" || decision === "approved") return "1. Approve";
-  if (decision === "acceptForSession" || decision === "approved_for_session" || (typeof decision === "object" && (
-    "acceptWithExecpolicyAmendment" in decision
-    || "applyNetworkPolicyAmendment" in decision
-    || "approved_execpolicy_amendment" in decision
-    || "network_policy_amendment" in decision
-  ))) return "2. Approve, don't ask again";
-  if (decision === "decline" || decision === "denied") return "Decline";
-  if (decision === "cancel" || decision === "abort") return "Cancel turn";
-  return `${index + 1}. Approve`;
 }
 
 function isCodexCompaction(item: unknown): boolean {

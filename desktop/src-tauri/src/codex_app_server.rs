@@ -89,7 +89,7 @@ pub(crate) struct CodexTurnRequest {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct CodexApprovalResponse {
+pub(crate) struct CodexServerRequestResponse {
     session_key: String,
     request_id: Value,
     result: Value,
@@ -197,6 +197,7 @@ fn supports_interactive_server_request(method: &str) -> bool {
             | "item/fileChange/requestApproval"
             | "item/permissions/requestApproval"
             | "item/tool/requestUserInput"
+            | "mcpServer/elicitation/request"
             | "applyPatchApproval"
             | "execCommandApproval"
     )
@@ -1260,10 +1261,10 @@ pub(crate) fn interrupt_codex_turn(
 }
 
 #[tauri::command]
-pub(crate) fn respond_to_codex_approval(
+pub(crate) fn respond_to_codex_server_request(
     app: AppHandle,
     state: State<'_, CodexAppServerState>,
-    response: CodexApprovalResponse,
+    response: CodexServerRequestResponse,
 ) -> Result<(), String> {
     let connection = connection_for(&app, &state, &response.session_key)?;
     write_message(
@@ -1352,6 +1353,7 @@ mod tests {
             "item/fileChange/requestApproval",
             "item/permissions/requestApproval",
             "item/tool/requestUserInput",
+            "mcpServer/elicitation/request",
             "applyPatchApproval",
             "execCommandApproval",
         ] {
