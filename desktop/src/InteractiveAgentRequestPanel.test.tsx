@@ -74,6 +74,35 @@ describe("shared interactive request panel", () => {
     expect(html).toContain("Submit to server");
   });
 
+  it("renders compatible OpenAI extended forms through the safe form controls", () => {
+    const html = renderToStaticMarkup(
+      <InteractiveAgentRequestPanel
+        responding={false}
+        onRespond={() => {}}
+        request={{
+          type: "mcp_elicitation",
+          requestId: "mcp-openai-1",
+          method: "mcpServer/elicitation/request",
+          mode: "openai/form",
+          serverName: "deploy-tools",
+          message: "Choose a region",
+          canAccept: true,
+          fields: [{
+            id: "region",
+            title: "Region",
+            description: "Deployment region",
+            required: true,
+            kind: "single_select",
+            options: [{ value: "us-east-1", label: "US East" }],
+          }],
+        }}
+      />,
+    );
+    expect(html).toContain("Choose a region");
+    expect(html).toContain("Submit to server");
+    expect(html).not.toContain("I completed it");
+  });
+
   it("renders URL elicitations as an explicit system-browser action", () => {
     const html = renderToStaticMarkup(
       <InteractiveAgentRequestPanel

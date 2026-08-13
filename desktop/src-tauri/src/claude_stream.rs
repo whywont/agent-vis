@@ -121,7 +121,7 @@ fn unsupported_control_request_response(message: &Value) -> Option<Value> {
         .and_then(|request| request.get("subtype"))
         .and_then(Value::as_str)
         .unwrap_or("unknown");
-    (subtype != "can_use_tool").then(|| {
+    (!matches!(subtype, "can_use_tool" | "elicitation")).then(|| {
         json!({
             "type": "control_response",
             "response": {
@@ -366,6 +366,14 @@ mod tests {
                 "type": "control_request",
                 "request_id": "permission-1",
                 "request": { "subtype": "can_use_tool" }
+            })),
+            None
+        );
+        assert_eq!(
+            unsupported_control_request_response(&json!({
+                "type": "control_request",
+                "request_id": "elicitation-1",
+                "request": { "subtype": "elicitation" }
             })),
             None
         );

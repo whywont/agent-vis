@@ -159,7 +159,7 @@ describe("Codex server request dispatch", () => {
       .toThrow("does not match");
   });
 
-  it("only accepts safe MCP URL requests and leaves extended forms rejectable", () => {
+  it("only accepts safe MCP URL requests and compatible extended forms", () => {
     expect(decodeCodexServerRequest({
       id: "mcp-url",
       method: "mcpServer/elicitation/request",
@@ -173,8 +173,38 @@ describe("Codex server request dispatch", () => {
     expect(decodeCodexServerRequest({
       id: "mcp-openai",
       method: "mcpServer/elicitation/request",
-      params: { mode: "openai/form", requestedSchema: {} },
-    })).toMatchObject({ type: "mcp_elicitation", mode: "openai/form", canAccept: false });
+      params: {
+        mode: "openai/form",
+        requestedSchema: {
+          type: "object",
+          required: ["region"],
+          properties: {
+            region: { type: "string", title: "Region", enum: ["us-east-1", "us-west-2"] },
+          },
+        },
+      },
+    })).toMatchObject({
+      type: "mcp_elicitation",
+      mode: "openai/form",
+      canAccept: true,
+      fields: [{ id: "region", kind: "single_select", required: true }],
+    });
+    expect(decodeCodexServerRequest({
+      id: "mcp-openai-extended",
+      method: "mcpServer/elicitation/request",
+      params: {
+        mode: "openai/form",
+        requestedSchema: {
+          type: "object",
+          properties: { credentials: { type: "object" } },
+        },
+      },
+    })).toMatchObject({
+      type: "mcp_elicitation",
+      mode: "openai/form",
+      canAccept: false,
+      unsupportedReason: expect.stringContaining("extended form"),
+    });
   });
 
   it("ignores notifications and responses", () => {

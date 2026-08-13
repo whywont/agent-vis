@@ -15,6 +15,7 @@ import {
   startCodexReview,
 } from "./desktop-api";
 import {
+  claudeElicitationCompletionResponse,
   claudeServerRequestResult,
   decodeClaudeServerRequest,
   isClaudeServerRequestResolved,
@@ -60,7 +61,11 @@ export interface HarnessAdapter {
   commandDescription(command: string): string;
   interactiveRequests?: {
     decode(message: Record<string, unknown>): DecodedInteractiveAgentRequest | null;
-    isResolved?(message: Record<string, unknown>): boolean;
+    isResolved?(message: Record<string, unknown>, request: InteractiveAgentRequest | null): boolean;
+    completionResponse?(
+      message: Record<string, unknown>,
+      request: InteractiveAgentRequest | null,
+    ): InteractiveAgentResponse | null;
     respond(
       context: HarnessContext,
       request: InteractiveAgentRequest,
@@ -160,6 +165,7 @@ const claudeAdapter: HarnessAdapter = {
   interactiveRequests: {
     decode: decodeClaudeServerRequest,
     isResolved: isClaudeServerRequestResolved,
+    completionResponse: claudeElicitationCompletionResponse,
     async respond(context, request, response) {
       await respondToClaudeServerRequest(
         context.sessionKey,

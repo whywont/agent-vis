@@ -10,7 +10,7 @@ import {
   type AgentProviderRuntimeEvent,
   type CodexWriterInfo,
 } from "./desktop-api";
-import { getHarnessAdapter, type LiveProvider, type ModelOption } from "./harness-adapters";
+import { getHarnessAdapter, type HarnessContext, type LiveProvider, type ModelOption } from "./harness-adapters";
 import type { LiveStreamEntry } from "./DesktopLiveStream";
 import InteractiveAgentRequestPanel from "./InteractiveAgentRequestPanel";
 import { unappliedRuntimeEvents } from "./sequenced-runtime-events";
@@ -58,13 +58,17 @@ export default function DesktopLiveConversation({
   onTurnCompleted?: () => void;
 }) {
   const adapter = getHarnessAdapter(provider);
+  const harnessContextRef = useRef<HarnessContext>({ sessionKey, threadId, cwd, activeTurnId: null, tokenUsage });
+  harnessContextRef.current = { sessionKey, threadId, cwd, activeTurnId: null, tokenUsage };
   const [state, setState] = useState<ConnectionState>("idle");
   const [draft, setDraft] = useState(initialDraft);
   const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
+  harnessContextRef.current.activeTurnId = activeTurnId;
   const [error, setError] = useState("");
   const [externalWriter, setExternalWriter] = useState<CodexWriterInfo | null>(null);
   const [takeControlConfirmation, setTakeControlConfirmation] = useState<{ threadId: string; pid: number } | null>(null);
   const [interactiveRequest, setInteractiveRequest] = useState<InteractiveAgentRequest | null>(null);
+  const interactiveRequestRef = useRef<InteractiveAgentRequest | null>(null);
   const [respondingToRequest, setRespondingToRequest] = useState(false);
   const [sending, setSending] = useState(false);
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -88,6 +92,10 @@ export default function DesktopLiveConversation({
   useEffect(() => {
     if (interactiveRequest) onNeedsAttention?.();
   }, [interactiveRequest, onNeedsAttention]);
+
+  useEffect(() => {
+    interactiveRequestRef.current = interactiveRequest;
+  }, [interactiveRequest]);
 
   useEffect(() => {
     if (!draft) composerRef.current?.style.removeProperty("height");
@@ -159,7 +167,28 @@ export default function DesktopLiveConversation({
       runtimeSequence.current = { scope, sequence: runtimeEvent.sequence };
       onActivity?.();
 
-      if (adapter.interactiveRequests?.isResolved?.(message)) {
+      const activeInteractiveRequest = interactiveRequestRef.current;
+      const completionResponse = adapter.interactiveRequests?.completionResponse?.(
+        message,
+        activeInteractiveRequest,
+      );
+      if (completionResponse && activeInteractiveRequest && adapter.interactiveRequests) {
+        setRespondingToRequest(true);
+        void adapter.interactiveRequests.respond(
+          harnessContextRef.current,
+          activeInteractiveRequest,
+          completionResponse,
+        ).then(() => {
+          if (interactiveRequestRef.current?.requestId !== activeInteractiveRequest.requestId) return;
+          interactiveRequestRef.current = null;
+          setInteractiveRequest(null);
+          onApprovalChange?.(null);
+        }).catch((reason: unknown) => {
+          setError(reason instanceof Error ? reason.message : String(reason));
+        }).finally(() => setRespondingToRequest(false));
+      }
+      if (!completionResponse && adapter.interactiveRequests?.isResolved?.(message, activeInteractiveRequest)) {
+        interactiveRequestRef.current = null;
         setInteractiveRequest(null);
         setRespondingToRequest(false);
         onApprovalChange?.(null);
@@ -171,6 +200,7 @@ export default function DesktopLiveConversation({
         return;
       }
       if (serverRequest) {
+        interactiveRequestRef.current = serverRequest;
         setInteractiveRequest(serverRequest);
         onApprovalChange?.(serverRequest.type === "approval" ? serverRequest.command || null : null);
       }
@@ -518,6 +548,7 @@ export default function DesktopLiveConversation({
         interactiveRequest,
         response,
       );
+      interactiveRequestRef.current = null;
       setInteractiveRequest(null);
       onApprovalChange?.(null);
     } catch (reason) {

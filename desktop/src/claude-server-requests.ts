@@ -5,6 +5,7 @@ import type {
   InteractiveApprovalRequest,
   InteractiveUserInputQuestion,
 } from "./interactive-agent-requests";
+import { decodeMcpElicitationRequest } from "./mcp-elicitation-requests";
 
 type ClaudeProviderData = {
   input: Record<string, unknown>;
@@ -20,6 +21,16 @@ export function decodeClaudeServerRequest(
   const subtype = stringValue(request?.subtype);
   if (!requestId || !request) return null;
   if (subtype !== "can_use_tool") {
+    if (subtype === "elicitation") {
+      return decodeMcpElicitationRequest(requestId, "control_request/elicitation", {
+        mode: request.mode,
+        serverName: request.mcp_server_name,
+        message: request.message,
+        url: request.url,
+        elicitationId: request.elicitation_id,
+        requestedSchema: request.requested_schema,
+      });
+    }
     return {
       type: "unsupported",
       requestId,
@@ -75,8 +86,13 @@ export function claudeServerRequestResult(
   if (request.type !== response.type) {
     throw new Error("Interactive response does not match the active Claude request.");
   }
+  if (request.type === "mcp_elicitation" && response.type === "mcp_elicitation") {
+    return response.action === "accept"
+      ? { action: response.action, content: response.content }
+      : { action: response.action };
+  }
   if (request.type === "mcp_elicitation") {
-    throw new Error("Claude does not support this interactive request type.");
+    throw new Error("Interactive response does not match the active Claude request.");
   }
   const providerData = decodeProviderData(request.providerData);
   if (!providerData) throw new Error("Claude request transport data is unavailable.");
@@ -110,8 +126,29 @@ export function claudeServerRequestResult(
   throw new Error("Claude does not support this interactive request type.");
 }
 
-export function isClaudeServerRequestResolved(message: Record<string, unknown>): boolean {
-  return message.type === "control_cancel_request";
+export function isClaudeServerRequestResolved(
+  message: Record<string, unknown>,
+  request: InteractiveAgentRequest | null,
+): boolean {
+  if (message.type === "control_cancel_request") {
+    return request !== null && message.request_id === request.requestId;
+  }
+  return claudeElicitationCompletionResponse(message, request) !== null;
+}
+
+export function claudeElicitationCompletionResponse(
+  message: Record<string, unknown>,
+  request: InteractiveAgentRequest | null,
+): InteractiveAgentResponse | null {
+  if (
+    message.type !== "system"
+    || message.subtype !== "elicitation_complete"
+    || request?.type !== "mcp_elicitation"
+    || request.mode !== "url"
+    || !request.elicitationId
+    || message.elicitation_id !== request.elicitationId
+  ) return null;
+  return { type: "mcp_elicitation", action: "accept", content: {} };
 }
 
 function decodeClaudeQuestion(value: unknown, index: number): InteractiveUserInputQuestion | null {

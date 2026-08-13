@@ -190,6 +190,7 @@ function McpElicitationPanel({ request, responding, onRespond }: {
   const [values, setValues] = useState<Record<string, InteractiveMcpElicitationValue>>(() => mcpElicitationDefaults(request));
   const [openError, setOpenError] = useState("");
   const elicitationUrl = request.mode === "url" ? request.url : undefined;
+  const isForm = request.mode === "form" || request.mode === "openai/form";
   const respond = (action: "accept" | "decline" | "cancel") => onRespond({
     type: "mcp_elicitation",
     action,
@@ -215,7 +216,7 @@ function McpElicitationPanel({ request, responding, onRespond }: {
       )}
       {openError && <p className="desktop-mcp-elicitation-warning">Unable to open request: {openError}</p>}
       {request.unsupportedReason && <p className="desktop-mcp-elicitation-warning">{request.unsupportedReason}</p>}
-      {request.mode === "form" && (
+      {isForm && (
         <form onSubmit={(event) => { event.preventDefault(); respond("accept"); }}>
           {request.fields.map((field) => (
             <McpElicitationFieldControl
@@ -238,7 +239,7 @@ function McpElicitationPanel({ request, responding, onRespond }: {
           </div>
         </form>
       )}
-      {request.mode !== "form" && (
+      {!isForm && (
         <div>
           {request.canAccept && <button type="button" disabled={responding} onClick={() => respond("accept")}>I completed it</button>}
           <button type="button" disabled={responding} onClick={() => respond("decline")}>Decline</button>

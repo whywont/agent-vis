@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  claudeElicitationCompletionResponse,
   claudeServerRequestResult,
   decodeClaudeServerRequest,
   isClaudeServerRequestResolved,
@@ -85,8 +86,91 @@ describe("Claude interactive request bridge", () => {
       .toEqual({ behavior: "deny", message: "User cancelled the turn.", interrupt: true });
   });
 
+  it("translates Claude MCP form and URL elicitations", () => {
+    const request = decodeClaudeServerRequest({
+      type: "control_request",
+      request_id: "claude-elicitation-1",
+      request: {
+        subtype: "elicitation",
+        mcp_server_name: "deploy-tools",
+        message: "Choose a deployment region",
+        mode: "form",
+        requested_schema: {
+          type: "object",
+          required: ["region"],
+          properties: {
+            region: { type: "string", enum: ["us-east-1", "us-west-2"] },
+          },
+        },
+      },
+    });
+    expect(request).toMatchObject({
+      type: "mcp_elicitation",
+      requestId: "claude-elicitation-1",
+      method: "control_request/elicitation",
+      serverName: "deploy-tools",
+      mode: "form",
+      canAccept: true,
+      fields: [{ id: "region", kind: "single_select", required: true }],
+    });
+    if (request?.type !== "mcp_elicitation") return;
+    expect(claudeServerRequestResult(request, {
+      type: "mcp_elicitation",
+      action: "accept",
+      content: { region: "us-west-2" },
+    })).toEqual({ action: "accept", content: { region: "us-west-2" } });
+    expect(claudeServerRequestResult(request, {
+      type: "mcp_elicitation",
+      action: "decline",
+      content: {},
+    })).toEqual({ action: "decline" });
+
+    expect(decodeClaudeServerRequest({
+      type: "control_request",
+      request_id: "claude-elicitation-url",
+      request: {
+        subtype: "elicitation",
+        mcp_server_name: "identity-provider",
+        message: "Sign in",
+        mode: "url",
+        url: "https://example.com/authorize",
+        elicitation_id: "auth-1",
+      },
+    })).toMatchObject({
+      type: "mcp_elicitation",
+      mode: "url",
+      url: "https://example.com/authorize",
+      elicitationId: "auth-1",
+      canAccept: true,
+    });
+  });
+
   it("recognizes cancellation and rejects unknown control requests", () => {
-    expect(isClaudeServerRequestResolved({ type: "control_cancel_request", request_id: "r-1" })).toBe(true);
+    const urlRequest = decodeClaudeServerRequest({
+      type: "control_request",
+      request_id: "r-1",
+      request: {
+        subtype: "elicitation",
+        mode: "url",
+        url: "https://example.com/authorize",
+        elicitation_id: "auth-1",
+      },
+    });
+    expect(urlRequest?.type).toBe("mcp_elicitation");
+    if (!urlRequest || urlRequest.type === "unsupported") return;
+    expect(isClaudeServerRequestResolved({ type: "control_cancel_request", request_id: "r-1" }, urlRequest)).toBe(true);
+    const completion = {
+      type: "system",
+      subtype: "elicitation_complete",
+      elicitation_id: "auth-1",
+    };
+    expect(isClaudeServerRequestResolved(completion, urlRequest)).toBe(true);
+    expect(claudeElicitationCompletionResponse(completion, urlRequest)).toEqual({
+      type: "mcp_elicitation",
+      action: "accept",
+      content: {},
+    });
+    expect(isClaudeServerRequestResolved({ ...completion, elicitation_id: "other" }, urlRequest)).toBe(false);
     expect(decodeClaudeServerRequest({
       type: "control_request",
       request_id: "r-2",

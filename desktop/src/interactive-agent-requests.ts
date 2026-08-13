@@ -71,6 +71,7 @@ export type InteractiveMcpElicitationRequest = {
   message: string;
   fields: InteractiveMcpElicitationField[];
   url?: string;
+  elicitationId?: string;
   canAccept: boolean;
   unsupportedReason?: string;
 };
