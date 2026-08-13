@@ -12,6 +12,7 @@ mod session_history;
 mod sessions;
 mod settings;
 mod shell_environment;
+mod sleep_inhibitor;
 mod terminal;
 mod workspace;
 
