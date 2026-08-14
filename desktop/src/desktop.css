@@ -1346,6 +1346,38 @@ body.resizing .desktop-collab-column-resize::after { background: rgba(224,184,92
   border-left-color: var(--accent);
 }
 
+.entry-copy-message-btn {
+  flex-shrink: 0;
+  padding: 2px 5px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font: 9px/1.2 var(--font-mono);
+  opacity: 0;
+  transition: opacity 0.1s, color 0.1s, border-color 0.1s, background 0.1s;
+}
+
+.entry-header:hover .entry-copy-message-btn,
+.entry-copy-message-btn:focus-visible,
+.entry-copy-message-btn.copied {
+  opacity: 1;
+}
+
+.entry-copy-message-btn:hover,
+.entry-copy-message-btn:focus-visible {
+  border-color: var(--border-light);
+  background: var(--bg-card);
+  color: var(--green);
+}
+
+.entry-copy-message-btn.copied { color: var(--green); }
+
+@media (hover: none) {
+  .entry-copy-message-btn { opacity: 1; }
+}
+
 .badge-write {
   color: var(--accent);
 }

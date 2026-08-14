@@ -330,6 +330,7 @@ function DesktopTimelineEntry({
   onExpandedChange: (expanded: boolean) => void;
 }) {
   const [dismissedMatchRequest, setDismissedMatchRequest] = useState<string | null>(null);
+  const [messageCopied, setMessageCopied] = useState(false);
   const highlightKey = `hl:${sessionCwd}:${event.ts}`;
   const [highlighted, setHighlighted] = useState(() => localStorage.getItem(highlightKey) === "1");
   const forcedOpen = matched && matchRequestKey !== dismissedMatchRequest;
@@ -342,6 +343,15 @@ function DesktopTimelineEntry({
       if (next) localStorage.setItem(highlightKey, "1");
       else localStorage.removeItem(highlightKey);
       return next;
+    });
+  }
+
+  function copyAgentMessage(clickEvent: ReactMouseEvent<HTMLButtonElement>) {
+    clickEvent.stopPropagation();
+    if (event.kind !== "agent_message") return;
+    navigator.clipboard.writeText(event.text).then(() => {
+      setMessageCopied(true);
+      window.setTimeout(() => setMessageCopied(false), 1200);
     });
   }
 
@@ -419,6 +429,17 @@ function DesktopTimelineEntry({
         >
           ★
         </button>
+        {event.kind === "agent_message" && (
+          <button
+            type="button"
+            className={`entry-copy-message-btn${messageCopied ? " copied" : ""}`}
+            onClick={copyAgentMessage}
+            title={messageCopied ? "Copied agent message" : "Copy agent message"}
+            aria-label={messageCopied ? "Copied agent message" : "Copy agent message"}
+          >
+            {messageCopied ? "copied" : "copy"}
+          </button>
+        )}
       </div>
       <div className={`entry-body${collapsed ? " collapsed" : ""}${event.kind === "file_change" ? " diff-body" : ""}`}>
         <div className="entry-body-section">
