@@ -3318,6 +3318,15 @@ body.resizing .desktop-collab-column-resize::after { background: rgba(224,184,92
   margin: 0;
 }
 
+.desktop-terminal-panel.desktop-terminal-minimized {
+  min-height: 29px;
+}
+
+.desktop-terminal-minimized .desktop-terminal-resize-handle,
+.desktop-terminal-minimized .desktop-terminal-pane-grid {
+  display: none;
+}
+
 /* Keep inactive session terminals alive without leaving an empty dock onscreen.
    Returning to their session reuses the same PTY and xterm instance. */
 .desktop-terminal-parked { display: none; }
@@ -3415,11 +3424,10 @@ body.resizing .desktop-collab-column-resize::after { background: rgba(224,184,92
   opacity: 0.8;
 }
 
+.desktop-terminal-minimize,
 .desktop-terminal-close {
   width: 24px;
   height: 24px;
-  margin-left: auto;
-  margin-right: 4px;
   border: 0;
   border-radius: 4px;
   background: transparent;
@@ -3428,6 +3436,10 @@ body.resizing .desktop-collab-column-resize::after { background: rgba(224,184,92
   font: 18px/1 var(--font-mono);
 }
 
+.desktop-terminal-minimize { margin-left: auto; }
+.desktop-terminal-close { margin-right: 4px; }
+
+.desktop-terminal-minimize:hover,
 .desktop-terminal-close:hover {
   background: #333333;
   color: #ffffff;
