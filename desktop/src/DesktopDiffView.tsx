@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import ColoredText from "@/components/ColoredText";
 import { explainDiff, readWorkspaceFile, saveWorkspaceFile } from "./desktop-api";
 import {
@@ -9,6 +9,7 @@ import {
   saveDiffExplanation,
 } from "./diff-explanation-cache";
 import { compactWorkspacePath } from "./workspace-path";
+import { expandedPatchWindowWidth, requestPatchWindowWidth } from "./patch-window-width";
 
 interface DiffBlock {
   action: "update" | "add" | "delete";
@@ -54,6 +55,7 @@ export default function DesktopDiffView({
   onOpenFile,
   snapshotContent,
   collapsibleFiles = false,
+  expandWindow = false,
 }: {
   patch: string;
   contextText?: string;
@@ -61,12 +63,46 @@ export default function DesktopDiffView({
   onOpenFile?: (filepath: string) => void;
   snapshotContent?: string | null;
   collapsibleFiles?: boolean;
+  expandWindow?: boolean;
 }) {
   const blocks = useMemo(() => parseDiff(patch), [patch]);
+  const viewRef = useRef<HTMLDivElement>(null);
+  const widthRequest = useRef(Symbol("timeline-patch-width"));
+
+  useLayoutEffect(() => {
+    if (!collapsibleFiles || !expandWindow || !viewRef.current) return;
+    const element = viewRef.current;
+    const requestToken = widthRequest.current;
+    let frame = 0;
+    const measure = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        const visible = element.getClientRects().length > 0 && element.clientWidth > 0;
+        requestPatchWindowWidth(
+          requestToken,
+          visible ? expandedPatchWindowWidth(window.innerWidth, element.scrollWidth, element.clientWidth) : null,
+        );
+      });
+    };
+    const resizeObserver = new ResizeObserver(measure);
+    const mutationObserver = new MutationObserver(measure);
+    resizeObserver.observe(element);
+    mutationObserver.observe(element, { attributes: true, childList: true, subtree: true });
+    window.addEventListener("resize", measure);
+    measure();
+    return () => {
+      window.cancelAnimationFrame(frame);
+      resizeObserver.disconnect();
+      mutationObserver.disconnect();
+      window.removeEventListener("resize", measure);
+      requestPatchWindowWidth(requestToken, null);
+    };
+  }, [collapsibleFiles, expandWindow, patch]);
+
   if (!patch) return <em>no patch content</em>;
   if (blocks.length === 0) return <>{patch}</>;
   return (
-    <>
+    <div className="desktop-diff-view" ref={viewRef}>
       {blocks.map((block) => {
         const blockPatch = block.lines.map((line) => line.text).join("\n");
         const explanationKey = diffExplanationKey({
@@ -89,7 +125,7 @@ export default function DesktopDiffView({
           />
         );
       })}
-    </>
+    </div>
   );
 }
 

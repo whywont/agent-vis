@@ -2271,6 +2271,14 @@ body.resizing .desktop-collab-column-resize::after { background: rgba(224,184,92
 }
 .timeline-entry .entry-body.diff-body > .entry-body-section { padding: 0; }
 .timeline-entry .entry-body.diff-body .diff-block:last-child { margin-bottom: 0; }
+.timeline-entry .entry-body.diff-body .desktop-diff-view { width: 100%; min-width: 0; }
+.timeline-entry .entry-body.diff-body .diff-content {
+  width: max-content;
+  min-width: 100%;
+  max-height: none;
+  overflow: visible;
+}
+.timeline-entry .entry-body.diff-body .diff-lines-inner { width: max-content; min-width: 100%; }
 
 .desktop-diff-actions {
   display: flex;
