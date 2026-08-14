@@ -444,7 +444,7 @@ function DesktopTimelineEntry({
       <div className={`entry-body${collapsed ? " collapsed" : ""}${event.kind === "file_change" ? " diff-body" : ""}`}>
         <div className="entry-body-section">
           {event.kind === "file_change" ? (
-            <DesktopDiffView patch={event.patch} contextText={contextText} workspaceRoot={sessionCwd} onOpenFile={onOpenFile} />
+            <DesktopDiffView patch={event.patch} contextText={contextText} workspaceRoot={sessionCwd} onOpenFile={onOpenFile} collapsibleFiles />
           ) : event.kind === "shell_command" ? (
             <>
               {event.workdir && <><span className="desktop-workdir">[{event.workdir || sessionCwd}]</span>{"\n"}</>}

@@ -2243,6 +2243,35 @@ body.resizing .desktop-collab-column-resize::after { background: rgba(224,184,92
 .desktop-diff-path:hover:not(:disabled) { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
 .desktop-diff-path:disabled { cursor: default; }
 
+.desktop-diff-collapse {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.desktop-diff-collapse:hover { background: var(--bg-hover); color: var(--text); }
+.desktop-diff-collapse span { font: 19px/1 var(--font-mono); transform: rotate(90deg); transition: transform 0.12s ease; }
+.diff-block.collapsed .desktop-diff-collapse span { transform: rotate(0); }
+.diff-block.collapsed .diff-file-header { border-radius: 3px; }
+
+.timeline-entry .entry-body.diff-body {
+  margin: 4px 0 8px;
+  padding: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.timeline-entry .entry-body.diff-body > .entry-body-section { padding: 0; }
+.timeline-entry .entry-body.diff-body .diff-block:last-child { margin-bottom: 0; }
+
 .desktop-diff-actions {
   display: flex;
   align-items: center;

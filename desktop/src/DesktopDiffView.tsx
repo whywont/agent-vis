@@ -53,12 +53,14 @@ export default function DesktopDiffView({
   workspaceRoot,
   onOpenFile,
   snapshotContent,
+  collapsibleFiles = false,
 }: {
   patch: string;
   contextText?: string;
   workspaceRoot: string;
   onOpenFile?: (filepath: string) => void;
   snapshotContent?: string | null;
+  collapsibleFiles?: boolean;
 }) {
   const blocks = useMemo(() => parseDiff(patch), [patch]);
   if (!patch) return <em>no patch content</em>;
@@ -82,6 +84,7 @@ export default function DesktopDiffView({
             explanationKey={explanationKey}
             onOpenFile={onOpenFile}
             snapshotContent={snapshotContent}
+            collapsible={collapsibleFiles}
             key={explanationKey}
           />
         );
@@ -97,6 +100,7 @@ function DesktopDiffBlock({
   explanationKey,
   onOpenFile,
   snapshotContent,
+  collapsible,
 }: {
   block: DiffBlock;
   contextText?: string;
@@ -104,6 +108,7 @@ function DesktopDiffBlock({
   explanationKey: string;
   onOpenFile?: (filepath: string) => void;
   snapshotContent?: string | null;
+  collapsible: boolean;
 }) {
   const detailedExplanationKey = detailedDiffExplanationKey(explanationKey);
   const [copied, setCopied] = useState(false);
@@ -122,6 +127,7 @@ function DesktopDiffBlock({
   const [editContent, setEditContent] = useState("");
   const [editError, setEditError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
   const originalContentRef = useRef("");
   const patch = block.lines.map((line) => line.text).join("\n");
 
@@ -251,8 +257,20 @@ function DesktopDiffBlock({
   const displayPath = compactWorkspacePath(block.filepath, workspaceRoot);
 
   return (
-    <div className="diff-block">
+    <div className={`diff-block${collapsed ? " collapsed" : ""}`}>
       <div className="diff-file-header">
+        {collapsible && (
+          <button
+            type="button"
+            className="desktop-diff-collapse"
+            onClick={() => setCollapsed((current) => !current)}
+            aria-expanded={!collapsed}
+            aria-label={`${collapsed ? "Expand" : "Collapse"} ${displayPath} changes`}
+            title={`${collapsed ? "Expand" : "Collapse"} file changes`}
+          >
+            <span aria-hidden="true">›</span>
+          </button>
+        )}
         <span className={`diff-file-action action-${block.action}`}>{block.action}</span>
         <button type="button" className="desktop-diff-path" disabled={!onOpenFile || block.action === "delete"} onClick={() => onOpenFile?.(block.filepath)} title={block.action === "delete" ? `${block.filepath} was deleted` : `Open ${block.filepath} in Editor`}>{displayPath}</button>
         <div className="desktop-diff-actions">
@@ -297,6 +315,7 @@ function DesktopDiffBlock({
           )}
         </div>
       </div>
+      <div className="desktop-diff-block-body" hidden={collapsed}>
       {editing ? (
         <textarea
           className="desktop-full-file-editor"
@@ -373,6 +392,7 @@ function DesktopDiffBlock({
           )}
         </div>
       )}
+      </div>
     </div>
   );
 }
