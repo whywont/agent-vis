@@ -2287,6 +2287,30 @@ body.resizing .desktop-collab-column-resize::after { background: rgba(224,184,92
   white-space: pre-wrap;
 }
 
+.desktop-diff-context-placeholder {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 24px;
+  color: var(--text-dim);
+  font-style: italic;
+  white-space: normal !important;
+}
+.desktop-diff-context-placeholder button,
+.desktop-diff-context-expanded > button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-style: normal;
+}
+.desktop-diff-context-expanded > button {
+  display: block;
+  margin: 5px 0 7px;
+}
+
 .desktop-diff-actions {
   display: flex;
   align-items: center;

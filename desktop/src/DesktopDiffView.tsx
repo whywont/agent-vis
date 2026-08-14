@@ -8,6 +8,7 @@ import {
   removeDiffExplanation,
   saveDiffExplanation,
 } from "./diff-explanation-cache";
+import { shouldCompactDiffContextLine } from "./diff-display";
 import { compactWorkspacePath } from "./workspace-path";
 
 interface DiffBlock {
@@ -337,16 +338,7 @@ function DesktopDiffBlock({
         <div className="diff-content">
           <div className="diff-lines-inner">
             {block.lines.map((line, index) => (
-              <div className={`diff-line ${line.type}`} key={index}>
-                {line.type === "added" || line.type === "removed" ? (
-                  <>
-                    <span className="diff-prefix">{line.text[0]}</span>
-                    <ColoredText text={line.text.slice(1)} tone="code" />
-                  </>
-                ) : (
-                  <ColoredText text={line.text} tone="code" />
-                )}
-              </div>
+              <DesktopDiffLine line={line} compactOversizedContext={collapsible} key={index} />
             ))}
           </div>
         </div>
@@ -393,6 +385,42 @@ function DesktopDiffBlock({
         </div>
       )}
       </div>
+    </div>
+  );
+}
+
+function DesktopDiffLine({
+  line,
+  compactOversizedContext,
+}: {
+  line: DiffBlock["lines"][number];
+  compactOversizedContext: boolean;
+}) {
+  const [showOversizedContext, setShowOversizedContext] = useState(false);
+  const oversizedContext = compactOversizedContext && shouldCompactDiffContextLine(line.type, line.text);
+
+  if (oversizedContext && !showOversizedContext) {
+    return (
+      <div className="diff-line context desktop-diff-context-placeholder">
+        <span>… unchanged context line ({line.text.length.toLocaleString()} characters)</span>
+        <button type="button" onClick={() => setShowOversizedContext(true)}>show</button>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`diff-line ${line.type}${oversizedContext ? " desktop-diff-context-expanded" : ""}`}>
+      {oversizedContext && (
+        <button type="button" onClick={() => setShowOversizedContext(false)}>hide long context</button>
+      )}
+      {line.type === "added" || line.type === "removed" ? (
+        <>
+          <span className="diff-prefix">{line.text[0]}</span>
+          <ColoredText text={line.text.slice(1)} tone="code" />
+        </>
+      ) : (
+        <ColoredText text={line.text} tone="code" />
+      )}
     </div>
   );
 }
