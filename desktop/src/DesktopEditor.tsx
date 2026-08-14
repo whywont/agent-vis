@@ -287,6 +287,7 @@ export default function DesktopEditor({ workspaceRoot, navigation, threadId, eve
     ? historyEntries.findIndex((entry) => entry.key === historySelection.key)
     : -1;
   const selectedHistory = selectedHistoryIndex >= 0 ? historyEntries[selectedHistoryIndex] : null;
+  const selectedHistoryKey = selectedHistory?.key ?? null;
   const historySnapshot = selectedHistory?.snapshot ?? null;
   const historySlots = historyEntries.length + 1;
   const activeHistorySlot = selectedHistoryIndex < 0 ? 0 : historyEntries.length - selectedHistoryIndex;
@@ -441,9 +442,11 @@ export default function DesktopEditor({ workspaceRoot, navigation, threadId, eve
     });
     editorViewRef.current = view;
     return () => { editorViewRef.current = null; view.destroy(); };
-    // The CodeMirror document owns edits after it is created; recreate only for another file.
+    // Recorded snapshots are immutable. Background history refreshes may
+    // rebuild their wrapper objects, but must not recreate CodeMirror and
+    // reset the reader's scroll position while the selected key is unchanged.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activePath, historySnapshot, loadedPath, save]);
+  }, [activePath, loadedPath, save, selectedHistoryKey]);
 
   function openFile(path: string) {
     if (path === activePath) {
