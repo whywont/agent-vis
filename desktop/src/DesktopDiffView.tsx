@@ -80,7 +80,7 @@ export default function DesktopDiffView({
         const visible = element.getClientRects().length > 0 && element.clientWidth > 0;
         requestPatchWindowWidth(
           requestToken,
-          visible ? expandedPatchWindowWidth(window.innerWidth, element.scrollWidth, element.clientWidth) : null,
+          visible ? expandedPatchWindowWidth(window.innerWidth, naturalDiffWidth(element), element.clientWidth) : null,
         );
       });
     };
@@ -127,6 +127,24 @@ export default function DesktopDiffView({
       })}
     </div>
   );
+}
+
+function naturalDiffWidth(element: HTMLElement): number {
+  const ruler = document.createElement("span");
+  ruler.style.cssText = "position:fixed;left:-100000px;top:0;visibility:hidden;white-space:pre;pointer-events:none";
+  document.body.append(ruler);
+  let width = element.clientWidth;
+  for (const line of element.querySelectorAll<HTMLElement>(".diff-line")) {
+    if (line.closest("[hidden]")) continue;
+    const style = window.getComputedStyle(line);
+    ruler.style.font = style.font;
+    ruler.style.letterSpacing = style.letterSpacing;
+    ruler.style.tabSize = style.tabSize;
+    ruler.textContent = line.textContent || "";
+    width = Math.max(width, ruler.getBoundingClientRect().width + 24);
+  }
+  ruler.remove();
+  return Math.ceil(width);
 }
 
 function DesktopDiffBlock({

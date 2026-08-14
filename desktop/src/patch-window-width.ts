@@ -1,5 +1,5 @@
 import { LogicalSize } from "@tauri-apps/api/dpi";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { currentMonitor, getCurrentWindow } from "@tauri-apps/api/window";
 
 const requests = new Map<symbol, number>();
 let originalWidth: number | null = null;
@@ -13,6 +13,14 @@ export function expandedPatchWindowWidth(
 ): number {
   const overflow = Math.max(0, contentWidth - visibleWidth);
   return overflow > 1 ? Math.ceil(viewportWidth - visibleWidth + contentWidth + 32) : 0;
+}
+
+export function constrainedPatchWindowWidth(
+  originalWidth: number,
+  requestedWidth: number,
+  availableWidth: number,
+): number {
+  return Math.max(originalWidth, Math.min(requestedWidth, availableWidth));
 }
 
 export function requestPatchWindowWidth(token: symbol, width: number | null): void {
@@ -31,20 +39,24 @@ async function applyPatchWindowWidth(): Promise<void> {
 
   if (originalWidth === null && requests.size > 0) originalWidth = currentWidth;
   if (originalWidth === null) return;
-  // Treat a size that did not come from this coordinator as the user's new
-  // preferred width, so an open patch never fights a manual window resize.
-  if (lastAppliedWidth !== null && Math.abs(currentWidth - lastAppliedWidth) > 2) {
-    originalWidth = currentWidth;
-  }
-
-  const targetWidth = requests.size > 0
+  const requestedWidth = requests.size > 0
     ? Math.max(originalWidth, ...requests.values())
     : originalWidth;
-  if (Math.abs(currentWidth - targetWidth) > 1) {
+  const monitor = await currentMonitor();
+  const outerPosition = monitor ? await appWindow.outerPosition() : null;
+  const availableWidth = monitor && outerPosition
+    ? (monitor.workArea.position.x + monitor.workArea.size.width - outerPosition.x) / monitor.scaleFactor - 8
+    : requestedWidth;
+  const targetWidth = constrainedPatchWindowWidth(originalWidth, requestedWidth, availableWidth);
+  const capped = requests.size > 0 && requestedWidth > targetWidth + 1;
+  document.documentElement.classList.toggle("desktop-patch-width-capped", capped);
+
+  if (lastAppliedWidth === null || Math.abs(lastAppliedWidth - targetWidth) > 1) {
     await appWindow.setSize(new LogicalSize(targetWidth, currentHeight));
   }
   lastAppliedWidth = targetWidth;
   if (requests.size === 0) {
+    document.documentElement.classList.remove("desktop-patch-width-capped");
     originalWidth = null;
     lastAppliedWidth = null;
   }

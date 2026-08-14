@@ -2279,6 +2279,15 @@ body.resizing .desktop-collab-column-resize::after { background: rgba(224,184,92
   overflow: visible;
 }
 .timeline-entry .entry-body.diff-body .diff-lines-inner { width: max-content; min-width: 100%; }
+.desktop-patch-width-capped .timeline-entry .entry-body.diff-body .diff-content,
+.desktop-patch-width-capped .timeline-entry .entry-body.diff-body .diff-lines-inner {
+  width: 100%;
+  min-width: 0;
+}
+.desktop-patch-width-capped .timeline-entry .entry-body.diff-body .diff-line {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
 
 .desktop-diff-actions {
   display: flex;
