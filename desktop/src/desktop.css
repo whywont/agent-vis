@@ -1970,6 +1970,9 @@ body.resizing .desktop-collab-column-resize::after { background: rgba(224,184,92
 .desktop-editor-explain-line { position: absolute; right: 18px; z-index: 4; display: grid; width: 23px; height: 20px; place-items: center; transform: translateY(-1px); border: 1px solid rgba(var(--accent-rgb), .3); border-radius: 5px; background: #222; box-shadow: 0 3px 10px rgba(0, 0, 0, .28); color: var(--accent); cursor: pointer; font: 12px/1 var(--font-mono); }
 .desktop-editor-explain-line:hover,
 .desktop-editor-explain-line.active { border-color: var(--accent); background: rgba(var(--accent-rgb), .16); }
+.desktop-editor-scroll-to-change { position: absolute; bottom: 17px; left: 50%; z-index: 5; display: flex; align-items: center; gap: 6px; padding: 7px 10px; transform: translateX(-50%); border: 1px solid var(--accent-dim); border-radius: 16px; background: #25231d; box-shadow: 0 5px 18px rgba(0, 0, 0, .42); color: var(--accent); cursor: pointer; font: 10px/1 var(--font-mono); }
+.desktop-editor-scroll-to-change:hover { border-color: var(--accent); background: rgba(var(--accent-rgb), .16); }
+.desktop-editor-scroll-to-change span { font-size: 14px; line-height: .7; }
 .desktop-editor-empty { display: grid; flex: 1; place-items: center; color: var(--text-dim); font: 12px var(--font-mono); }
 .desktop-editor-explain { grid-column: -2; display: flex; min-height: 0; overflow: hidden; }
 .desktop-editor-explain.open { display: block; width: auto; }

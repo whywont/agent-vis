@@ -27,6 +27,14 @@ export interface RecordedHistoryPoint {
   content: string | null;
 }
 
+export function firstHistoryChangeLine(overlay: HistoryOverlay): number | null {
+  const lines = [
+    ...overlay.addedLines,
+    ...overlay.changeBlocks.map((block) => block.beforeLine),
+  ];
+  return lines.length > 0 ? Math.min(...lines) : null;
+}
+
 export function unrecordedHistoryChanges(
   changes: FileChangeEvent[],
   recorded: RecordedHistoryPoint[],

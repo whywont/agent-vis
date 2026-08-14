@@ -27,7 +27,7 @@ import type { AppEvent } from "@/lib/types";
 import { formatTime } from "@/utils/format";
 import { captureSessionHistory, explainDiff, listWorkspaceFiles, readSessionFileHistory, readWorkspaceFile, saveWorkspaceFile, stopTerminal, type SessionFileVersion, type WorkspaceTreeEntry } from "./desktop-api";
 import DesktopTerminal from "./DesktopTerminal";
-import { buildFileHistorySnapshot, historyChangesForFile, recordedSnapshotOverlay, unrecordedHistoryChanges, type HistoryOverlay } from "./editor-file-history";
+import { buildFileHistorySnapshot, firstHistoryChangeLine, historyChangesForFile, recordedSnapshotOverlay, unrecordedHistoryChanges, type HistoryOverlay } from "./editor-file-history";
 
 interface TreeNode { children: Map<string, TreeNode>; path?: string; }
 interface ExplainTarget { startLine: number; endLine: number; text: string; top: number; }
@@ -229,6 +229,7 @@ export default function DesktopEditor({ workspaceRoot, navigation, threadId, eve
   const [historySelection, setHistorySelection] = useState<{ path: string; key: string } | null>(null);
   const [historyVersions, setHistoryVersions] = useState<SessionFileVersion[]>([]);
   const [historyRefresh, setHistoryRefresh] = useState(0);
+  const [historyChangeDirection, setHistoryChangeDirection] = useState<"up" | "down" | null>(null);
   const contentRef = useRef(content);
   const savedContentRef = useRef(savedContent);
   const activePathRef = useRef(activePath);
@@ -289,6 +290,7 @@ export default function DesktopEditor({ workspaceRoot, navigation, threadId, eve
   const selectedHistory = selectedHistoryIndex >= 0 ? historyEntries[selectedHistoryIndex] : null;
   const selectedHistoryKey = selectedHistory?.key ?? null;
   const historySnapshot = selectedHistory?.snapshot ?? null;
+  const historyChangeLine = historySnapshot ? firstHistoryChangeLine(historySnapshot.overlay) : null;
   const historySlots = historyEntries.length + 1;
   const activeHistorySlot = selectedHistoryIndex < 0 ? 0 : historyEntries.length - selectedHistoryIndex;
   const hasRecordedHistory = historyEntries.length > 0;
@@ -422,7 +424,14 @@ export default function DesktopEditor({ workspaceRoot, navigation, threadId, eve
     const readOnly = Boolean(historySnapshot);
     const baseState = EditorState.create({ doc: displayedContent });
     const overlayExtension = historySnapshot ? EditorView.decorations.of(historyDecorations(baseState, historySnapshot.overlay)) : [];
-    const view = new EditorView({
+    let view: EditorView;
+    const updateHistoryChangeDirection = (nextView: EditorView) => {
+      if (historyChangeLine === null) return setHistoryChangeDirection(null);
+      const line = nextView.state.doc.line(Math.min(historyChangeLine, nextView.state.doc.lines));
+      const visible = nextView.visibleRanges.some((range) => range.from <= line.to && range.to >= line.from);
+      setHistoryChangeDirection(visible ? null : line.from < nextView.viewport.from ? "up" : "down");
+    };
+    view = new EditorView({
       state: EditorState.create({
         doc: displayedContent,
         extensions: [
@@ -435,13 +444,19 @@ export default function DesktopEditor({ workspaceRoot, navigation, threadId, eve
           EditorView.updateListener.of((update) => {
             if (!readOnly && update.docChanged) setContent(update.state.doc.toString());
             if (update.selectionSet) window.requestAnimationFrame(() => setExplainTarget(explainTargetForView(view, editorHostRef.current)));
+            if (update.viewportChanged) updateHistoryChangeDirection(update.view);
           }),
         ],
       }),
       parent: editorHostRef.current,
     });
     editorViewRef.current = view;
-    return () => { editorViewRef.current = null; view.destroy(); };
+    const historyChangeFrame = window.requestAnimationFrame(() => updateHistoryChangeDirection(view));
+    return () => {
+      window.cancelAnimationFrame(historyChangeFrame);
+      editorViewRef.current = null;
+      view.destroy();
+    };
     // Recorded snapshots are immutable. Background history refreshes may
     // rebuild their wrapper objects, but must not recreate CodeMirror and
     // reset the reader's scroll position while the selected key is unchanged.
@@ -466,6 +481,13 @@ export default function DesktopEditor({ workspaceRoot, navigation, threadId, eve
     setHistorySelection(nextSlot === 0 || !activePath
       ? null
       : { path: activePath, key: historyEntries[historyEntries.length - nextSlot].key });
+  }
+
+  function scrollToHistoryChange() {
+    const view = editorViewRef.current;
+    if (!view || historyChangeLine === null) return;
+    const line = view.state.doc.line(Math.min(historyChangeLine, view.state.doc.lines));
+    view.dispatch({ effects: EditorView.scrollIntoView(line.from, { y: "center" }) });
   }
 
   function toggleDirectory(path: string) {
@@ -570,6 +592,7 @@ export default function DesktopEditor({ workspaceRoot, navigation, threadId, eve
           {activePath && loadedPath === activePath ? (
             <div className="desktop-editor-code-wrap" ref={editorHostRef} onMouseMove={trackLine} onMouseLeave={() => setExplainTarget(null)}>
               {!selectedHistory && explainTarget && <button type="button" className="desktop-editor-explain-line" style={{ top: explainTarget.top }} onMouseDown={(event) => event.preventDefault()} onClick={() => void explainSelection(explainTarget)} title={explainTarget.startLine === explainTarget.endLine ? `Explain line ${explainTarget.startLine}` : `Explain lines ${explainTarget.startLine}-${explainTarget.endLine}`} aria-label="Explain selected code">✦</button>}
+              {selectedHistory && historyChangeDirection && <button type="button" className="desktop-editor-scroll-to-change" onClick={scrollToHistoryChange} title="Scroll to this version's first change"><span aria-hidden="true">{historyChangeDirection === "up" ? "↑" : "↓"}</span> Scroll to change</button>}
             </div>
           ) : <div className="desktop-editor-empty">Choose a file from the explorer.</div>}
         </div>

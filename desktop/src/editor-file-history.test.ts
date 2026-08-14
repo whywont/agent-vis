@@ -1,12 +1,20 @@
 import { describe, expect, it } from "vitest";
 import type { FileChangeEvent } from "@/lib/types";
-import { buildFileHistorySnapshot, historyChangesForFile, recordedSnapshotOverlay, snapshotHistoryOverlay, unrecordedHistoryChanges } from "./editor-file-history";
+import { buildFileHistorySnapshot, firstHistoryChangeLine, historyChangesForFile, recordedSnapshotOverlay, snapshotHistoryOverlay, unrecordedHistoryChanges } from "./editor-file-history";
 
 function change(ts: string, patch: string): FileChangeEvent {
   return { kind: "file_change", ts, patch, files: [{ action: "update", path: "src/app.ts" }] };
 }
 
 describe("buildFileHistorySnapshot", () => {
+  it("locates the first changed line in a history overlay", () => {
+    expect(firstHistoryChangeLine({
+      addedLines: [14, 15],
+      changeBlocks: [{ beforeLine: 9, removedLines: ["old"], addedLines: [] }],
+    })).toBe(9);
+    expect(firstHistoryChangeLine({ addedLines: [], changeBlocks: [] })).toBeNull();
+  });
+
   it("exposes every matching timeline revision to the editor", () => {
     const changes = Array.from({ length: 12 }, (_value, index) => change(
       String(index + 1),
