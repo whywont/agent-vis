@@ -67,6 +67,11 @@ describe("desktopFileEntries", () => {
     ].join("\n"));
   });
 
+  it("preserves a headerless legacy single-file patch", () => {
+    const patch = "+import { authenticate } from './auth';";
+    expect(patchForDesktopFile(patch, "src/auth.test.ts", "/repo")).toBe(patch);
+  });
+
   it("keeps delete and add blocks out of neighboring canvas cards", () => {
     const patch = [
       "*** Begin Patch",
