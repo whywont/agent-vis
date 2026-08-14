@@ -33,6 +33,7 @@ function kindToClass(kind: string, isDb?: boolean, fileAction?: string): string 
       user_message: "user-msg",
       agent_message: "agent-msg",
       shell_command: "shell-cmd",
+      tool_call: "tool-call",
       reasoning: "reasoning",
       context_compaction: "context-compaction",
       tool_output: "shell-cmd",
@@ -52,6 +53,7 @@ function kindToBadge(kind: string, isDb?: boolean, fileAction?: string): string 
       user_message: "badge-user",
       agent_message: "badge-agent",
       shell_command: "badge-shell",
+      tool_call: "badge-tool",
       reasoning: "badge-reasoning",
       context_compaction: "badge-context-compaction",
       tool_output: "badge-shell",
@@ -71,6 +73,7 @@ function kindToLabel(kind: string, isDb?: boolean, fileAction?: string): string 
       user_message: "user",
       agent_message: "agent",
       shell_command: "shell",
+      tool_call: "tool",
       reasoning: "think",
       context_compaction: "context",
       tool_output: "out",
@@ -91,6 +94,7 @@ function getSummary(evt: AppEvent, dbQuery?: DbQuery): string {
   if (evt.kind === "file_change")
     return evt.files.map((f) => `${f.action}: ${f.path}`).join(", ") || "patch";
   if (evt.kind === "shell_command") return truncate(evt.cmd, 120);
+  if (evt.kind === "tool_call") return truncate(evt.text, 120);
   if (evt.kind === "tool_output") return truncate(evt.output, 120);
   return "";
 }
@@ -170,6 +174,26 @@ function EntryBody({
         <DbQueryView query={dbQuery} output={queryOutput} />
       </div>
     );
+  }
+  if (evt.kind === "tool_call") {
+    if (queryOutput !== undefined) {
+      return (
+        <>
+          <div className="entry-body-section">
+            <div className="entry-body-label">Input</div>
+            {evt.text}
+          </div>
+          <div className="entry-body-section">
+            <div className="entry-body-label">
+              <span className="entry-body-label-dot" />
+              Output
+            </div>
+            <ColoredText text={queryOutput} />
+          </div>
+        </>
+      );
+    }
+    return <div className="entry-body-section">{evt.text}</div>;
   }
   if (evt.kind === "shell_command") {
     const cmd = (

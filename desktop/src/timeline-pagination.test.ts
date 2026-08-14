@@ -14,6 +14,7 @@ function events(kind: TimelineEvent["kind"], count: number): TimelineEvent[] {
     if (kind === "tool_output") return { ...base, kind, output: `output ${index}` };
     if (kind === "file_change") return { ...base, kind, patch: "", files: [] };
     if (kind === "shell_command") return { ...base, kind, cmd: `cmd ${index}`, workdir: "" };
+    if (kind === "tool_call") return { ...base, kind, toolName: "web.search", text: `search ${index}` };
     return {
       ...base,
       kind: "token_usage",

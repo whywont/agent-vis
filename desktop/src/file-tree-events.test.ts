@@ -66,4 +66,35 @@ describe("desktopFileEntries", () => {
       "*** End Patch",
     ].join("\n"));
   });
+
+  it("preserves a headerless legacy single-file patch", () => {
+    const patch = "+import { authenticate } from './auth';";
+    expect(patchForDesktopFile(patch, "src/auth.test.ts", "/repo")).toBe(patch);
+  });
+
+  it("keeps delete and add blocks out of neighboring canvas cards", () => {
+    const patch = [
+      "*** Begin Patch",
+      "*** Delete File: /repo/client/src/App.css",
+      "-body { color: red; }",
+      "*** Delete File: /repo/client/src/App.jsx",
+      "-export default function App() {}",
+      "*** Add File: /repo/client/src/App.tsx",
+      "+export default function App() {}",
+      "*** End Patch",
+    ].join("\n");
+
+    expect(patchForDesktopFile(patch, "client/src/App.css", "/repo")).toBe([
+      "*** Begin Patch",
+      "*** Delete File: /repo/client/src/App.css",
+      "-body { color: red; }",
+      "*** End Patch",
+    ].join("\n"));
+    expect(patchForDesktopFile(patch, "client/src/App.tsx", "/repo")).toBe([
+      "*** Begin Patch",
+      "*** Add File: /repo/client/src/App.tsx",
+      "+export default function App() {}",
+      "*** End Patch",
+    ].join("\n"));
+  });
 });

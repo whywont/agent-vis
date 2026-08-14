@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { createTokenAccumulator, parseClaudeEvent } from "@/lib/claude-parser";
+import { codexToolCallFromItem } from "@/lib/codex-parser";
 import type { AppEvent } from "@/lib/types";
 import {
   getActiveCodexTurn,
@@ -256,6 +258,11 @@ export default function DesktopLiveConversation({
         if (message.type === "assistant") {
           const output = assistantText(message);
           if (output) onStreamEvent?.(streamEntry("assistant", output));
+          for (const event of parseClaudeEvent(message, createTokenAccumulator())) {
+            if (event.kind === "tool_call") {
+              onTimelineEvent?.({ ...event, ts: event.ts || new Date().toISOString() });
+            }
+          }
         }
         if (message.type === "result") {
           setInteractiveRequest(null);
@@ -327,6 +334,10 @@ export default function DesktopLiveConversation({
       }
       if (method === "item/started" && isCodexCompaction(params.item)) {
         onContextCompaction?.();
+      }
+      if (method === "item/started") {
+        const toolCall = codexToolCallFromItem(params.item, new Date().toISOString());
+        if (toolCall) onTimelineEvent?.(toolCall);
       }
       const streamEvent = codexStreamEvent(method, params);
       if (streamEvent) onStreamEvent?.(streamEvent);

@@ -99,6 +99,14 @@ export interface ShellCommandEvent {
   description?: string;
 }
 
+export interface ToolCallEvent {
+  kind: "tool_call";
+  ts: string;
+  toolName: string;
+  text: string;
+  callId?: string;
+}
+
 export interface ToolOutputEvent {
   kind: "tool_output";
   ts: string;
@@ -128,6 +136,7 @@ export type AppEvent =
   | SubagentSpawnEvent
   | FileChangeEvent
   | ShellCommandEvent
+  | ToolCallEvent
   | ToolOutputEvent
   | TokenUsageEvent;
 

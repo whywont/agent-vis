@@ -330,6 +330,7 @@ function DesktopTimelineEntry({
   onExpandedChange: (expanded: boolean) => void;
 }) {
   const [dismissedMatchRequest, setDismissedMatchRequest] = useState<string | null>(null);
+  const [messageCopied, setMessageCopied] = useState(false);
   const highlightKey = `hl:${sessionCwd}:${event.ts}`;
   const [highlighted, setHighlighted] = useState(() => localStorage.getItem(highlightKey) === "1");
   const forcedOpen = matched && matchRequestKey !== dismissedMatchRequest;
@@ -342,6 +343,15 @@ function DesktopTimelineEntry({
       if (next) localStorage.setItem(highlightKey, "1");
       else localStorage.removeItem(highlightKey);
       return next;
+    });
+  }
+
+  function copyAgentMessage(clickEvent: ReactMouseEvent<HTMLButtonElement>) {
+    clickEvent.stopPropagation();
+    if (event.kind !== "agent_message") return;
+    navigator.clipboard.writeText(event.text).then(() => {
+      setMessageCopied(true);
+      window.setTimeout(() => setMessageCopied(false), 1200);
     });
   }
 
@@ -419,11 +429,22 @@ function DesktopTimelineEntry({
         >
           ★
         </button>
+        {event.kind === "agent_message" && (
+          <button
+            type="button"
+            className={`entry-copy-message-btn${messageCopied ? " copied" : ""}`}
+            onClick={copyAgentMessage}
+            title={messageCopied ? "Copied agent message" : "Copy agent message"}
+            aria-label={messageCopied ? "Copied agent message" : "Copy agent message"}
+          >
+            {messageCopied ? "copied" : "copy"}
+          </button>
+        )}
       </div>
       <div className={`entry-body${collapsed ? " collapsed" : ""}${event.kind === "file_change" ? " diff-body" : ""}`}>
         <div className="entry-body-section">
           {event.kind === "file_change" ? (
-            <DesktopDiffView patch={event.patch} contextText={contextText} workspaceRoot={sessionCwd} onOpenFile={onOpenFile} />
+            <DesktopDiffView patch={event.patch} contextText={contextText} workspaceRoot={sessionCwd} onOpenFile={onOpenFile} collapsibleFiles />
           ) : event.kind === "shell_command" ? (
             <>
               {event.workdir && <><span className="desktop-workdir">[{event.workdir || sessionCwd}]</span>{"\n"}</>}
@@ -514,6 +535,7 @@ function entryStyle(event: Exclude<TimelineEvent, { kind: "token_usage" }>) {
     user_message: { className: "user-msg", badge: "badge-user", label: "user" },
     agent_message: { className: "agent-msg", badge: "badge-agent", label: "agent" },
     shell_command: { className: "shell-cmd", badge: "badge-shell", label: "shell" },
+    tool_call: { className: "tool-call", badge: "badge-tool", label: "tool" },
     reasoning: { className: "reasoning", badge: "badge-reasoning", label: "think" },
     tool_output: { className: "shell-cmd", badge: "badge-shell", label: "out" },
   } as const)[event.kind];
@@ -522,6 +544,7 @@ function entryStyle(event: Exclude<TimelineEvent, { kind: "token_usage" }>) {
 function summary(event: Exclude<TimelineEvent, { kind: "token_usage" }>): string {
   if (event.kind === "file_change") return event.files.map((file) => `${file.action}: ${file.path}`).join(", ");
   if (event.kind === "shell_command") return truncate(event.cmd, 120);
+  if (event.kind === "tool_call") return truncate(event.text, 120);
   if (event.kind === "tool_output") return truncate(event.output, 120);
   if (event.kind === "context_compaction") return "Context compacted - agent is resuming with a handoff summary";
   if (event.kind === "subagent_spawn") return `Spawned ${event.agentNickname || event.agentPath || event.sessionId}`;

@@ -55,4 +55,31 @@ describe("desktop files canvas data", () => {
       { from: "src/App.tsx", to: "src/components/Button.tsx", label: "Button" },
     ]);
   });
+
+  it("only derives imports from the matching file in a multi-file patch", () => {
+    const patch = [
+      "*** Begin Patch",
+      "*** Delete File: /repo/src/legacy.ts",
+      "*** Add File: /repo/src/App.tsx",
+      "+import { helper } from './lib/helper';",
+      "*** Add File: /repo/src/lib/helper.ts",
+      "+export const helper = true;",
+      "*** End Patch",
+    ].join("\n");
+    const event: FileChangeEvent = {
+      kind: "file_change",
+      ts: "1",
+      patch,
+      files: [
+        { path: "/repo/src/legacy.ts", action: "delete" },
+        { path: "/repo/src/App.tsx", action: "add" },
+        { path: "/repo/src/lib/helper.ts", action: "add" },
+      ],
+    };
+    const groups = groupFileChanges([event], "/repo");
+
+    expect(buildImportEdges(groups, "/repo")).toEqual([
+      { from: "src/App.tsx", to: "src/lib/helper.ts", label: "{ helper }" },
+    ]);
+  });
 });

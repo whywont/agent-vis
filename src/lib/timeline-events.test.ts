@@ -33,6 +33,12 @@ describe("deduplicateTimelineEvents", () => {
     expect(deduplicateTimelineEvents([event, { ...event }])).toHaveLength(1);
   });
 
+  it("reconciles live and persisted copies of the same tool call", () => {
+    const live: AppEvent = { kind: "tool_call", ts: "live", callId: "search-1", toolName: "web.search", text: "Searching the web..." };
+    const persisted: AppEvent = { kind: "tool_call", ts: "saved", callId: "search-1", toolName: "web.search", text: "Searching: Fly Machines" };
+    expect(deduplicateTimelineEvents([live, persisted])).toEqual([live]);
+  });
+
   it("keeps messages that share a prefix but have different endings", () => {
     const prefix = "x".repeat(160);
     const events: AppEvent[] = [

@@ -60,15 +60,21 @@ export function patchForDesktopFile(
   const target = workspaceRelativePath(filepath, sessionCwd).replace(/^\/+/, "");
   const lines: string[] = [];
   let collecting = false;
+  let hasFileHeader = false;
   for (const line of patch.split("\n")) {
     if (line === "*** Begin Patch" || line === "*** End Patch") continue;
     const header = line.match(/^\*\*\* (Update|Add|Delete) File: (.+)$/);
     if (header) {
+      hasFileHeader = true;
       const headerPath = workspaceRelativePath(header[2].trim(), sessionCwd).replace(/^\/+/, "");
       collecting = headerPath === target;
     }
     if (collecting) lines.push(line);
   }
+  // Legacy single-file events can contain only a unified diff or added lines.
+  // Their files metadata already identifies the target, so there is no
+  // neighboring file block to isolate.
+  if (!hasFileHeader) return patch;
   return lines.length
     ? ["*** Begin Patch", ...lines, "*** End Patch"].join("\n")
     : "";

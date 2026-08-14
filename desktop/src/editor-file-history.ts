@@ -21,6 +21,48 @@ export interface FileHistorySnapshot {
   overlay: HistoryOverlay;
 }
 
+export interface RecordedHistoryPoint {
+  timestamp: string;
+  baseline: boolean;
+  content: string | null;
+}
+
+export function firstHistoryChangeLine(overlay: HistoryOverlay): number | null {
+  const lines = [
+    ...overlay.addedLines,
+    ...overlay.changeBlocks.map((block) => block.beforeLine),
+  ];
+  return lines.length > 0 ? Math.min(...lines) : null;
+}
+
+export function unrecordedHistoryChanges(
+  changes: FileChangeEvent[],
+  recorded: RecordedHistoryPoint[],
+  filepath: string,
+  workspaceRoot: string,
+): FileChangeEvent[] {
+  const covered = new Set<number>();
+  let firstUncoveredIndex = 0;
+  for (let recordedIndex = 0; recordedIndex < recorded.length; recordedIndex += 1) {
+    const point = recorded[recordedIndex];
+    if (point.baseline) continue;
+    let lastMatchingIndex = -1;
+    for (let changeIndex = firstUncoveredIndex; changeIndex < changes.length; changeIndex += 1) {
+      if (snapshotCoversChange(
+        recorded[recordedIndex - 1]?.content ?? null,
+        point.content,
+        changes[changeIndex],
+        filepath,
+        workspaceRoot,
+      )) lastMatchingIndex = changeIndex;
+    }
+    if (lastMatchingIndex < firstUncoveredIndex) continue;
+    for (let index = firstUncoveredIndex; index <= lastMatchingIndex; index += 1) covered.add(index);
+    firstUncoveredIndex = lastMatchingIndex + 1;
+  }
+  return changes.filter((_change, index) => !covered.has(index));
+}
+
 export function snapshotHistoryOverlay(previousContent: string | null, content: string | null): HistoryOverlay {
   const previous = previousContent?.split("\n") ?? [];
   const current = content?.split("\n") ?? [];
@@ -144,6 +186,29 @@ function findLine(lines: string[], value: string, preferredIndex: number): numbe
     if (lines[preferredIndex + distance] === value) return preferredIndex + distance;
   }
   return null;
+}
+
+function snapshotCoversChange(
+  previousContent: string | null,
+  content: string | null,
+  change: FileChangeEvent,
+  filepath: string,
+  workspaceRoot: string,
+): boolean {
+  const patch = parseFilePatch(change.patch, filepath, workspaceRoot);
+  if (!patch) return false;
+  if (patch.action === "delete") return content === null;
+  if (content === null || patch.hunks.length === 0) return false;
+  const previousLines = previousContent?.split("\n") ?? [];
+  const currentLines = content.split("\n");
+  return patch.hunks.every((hunk) => {
+    const { oldLines, newLines } = hunkParts(hunk, change);
+    const preferredIndex = hunk.newStart === null ? null : hunk.newStart - 1;
+    if (newLines.length > 0) return findSequence(currentLines, newLines, preferredIndex) !== null;
+    if (oldLines.length === 0) return false;
+    return findSequence(previousLines, oldLines, preferredIndex) !== null
+      && findSequence(currentLines, oldLines, preferredIndex) === null;
+  });
 }
 
 function overlayFor(content: string, change: FileChangeEvent, filepath: string, workspaceRoot: string): HistoryOverlay {

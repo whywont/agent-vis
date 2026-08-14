@@ -42,7 +42,7 @@ export default function Timeline({
   // like the Codex transcript rather than splitting every invocation in two.
   const inlinedCallIds = new Set<string>();
   for (const evt of filteredEvents) {
-    if (evt.kind === "shell_command" && evt.callId && callIdToOutput.has(evt.callId)) {
+    if ((evt.kind === "shell_command" || evt.kind === "tool_call") && evt.callId && callIdToOutput.has(evt.callId)) {
       inlinedCallIds.add(evt.callId);
     }
   }
@@ -76,6 +76,8 @@ export default function Timeline({
           } else {
             queryOutput = commandOutput;
           }
+        } else if (evt.kind === "tool_call" && evt.callId) {
+          queryOutput = callIdToOutput.get(evt.callId);
         }
 
         // Suppress tool_output events already shown inline with their command.

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseEvent, extractPatchFiles, structuredPatchToPatch } from "./codex-parser";
+import { codexToolCallFromItem, parseEvent, extractPatchFiles, structuredPatchToPatch } from "./codex-parser";
 
 // Helper: build patch header strings at runtime so the literal "*** Verb File:"
 // pattern doesn't appear in this source file (which would confuse agent-vis's
@@ -305,6 +305,44 @@ describe("structuredPatchToPatch", () => {
   it("ignores empty or invalid change sets", () => {
     expect(structuredPatchToPatch(null)).toBe("");
     expect(structuredPatchToPatch({})).toBe("");
+  });
+});
+
+describe("Codex extension tools", () => {
+  it("parses a persisted web search into a provider-neutral tool call", () => {
+    const result = parseEvent({
+      timestamp: "2026-08-14T01:21:30.694Z",
+      type: "event_msg",
+      payload: {
+        type: "item_completed",
+        item: {
+          type: "Extension",
+          id: "search-1",
+          kind: "web.search",
+          action: { type: "search", query: "Fly Machines egress controls" },
+        },
+      },
+    });
+    expect(result).toEqual({
+      kind: "tool_call",
+      ts: "2026-08-14T01:21:30.694Z",
+      toolName: "web.search",
+      text: "Searching: Fly Machines egress controls",
+      callId: "search-1",
+    });
+  });
+
+  it("normalizes the live app-server webSearch shape the same way", () => {
+    expect(codexToolCallFromItem({
+      type: "webSearch",
+      id: "search-1",
+      query: "Fly Machines egress controls",
+    }, "now")).toMatchObject({
+      kind: "tool_call",
+      toolName: "web.search",
+      text: "Searching: Fly Machines egress controls",
+      callId: "search-1",
+    });
   });
 });
 

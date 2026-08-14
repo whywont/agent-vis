@@ -26,6 +26,7 @@ const FILTERS = [
   { key: "user_message", label: "user" },
   { key: "agent_message", label: "agent" },
   { key: "shell_command", label: "shell" },
+  { key: "tool_call", label: "tools" },
   { key: "reasoning", label: "thinking" },
   { key: "tool_output", label: "output" },
 ];

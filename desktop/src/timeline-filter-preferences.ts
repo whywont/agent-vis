@@ -3,6 +3,7 @@ export const DEFAULT_TIMELINE_FILTERS = [
   "user_message",
   "agent_message",
   "shell_command",
+  "tool_call",
 ] as const;
 
 const TIMELINE_FILTER_KEYS = new Set([
@@ -11,6 +12,7 @@ const TIMELINE_FILTER_KEYS = new Set([
   "tool_output",
 ]);
 const STORAGE_PREFIX = "agent-vis:desktop:timeline-filters:";
+const CURRENT_VERSION = 2;
 
 export interface TimelineFilterPreferences {
   activeFilters: Set<string>;
@@ -40,15 +42,20 @@ export function loadTimelineFilterPreferences(
     const parsed = JSON.parse(raw) as {
       activeFilters?: unknown;
       showTokenUsage?: unknown;
+      version?: unknown;
     };
     if (!Array.isArray(parsed.activeFilters)) return defaultTimelineFilterPreferences();
 
-    return {
-      activeFilters: new Set(
-        parsed.activeFilters.filter(
-          (filter): filter is string => typeof filter === "string" && TIMELINE_FILTER_KEYS.has(filter),
-        ),
+    const activeFilters = new Set(
+      parsed.activeFilters.filter(
+        (filter): filter is string => typeof filter === "string" && TIMELINE_FILTER_KEYS.has(filter),
       ),
+    );
+    // Preferences saved before tool calls had their own category should show
+    // the new default rather than silently hiding every provider's tools.
+    if (parsed.version !== CURRENT_VERSION) activeFilters.add("tool_call");
+    return {
+      activeFilters,
       showTokenUsage: parsed.showTokenUsage === true,
     };
   } catch {
@@ -63,6 +70,7 @@ export function saveTimelineFilterPreferences(
 ): void {
   try {
     storage.setItem(`${STORAGE_PREFIX}${sessionKey}`, JSON.stringify({
+      version: CURRENT_VERSION,
       activeFilters: [...preferences.activeFilters],
       showTokenUsage: preferences.showTokenUsage,
     }));

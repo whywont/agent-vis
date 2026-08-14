@@ -913,6 +913,7 @@ body {
 .timeline-entry.file-write { border-left-color: var(--green); }
 .timeline-entry.file-delete { border-left-color: var(--red); }
 .timeline-entry.shell-cmd { border-left-color: var(--orange); }
+.timeline-entry.tool-call { border-left-color: #d6b65d; }
 .timeline-entry.reasoning { border-left-color: var(--text-dim); }
 .timeline-entry.context-compaction { border-left-color: var(--purple); }
 
@@ -944,6 +945,7 @@ body {
 .badge-write { color: var(--green); }
 .badge-delete { color: var(--red); }
 .badge-shell { color: var(--orange); }
+.badge-tool { color: #d6b65d; }
 .badge-reasoning { color: var(--text-dim); }
 .badge-context-compaction { color: var(--purple); }
 .badge-db { color: #5ec4c4; }

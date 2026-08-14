@@ -1,4 +1,4 @@
-import type { AppEvent, FileInfo } from "./types";
+import type { AppEvent, FileInfo, ToolCallEvent } from "./types";
 import { toDisplayString } from "@/utils/format";
 
 type StructuredPatchChange = {
@@ -75,6 +75,45 @@ function displayToolOutput(value: unknown): string {
       .join("");
   }
   return toDisplayString(value);
+}
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function firstString(record: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+}
+
+/** Normalize provider extension items without pretending they are shell commands. */
+export function codexToolCallFromItem(item: unknown, ts: string): ToolCallEvent | null {
+  const record = recordValue(item);
+  const type = typeof record.type === "string" ? record.type : "";
+  if (type !== "Extension" && type !== "webSearch") return null;
+
+  const action = recordValue(record.action);
+  const toolName = type === "webSearch"
+    ? "web.search"
+    : firstString(record, ["kind"]) || firstString(action, ["type"]) || "extension";
+  const detail = firstString(action, ["query", "url", "path", "pattern", "prompt"])
+    || firstString(record, ["query", "url", "path", "pattern", "prompt"]);
+  const text = toolName === "web.search"
+    ? detail ? `Searching: ${detail}` : "Searching the web..."
+    : detail ? `${toolName}: ${detail}` : toolName;
+
+  return {
+    kind: "tool_call",
+    ts,
+    toolName,
+    text,
+    callId: typeof record.id === "string" ? record.id : undefined,
+  };
 }
 
 /**
@@ -157,6 +196,8 @@ export function parseEvent(obj: Record<string, unknown>): AppEvent | null {
           attribution: "tool_completed",
         };
       }
+      const toolCall = codexToolCallFromItem(item, ts);
+      if (toolCall) return toolCall;
     }
     if (p.type === "patch_apply_end") {
       const patch = structuredPatchToPatch(p.changes);

@@ -8,6 +8,7 @@ import {
   removeDiffExplanation,
   saveDiffExplanation,
 } from "./diff-explanation-cache";
+import { shouldCompactDiffContextLine } from "./diff-display";
 import { compactWorkspacePath } from "./workspace-path";
 
 interface DiffBlock {
@@ -53,18 +54,20 @@ export default function DesktopDiffView({
   workspaceRoot,
   onOpenFile,
   snapshotContent,
+  collapsibleFiles = false,
 }: {
   patch: string;
   contextText?: string;
   workspaceRoot: string;
   onOpenFile?: (filepath: string) => void;
   snapshotContent?: string | null;
+  collapsibleFiles?: boolean;
 }) {
   const blocks = useMemo(() => parseDiff(patch), [patch]);
   if (!patch) return <em>no patch content</em>;
   if (blocks.length === 0) return <>{patch}</>;
   return (
-    <>
+    <div className="desktop-diff-view">
       {blocks.map((block) => {
         const blockPatch = block.lines.map((line) => line.text).join("\n");
         const explanationKey = diffExplanationKey({
@@ -82,11 +85,12 @@ export default function DesktopDiffView({
             explanationKey={explanationKey}
             onOpenFile={onOpenFile}
             snapshotContent={snapshotContent}
+            collapsible={collapsibleFiles}
             key={explanationKey}
           />
         );
       })}
-    </>
+    </div>
   );
 }
 
@@ -97,6 +101,7 @@ function DesktopDiffBlock({
   explanationKey,
   onOpenFile,
   snapshotContent,
+  collapsible,
 }: {
   block: DiffBlock;
   contextText?: string;
@@ -104,6 +109,7 @@ function DesktopDiffBlock({
   explanationKey: string;
   onOpenFile?: (filepath: string) => void;
   snapshotContent?: string | null;
+  collapsible: boolean;
 }) {
   const detailedExplanationKey = detailedDiffExplanationKey(explanationKey);
   const [copied, setCopied] = useState(false);
@@ -122,6 +128,7 @@ function DesktopDiffBlock({
   const [editContent, setEditContent] = useState("");
   const [editError, setEditError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
   const originalContentRef = useRef("");
   const patch = block.lines.map((line) => line.text).join("\n");
 
@@ -251,8 +258,20 @@ function DesktopDiffBlock({
   const displayPath = compactWorkspacePath(block.filepath, workspaceRoot);
 
   return (
-    <div className="diff-block">
+    <div className={`diff-block${collapsed ? " collapsed" : ""}`}>
       <div className="diff-file-header">
+        {collapsible && (
+          <button
+            type="button"
+            className="desktop-diff-collapse"
+            onClick={() => setCollapsed((current) => !current)}
+            aria-expanded={!collapsed}
+            aria-label={`${collapsed ? "Expand" : "Collapse"} ${displayPath} changes`}
+            title={`${collapsed ? "Expand" : "Collapse"} file changes`}
+          >
+            <span aria-hidden="true">›</span>
+          </button>
+        )}
         <span className={`diff-file-action action-${block.action}`}>{block.action}</span>
         <button type="button" className="desktop-diff-path" disabled={!onOpenFile || block.action === "delete"} onClick={() => onOpenFile?.(block.filepath)} title={block.action === "delete" ? `${block.filepath} was deleted` : `Open ${block.filepath} in Editor`}>{displayPath}</button>
         <div className="desktop-diff-actions">
@@ -297,6 +316,7 @@ function DesktopDiffBlock({
           )}
         </div>
       </div>
+      <div className="desktop-diff-block-body" hidden={collapsed}>
       {editing ? (
         <textarea
           className="desktop-full-file-editor"
@@ -318,16 +338,7 @@ function DesktopDiffBlock({
         <div className="diff-content">
           <div className="diff-lines-inner">
             {block.lines.map((line, index) => (
-              <div className={`diff-line ${line.type}`} key={index}>
-                {line.type === "added" || line.type === "removed" ? (
-                  <>
-                    <span className="diff-prefix">{line.text[0]}</span>
-                    <ColoredText text={line.text.slice(1)} tone="code" />
-                  </>
-                ) : (
-                  <ColoredText text={line.text} tone="code" />
-                )}
-              </div>
+              <DesktopDiffLine line={line} compactOversizedContext={collapsible} key={index} />
             ))}
           </div>
         </div>
@@ -372,6 +383,43 @@ function DesktopDiffBlock({
             </>
           )}
         </div>
+      )}
+      </div>
+    </div>
+  );
+}
+
+function DesktopDiffLine({
+  line,
+  compactOversizedContext,
+}: {
+  line: DiffBlock["lines"][number];
+  compactOversizedContext: boolean;
+}) {
+  const [showOversizedContext, setShowOversizedContext] = useState(false);
+  const oversizedContext = compactOversizedContext && shouldCompactDiffContextLine(line.type, line.text);
+
+  if (oversizedContext && !showOversizedContext) {
+    return (
+      <div className="diff-line context desktop-diff-context-placeholder">
+        <span>… unchanged context line ({line.text.length.toLocaleString()} characters)</span>
+        <button type="button" onClick={() => setShowOversizedContext(true)}>show</button>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`diff-line ${line.type}${oversizedContext ? " desktop-diff-context-expanded" : ""}`}>
+      {oversizedContext && (
+        <button type="button" onClick={() => setShowOversizedContext(false)}>hide long context</button>
+      )}
+      {line.type === "added" || line.type === "removed" ? (
+        <>
+          <span className="diff-prefix">{line.text[0]}</span>
+          <ColoredText text={line.text.slice(1)} tone="code" />
+        </>
+      ) : (
+        <ColoredText text={line.text} tone="code" />
       )}
     </div>
   );

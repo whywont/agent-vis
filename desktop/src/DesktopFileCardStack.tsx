@@ -6,6 +6,7 @@ import { formatTime } from "@/utils/format";
 import { readSessionFileHistory, type SessionFileVersion } from "./desktop-api";
 import DesktopDiffView from "./DesktopDiffView";
 import { precedingUserRequest } from "./explain-context";
+import { patchForDesktopFile } from "./file-tree-events";
 import { workspaceRelativePath } from "./workspace-path";
 import {
   FILE_CARD_HEIGHT,
@@ -79,6 +80,7 @@ export default function DesktopFileCardStack({
     (file) => workspaceRelativePath(file.path, sessionCwd) === filepath,
   )?.action ?? "update";
   const activeAction = actionForChange(activeChange);
+  const activePatch = patchForDesktopFile(activeChange.patch, filepath, sessionCwd);
   const contextText = precedingUserRequest(events, activeChange.ts);
   const baselineTime = versions[0]?.timestamp ? new Date(versions[0].timestamp).getTime() : Number.NEGATIVE_INFINITY;
   const snapshotIndex = versions.findIndex((version, index) => index > 0 && new Date(version.timestamp).getTime() >= Math.max(baselineTime, new Date(activeChange.ts).getTime()));
@@ -149,7 +151,7 @@ export default function DesktopFileCardStack({
             </button>
           </div>
           <div className="file-card-body">
-            <DesktopDiffView patch={activeChange.patch} contextText={contextText} workspaceRoot={sessionCwd} snapshotContent={snapshot?.content} />
+            <DesktopDiffView patch={activePatch} contextText={contextText} workspaceRoot={sessionCwd} snapshotContent={snapshot?.content} />
           </div>
         </div>
       </div>
@@ -182,7 +184,7 @@ export default function DesktopFileCardStack({
               <button type="button" className="card-expanded-close" onClick={() => setExpanded(false)}>close esc</button>
             </div>
             <div className="card-expanded-body">
-              <DesktopDiffView patch={activeChange.patch} contextText={contextText} workspaceRoot={sessionCwd} snapshotContent={snapshot?.content} />
+              <DesktopDiffView patch={activePatch} contextText={contextText} workspaceRoot={sessionCwd} snapshotContent={snapshot?.content} />
             </div>
           </div>
         </div>,

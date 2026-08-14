@@ -1,4 +1,5 @@
 import type { FileChangeEvent } from "@/lib/types";
+import { patchForDesktopFile } from "./file-tree-events";
 import { workspaceRelativePath } from "./workspace-path";
 
 export const FILE_CARD_WIDTH = 290;
@@ -152,7 +153,7 @@ function resolveImport(fromPath: string, specifier: string, paths: Set<string>):
   return null;
 }
 
-export function buildImportEdges(groups: FileGroup[]): ImportEdge[] {
+export function buildImportEdges(groups: FileGroup[], sessionCwd = ""): ImportEdge[] {
   const paths = new Set(groups.flatMap((group) => group.files.map((file) => file.path)));
   const edges: ImportEdge[] = [];
   const seen = new Set<string>();
@@ -161,7 +162,8 @@ export function buildImportEdges(groups: FileGroup[]): ImportEdge[] {
   for (const group of groups) {
     for (const file of group.files) {
       for (const change of file.changes) {
-        for (const line of (change.patch ?? "").split("\n")) {
+        const filePatch = patchForDesktopFile(change.patch ?? "", file.path, sessionCwd);
+        for (const line of filePatch.split("\n")) {
           if (line.startsWith("-")) continue;
           importPattern.lastIndex = 0;
           let match: RegExpExecArray | null;

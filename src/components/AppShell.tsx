@@ -12,6 +12,7 @@ const DEFAULT_FILTERS = new Set([
   "user_message",
   "agent_message",
   "shell_command",
+  "tool_call",
 ]);
 
 export default function AppShell() {
