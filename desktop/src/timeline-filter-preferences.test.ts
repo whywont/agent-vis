@@ -51,6 +51,20 @@ describe("timeline filter preferences", () => {
       "user_message",
       "agent_message",
       "shell_command",
+      "tool_call",
+    ]);
+  });
+
+  it("enables tool calls when migrating preferences saved before that filter existed", () => {
+    const storage = memoryStorage();
+    storage.setItem("agent-vis:desktop:timeline-filters:session-a", JSON.stringify({
+      activeFilters: ["agent_message"],
+      showTokenUsage: false,
+    }));
+
+    expect([...loadTimelineFilterPreferences("session-a", storage).activeFilters]).toEqual([
+      "agent_message",
+      "tool_call",
     ]);
   });
 });

@@ -535,6 +535,7 @@ function entryStyle(event: Exclude<TimelineEvent, { kind: "token_usage" }>) {
     user_message: { className: "user-msg", badge: "badge-user", label: "user" },
     agent_message: { className: "agent-msg", badge: "badge-agent", label: "agent" },
     shell_command: { className: "shell-cmd", badge: "badge-shell", label: "shell" },
+    tool_call: { className: "tool-call", badge: "badge-tool", label: "tool" },
     reasoning: { className: "reasoning", badge: "badge-reasoning", label: "think" },
     tool_output: { className: "shell-cmd", badge: "badge-shell", label: "out" },
   } as const)[event.kind];
@@ -543,6 +544,7 @@ function entryStyle(event: Exclude<TimelineEvent, { kind: "token_usage" }>) {
 function summary(event: Exclude<TimelineEvent, { kind: "token_usage" }>): string {
   if (event.kind === "file_change") return event.files.map((file) => `${file.action}: ${file.path}`).join(", ");
   if (event.kind === "shell_command") return truncate(event.cmd, 120);
+  if (event.kind === "tool_call") return truncate(event.text, 120);
   if (event.kind === "tool_output") return truncate(event.output, 120);
   if (event.kind === "context_compaction") return "Context compacted - agent is resuming with a handoff summary";
   if (event.kind === "subagent_spawn") return `Spawned ${event.agentNickname || event.agentPath || event.sessionId}`;

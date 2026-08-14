@@ -354,7 +354,7 @@ describe("parseClaudeEvent — assistant Bash tool", () => {
 });
 
 describe("parseClaudeEvent — assistant Read/Glob/Grep tools", () => {
-  it("produces shell_command with summary for Read", () => {
+  it("produces a provider-neutral tool call with summary for Read", () => {
     const obj = {
       timestamp: TS,
       type: "assistant",
@@ -366,8 +366,28 @@ describe("parseClaudeEvent — assistant Read/Glob/Grep tools", () => {
       },
     };
     const events = parseClaudeEvent(obj, makeAccum());
-    const sc = events.find((e) => e.kind === "shell_command");
-    expect(sc).toMatchObject({ kind: "shell_command", cmd: "Read src/foo.ts" });
+    const tool = events.find((e) => e.kind === "tool_call");
+    expect(tool).toMatchObject({ kind: "tool_call", toolName: "Read", text: "Read src/foo.ts", callId: "tu-4" });
+  });
+
+  it("normalizes WebSearch without labeling it as a shell command", () => {
+    const events = parseClaudeEvent({
+      timestamp: TS,
+      type: "assistant",
+      message: {
+        content: [
+          { type: "tool_use", name: "WebSearch", id: "tu-web", input: { query: "Fly Machines egress controls" } },
+        ],
+        usage: {},
+      },
+    }, makeAccum());
+    expect(events.find((event) => event.kind === "tool_call")).toMatchObject({
+      kind: "tool_call",
+      toolName: "WebSearch",
+      text: "Searching: Fly Machines egress controls",
+      callId: "tu-web",
+    });
+    expect(events.some((event) => event.kind === "shell_command")).toBe(false);
   });
 });
 

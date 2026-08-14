@@ -28,6 +28,11 @@ export function timelineEventIdentity(event: TimelineEvent): string {
   if (event.kind === "shell_command") {
     return [event.kind, event.callId || event.ts, event.cmd].join(":");
   }
+  if (event.kind === "tool_call") {
+    return event.callId
+      ? [event.kind, event.callId].join(":")
+      : [event.kind, event.ts, event.toolName, event.text].join(":");
+  }
   if (event.kind === "tool_output") {
     return [event.kind, event.callId || event.ts, event.output].join(":");
   }

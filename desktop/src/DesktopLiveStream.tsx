@@ -108,9 +108,10 @@ function latestRequestTool(entries: LiveStreamEntry[], events: AppEvent[]): stri
   const latestInput = [...entries].reverse().find((entry) => entry.kind === "input")?.ts;
   const latestUserMessage = [...events].reverse().find((event) => event.kind === "user_message")?.ts;
   const requestStartedAt = latestInput || latestUserMessage;
-  const fromTranscript = [...events].reverse().find((event) => event.kind === "shell_command"
+  const fromTranscript = [...events].reverse().find((event) => (event.kind === "shell_command" || event.kind === "tool_call")
     && (!requestStartedAt || Date.parse(event.ts) >= Date.parse(requestStartedAt)));
   if (fromTranscript?.kind === "shell_command") return fromTranscript.cmd.replace(/^\$\s*/, "");
+  if (fromTranscript?.kind === "tool_call") return fromTranscript.text;
   return [...entries].reverse().find((entry) => entry.kind === "tool")?.text.replace(/^\$\s*/, "") || null;
 }
 

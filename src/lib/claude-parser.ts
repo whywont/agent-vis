@@ -302,22 +302,23 @@ function parseToolUse(
     if (name === "Glob" && input.pattern) summary = "Glob " + input.pattern;
     if (name === "Grep" && input.pattern) summary = "Grep " + input.pattern;
     if (name === "WebSearch" && input.query)
-      summary = "WebSearch: " + input.query;
+      summary = "Searching: " + input.query;
+    if (name === "WebFetch" && input.url) summary = "Fetch " + input.url;
+    if (name === "Task" && (input.description || input.prompt)) summary = "Task: " + (input.description || input.prompt);
+    if (name === "TaskOutput" && input.task_id) summary = "Task output: " + input.task_id;
     return {
-      kind: "shell_command",
+      kind: "tool_call",
       ts,
-      cmd: summary,
-      workdir: "",
+      text: summary,
       callId,
       toolName: name,
     };
   }
 
   return {
-    kind: "shell_command",
+    kind: "tool_call",
     ts,
-    cmd: name + " " + JSON.stringify(input).substring(0, 200),
-    workdir: "",
+    text: name + " " + JSON.stringify(input).substring(0, 200),
     callId,
     toolName: name,
   };
