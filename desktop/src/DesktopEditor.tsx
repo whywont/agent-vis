@@ -27,7 +27,7 @@ import type { AppEvent } from "@/lib/types";
 import { formatTime } from "@/utils/format";
 import { captureSessionHistory, explainDiff, listWorkspaceFiles, readSessionFileHistory, readWorkspaceFile, saveWorkspaceFile, stopTerminal, type SessionFileVersion, type WorkspaceTreeEntry } from "./desktop-api";
 import DesktopTerminal from "./DesktopTerminal";
-import { buildFileHistorySnapshot, historyChangesForFile, recordedSnapshotOverlay, type HistoryOverlay } from "./editor-file-history";
+import { buildFileHistorySnapshot, historyChangesForFile, recordedSnapshotOverlay, unrecordedHistoryChanges, type HistoryOverlay } from "./editor-file-history";
 
 interface TreeNode { children: Map<string, TreeNode>; path?: string; }
 interface ExplainTarget { startLine: number; endLine: number; text: string; top: number; }
@@ -36,7 +36,19 @@ interface EditorHistoryEntry {
   label: string;
   timestamp: string;
   baseline: boolean;
+  recorded: boolean;
   snapshot: { content: string; overlay: HistoryOverlay };
+}
+
+function historyVersionLabel(timestamp: string): string {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.valueOf())) return timestamp;
+  return date.toLocaleTimeString("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
 }
 
 class PatchLinesWidget extends WidgetType {
@@ -236,9 +248,10 @@ export default function DesktopEditor({ workspaceRoot, navigation, threadId, eve
     if (!activePath) return [];
     const snapshots = historyVersions.map((version, index): EditorHistoryEntry => ({
       key: `snapshot:${version.version}:${version.timestamp}`,
-      label: version.baseline ? "baseline" : formatTime(version.timestamp),
+      label: version.baseline ? "baseline" : historyVersionLabel(version.timestamp),
       timestamp: version.timestamp,
       baseline: version.baseline,
+      recorded: true,
       snapshot: {
         content: version.content ?? "",
         // A baseline is the reference snapshot, not an "add file" revision.
@@ -251,12 +264,19 @@ export default function DesktopEditor({ workspaceRoot, navigation, threadId, eve
         ),
       },
     }));
-    const changes = timelineChanges.map((change, index): EditorHistoryEntry => ({
+    const provisionalChanges = unrecordedHistoryChanges(
+      timelineChanges,
+      historyVersions,
+      activePath,
+      workspaceRoot,
+    );
+    const changes = provisionalChanges.map((change, index): EditorHistoryEntry => ({
       key: `change:${change.ts}:${index}`,
-      label: `v${index + 1}`,
+      label: historyVersionLabel(change.ts),
       timestamp: change.ts,
       baseline: false,
-      snapshot: buildFileHistorySnapshot(content, timelineChanges, index, activePath, workspaceRoot),
+      recorded: false,
+      snapshot: buildFileHistorySnapshot(content, provisionalChanges, index, activePath, workspaceRoot),
     }));
     return [...snapshots, ...changes].sort((left, right) => {
       if (left.baseline !== right.baseline) return left.baseline ? -1 : 1;
@@ -537,7 +557,7 @@ export default function DesktopEditor({ workspaceRoot, navigation, threadId, eve
             <button type="button" className={!selectedHistory ? "active" : ""} onClick={() => selectHistorySlot(0)}>current</button>
             {[...historyEntries].reverse().map((entry, reverseIndex) => {
               const index = historyEntries.length - reverseIndex - 1;
-              return <button type="button" className={selectedHistoryIndex === index ? "active" : ""} key={entry.key} onClick={() => setHistorySelection(activePath ? { path: activePath, key: entry.key } : null)} title={`Recorded file change from ${formatTime(entry.timestamp)}`}>{entry.label}</button>;
+              return <button type="button" className={selectedHistoryIndex === index ? "active" : ""} key={entry.key} onClick={() => setHistorySelection(activePath ? { path: activePath, key: entry.key } : null)} title={`${entry.recorded ? "Recorded file version" : "Unrecorded timeline change"} from ${historyVersionLabel(entry.timestamp)}`}>{entry.label}</button>;
             })}
             <div className="desktop-editor-version-cycle" aria-label="Cycle file versions">
               <button type="button" onClick={() => selectHistorySlot(activeHistorySlot + 1)} disabled={activeHistorySlot >= historySlots - 1} title="Older version" aria-label="Older version">‹</button>
