@@ -14,3 +14,23 @@ export function unappliedRuntimeEvents(
   }
   return unapplied;
 }
+
+/**
+ * Return only the uninterrupted sequence immediately after the current
+ * watermark. Live delivery must not jump over a missing event because doing so
+ * would make a later replay start after the gap and permanently lose it.
+ */
+export function contiguousRuntimeEvents(
+  currentSequence: number,
+  events: readonly AgentProviderRuntimeEvent[],
+): AgentProviderRuntimeEvent[] {
+  const ordered = unappliedRuntimeEvents(currentSequence, events);
+  const contiguous: AgentProviderRuntimeEvent[] = [];
+  let expected = currentSequence + 1;
+  for (const event of ordered) {
+    if (event.sequence !== expected) break;
+    contiguous.push(event);
+    expected += 1;
+  }
+  return contiguous;
+}

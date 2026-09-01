@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentProviderRuntimeEvent } from "./desktop-api";
-import { unappliedRuntimeEvents } from "./sequenced-runtime-events";
+import { contiguousRuntimeEvents, unappliedRuntimeEvents } from "./sequenced-runtime-events";
 
 function event(sequence: number): AgentProviderRuntimeEvent {
   return {
@@ -20,5 +20,17 @@ describe("unappliedRuntimeEvents", () => {
   it("ignores already applied and unsafe sequence values", () => {
     expect(unappliedRuntimeEvents(5, [event(4), event(5), event(Number.MAX_SAFE_INTEGER + 1), event(6)]))
       .toEqual([event(6)]);
+  });
+});
+
+describe("contiguousRuntimeEvents", () => {
+  it("does not advance the live watermark across a missing event", () => {
+    expect(contiguousRuntimeEvents(4, [event(5), event(7), event(8)]).map((entry) => entry.sequence))
+      .toEqual([5]);
+  });
+
+  it("orders a complete live sequence and removes duplicates", () => {
+    expect(contiguousRuntimeEvents(4, [event(6), event(5), event(6), event(7)]).map((entry) => entry.sequence))
+      .toEqual([5, 6, 7]);
   });
 });

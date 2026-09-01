@@ -47,6 +47,25 @@ describe("desktopFileEntries", () => {
     expect(visible.get("desktop/src/DesktopLiveConversation.tsx")?.changes).toHaveLength(2);
   });
 
+  it("keeps transcript edits when the recorded file is no longer on disk", () => {
+    const removed: AppEvent = {
+      kind: "file_change",
+      ts: "2026-08-03T12:00:00Z",
+      callId: "delete-1",
+      patch: "*** Delete File: /repo/src/removed.ts\n-export const old = true;",
+      files: [{ action: "delete", path: "/repo/src/removed.ts" }],
+    };
+
+    const entries = desktopFileEntries([removed], "/repo");
+    const visible = remapDesktopFileEntries(
+      entries,
+      new Map([["src/removed.ts", null]]),
+    );
+
+    expect([...visible.keys()]).toEqual(["src/removed.ts"]);
+    expect(visible.get("src/removed.ts")?.changes).toEqual([removed]);
+  });
+
   it("extracts only the selected file from a multi-file history patch", () => {
     const patch = [
       "*** Begin Patch",

@@ -12,7 +12,7 @@ import DesktopTimeline from "./DesktopTimeline";
 import DesktopTerminal from "./DesktopTerminal";
 import DesktopLiveConversation from "./DesktopLiveConversation";
 import DesktopLiveStream, { type LiveStreamEntry } from "./DesktopLiveStream";
-import { captureSessionHistory, ensureSessionHistory, getGitBranch, readSession, resolveWorkspaceFilepaths, stopTerminal } from "./desktop-api";
+import { authorizeWorkspaceForFile, captureSessionHistory, ensureSessionHistory, getGitBranch, readSession, resolveWorkspaceFilepaths, stopTerminal } from "./desktop-api";
 import { startWindowDrag } from "./window-drag";
 import { workspaceRelativePath } from "./workspace-path";
 
@@ -67,7 +67,7 @@ export default function DesktopSessionDetail({
   const [branchCopied, setBranchCopied] = useState(false);
   const [filePanelOpen, setFilePanelOpen] = useState(true);
   const [filePanelView, setFilePanelView] = useState<"patches" | "stream">("patches");
-  const [editorNavigation, setEditorNavigation] = useState<{ path: string; requestId: number } | null>(null);
+  const [editorNavigation, setEditorNavigation] = useState<{ workspaceRoot: string; path: string; requestId: number } | null>(null);
   const [liveStream, setLiveStream] = useState<{ scope: string; entries: LiveStreamEntry[] }>({ scope: "", entries: [] });
   // Match the resize floor so opening a terminal never takes more room than
   // the user can immediately reclaim.
@@ -314,8 +314,10 @@ export default function DesktopSessionDetail({
   const openTimelineFileInEditor = useCallback(async (filepath: string) => {
     try {
       const [resolved] = await resolveWorkspaceFilepaths(cwd, [filepath]);
-      if (!resolved) return;
-      setEditorNavigation({ path: workspaceRelativePath(resolved, cwd), requestId: Date.now() });
+      const target = resolved
+        ? { workspaceRoot: cwd, path: workspaceRelativePath(resolved, cwd) }
+        : await authorizeWorkspaceForFile(filepath);
+      setEditorNavigation({ ...target, requestId: Date.now() });
       onActiveTabChange("editor");
     } catch {
       // The timeline remains usable if the file was removed or the workspace changed.
@@ -550,7 +552,7 @@ export default function DesktopSessionDetail({
         <DesktopTestingCanvas events={events} sessionCwd={cwd} onOpenFile={(path) => void openTimelineFileInEditor(path)} />
       ) : activeTab === "editor" && !splitView && !transcriptOnly ? (
         <Suspense fallback={<div className="desktop-detail-state">Loading editor...</div>}>
-          <DesktopEditor workspaceRoot={cwd} navigation={editorNavigation} threadId={id} events={events} />
+          <DesktopEditor workspaceRoot={editorNavigation?.workspaceRoot || cwd} navigation={editorNavigation} threadId={id} events={events} />
         </Suspense>
       ) : (
         <div className="detail-body">

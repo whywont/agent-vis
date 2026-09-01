@@ -55,8 +55,9 @@ use settings::{
 use tauri::Manager;
 use terminal::{resize_terminal, start_terminal, stop_terminal, write_terminal, TerminalState};
 use workspace::{
-    choose_workspace_directory, get_git_branch, list_workspace_files, read_workspace_file,
-    resolve_workspace_filepaths, save_workspace_file,
+    authorize_workspace_for_file, choose_workspace_directory, get_git_branch, list_workspace_files,
+    read_workspace_file, resolve_workspace_filepaths, save_workspace_file,
+    WorkspaceAuthorizationState,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -72,6 +73,7 @@ pub fn run() {
             app.manage(CodexAppServerState::new());
             app.manage(ClaudeStreamState::new());
             app.manage(SessionHistoryState::new());
+            app.manage(WorkspaceAuthorizationState::new());
             let provider_runtime = ProviderRuntimeState::new();
             provider_runtime.start_background_inventory(app.handle().clone());
             app.manage(provider_runtime);
@@ -121,6 +123,7 @@ pub fn run() {
             explain_diff,
             get_git_branch,
             choose_workspace_directory,
+            authorize_workspace_for_file,
             list_workspace_files,
             resolve_workspace_filepaths,
             read_workspace_file,

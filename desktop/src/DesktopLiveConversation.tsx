@@ -15,7 +15,7 @@ import {
 import { getHarnessAdapter, type HarnessContext, type LiveProvider, type ModelOption } from "./harness-adapters";
 import type { LiveStreamEntry } from "./DesktopLiveStream";
 import InteractiveAgentRequestPanel from "./InteractiveAgentRequestPanel";
-import { unappliedRuntimeEvents } from "./sequenced-runtime-events";
+import { contiguousRuntimeEvents, unappliedRuntimeEvents } from "./sequenced-runtime-events";
 import type { InteractiveAgentRequest, InteractiveAgentResponse } from "./interactive-agent-requests";
 
 type ConnectionState = "idle" | "connecting" | "ready" | "error";
@@ -23,6 +23,7 @@ type ConnectionState = "idle" | "connecting" | "ready" | "error";
 type ImageAttachment = { id: string; url: string; name: string };
 const MAX_IMAGE_ATTACHMENTS = 4;
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+const RUNTIME_REPLAY_INTERVAL_MS = 1_000;
 
 export default function DesktopLiveConversation({
   provider,
@@ -155,6 +156,8 @@ export default function DesktopLiveConversation({
   useEffect(() => {
     let cancelled = false;
     let unlisten: UnlistenFn | undefined;
+    let replayTimer: number | undefined;
+    let replaying = false;
     let catchingUp = true;
     const queuedLiveEvents: AgentProviderRuntimeEvent[] = [];
     const scope = `${provider}:${sessionKey}`;
@@ -162,7 +165,7 @@ export default function DesktopLiveConversation({
       runtimeSequence.current = { scope, sequence: 0 };
     }
 
-    const applyRuntimeEvent = (runtimeEvent: AgentProviderRuntimeEvent) => {
+    const applyRuntimeEvent = (runtimeEvent: AgentProviderRuntimeEvent, replayed = false) => {
       if (runtimeEvent.sequence <= runtimeSequence.current.sequence) return;
       const message = asRecord(runtimeEvent.message);
       if (!message) return;
@@ -241,7 +244,7 @@ export default function DesktopLiveConversation({
             });
           }
         }
-        if (isClaudeCompaction(message)) onContextCompaction?.();
+        if (!replayed && isClaudeCompaction(message)) onContextCompaction?.();
         if (message.type === "assistant" && pendingSlashCommand.current) {
           const output = assistantText(message);
           if (output) {
@@ -287,7 +290,7 @@ export default function DesktopLiveConversation({
           } else {
             setState("ready");
           }
-          onTurnCompleted?.();
+          if (!replayed) onTurnCompleted?.();
         }
         return;
       }
@@ -326,13 +329,13 @@ export default function DesktopLiveConversation({
           turn?.status === "completed" ? "Codex finished." : "Codex stopped.",
           `codex:turn:${turn?.id || "current"}:completed`,
         ));
-        onTurnCompleted?.();
+        if (!replayed) onTurnCompleted?.();
       }
       if (method === "thread/status/changed") {
         const status = params.status as { type?: string } | undefined;
         if (status?.type === "idle") setActiveTurnId(null);
       }
-      if (method === "item/started" && isCodexCompaction(params.item)) {
+      if (!replayed && method === "item/started" && isCodexCompaction(params.item)) {
         onContextCompaction?.();
       }
       if (method === "item/started") {
@@ -343,17 +346,9 @@ export default function DesktopLiveConversation({
       if (streamEvent) onStreamEvent?.(streamEvent);
     };
 
-    void listen<AgentProviderRuntimeEvent>("agent-provider-runtime-event", (event) => {
-      const runtimeEvent = event.payload;
-      if (runtimeEvent.providerInstanceId !== provider || runtimeEvent.sessionKey !== sessionKey) return;
-      if (catchingUp) queuedLiveEvents.push(runtimeEvent);
-      else applyRuntimeEvent(runtimeEvent);
-    }).then(async (stop) => {
-      if (cancelled) {
-        stop();
-        return;
-      }
-      unlisten = stop;
+    const replayMissedEvents = async () => {
+      if (cancelled || replaying) return;
+      replaying = true;
       const afterSequence = runtimeSequence.current.sequence || undefined;
       try {
         const replay = await readAgentProviderRuntimeEvents(provider, sessionKey, afterSequence);
@@ -363,23 +358,60 @@ export default function DesktopLiveConversation({
           onTurnCompleted?.();
         }
         for (const runtimeEvent of unappliedRuntimeEvents(runtimeSequence.current.sequence, replay.events)) {
-          applyRuntimeEvent(runtimeEvent);
+          applyRuntimeEvent(runtimeEvent, true);
         }
       } catch {
-        // The live subscription remains useful if catch-up is unavailable
-        // during a backend restart. Its first event establishes the watermark.
+        // Live delivery remains useful during a transient replay failure. The
+        // next interval retries from the last successfully applied sequence.
+      } finally {
+        replaying = false;
+        const queued = contiguousRuntimeEvents(runtimeSequence.current.sequence, queuedLiveEvents);
+        if (queued.length) {
+          const applied = new Set(queued.map((event) => event.sequence));
+          for (const runtimeEvent of queued) applyRuntimeEvent(runtimeEvent);
+          for (let index = queuedLiveEvents.length - 1; index >= 0; index -= 1) {
+            if (applied.has(queuedLiveEvents[index].sequence)) queuedLiveEvents.splice(index, 1);
+          }
+        }
+      }
+    };
+
+    void listen<AgentProviderRuntimeEvent>("agent-provider-runtime-event", (event) => {
+      const runtimeEvent = event.payload;
+      if (runtimeEvent.providerInstanceId !== provider || runtimeEvent.sessionKey !== sessionKey) return;
+      if (catchingUp || replaying) {
+        queuedLiveEvents.push(runtimeEvent);
+      } else if (runtimeEvent.sequence === runtimeSequence.current.sequence + 1) {
+        applyRuntimeEvent(runtimeEvent);
+      } else if (runtimeEvent.sequence > runtimeSequence.current.sequence) {
+        // Do not advance beyond a missing sequence. The backend records before
+        // emitting, so replay can recover the complete gap immediately.
+        queuedLiveEvents.push(runtimeEvent);
+        void replayMissedEvents();
+      }
+    }).then(async (stop) => {
+      if (cancelled) {
+        stop();
+        return;
+      }
+      unlisten = stop;
+      try {
+        await replayMissedEvents();
       } finally {
         catchingUp = false;
         if (!cancelled) {
-          for (const runtimeEvent of unappliedRuntimeEvents(runtimeSequence.current.sequence, queuedLiveEvents)) {
-            applyRuntimeEvent(runtimeEvent);
-          }
+          // Tauri's live event channel is intentionally backed by a replay
+          // buffer. Poll its sequence watermark so a dropped renderer event
+          // cannot leave the active timeline or an approval prompt stale until
+          // the user remounts the session.
+          replayTimer = window.setInterval(() => void replayMissedEvents(), RUNTIME_REPLAY_INTERVAL_MS);
         }
         queuedLiveEvents.length = 0;
       }
     });
     return () => {
       cancelled = true;
+      if (replayTimer !== undefined) window.clearInterval(replayTimer);
       unlisten?.();
     };
   }, [adapter.interactiveRequests, onActivity, onApprovalChange, onContextCompaction, onStreamEvent, onTimelineEvent, onTurnCompleted, provider, sessionKey]);

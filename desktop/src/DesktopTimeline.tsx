@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { cloneElement } from "react";
 import type { MouseEvent as ReactMouseEvent, ReactElement } from "react";
 import ColoredText from "@/components/ColoredText";
@@ -121,6 +121,10 @@ function DesktopTimelineForSession({
     ).reverse(),
     [events, matchTarget],
   );
+  const showEventDates = useMemo(() => {
+    const days = new Set(displayEvents.map((event) => localDateKey(event.ts)).filter(Boolean));
+    return days.size > 1;
+  }, [displayEvents]);
   const visibleEvents = useMemo(() => {
     const effectiveFilters = new Set(activeFilters);
     if (matchTarget) effectiveFilters.add(matchTarget.eventKind);
@@ -208,13 +212,17 @@ function DesktopTimelineForSession({
     return () => panel.removeEventListener("scroll", rememberPosition);
   }, []);
 
-  function updateChatPreferences(change: Partial<ChatPreferences>) {
+  const updateChatPreferences = useCallback((change: Partial<ChatPreferences>) => {
     setChatPreferences((current) => {
       const next = { ...current, ...change };
+      if (next.visible === current.visible && next.pinned === current.pinned) return current;
       saveChatPreferences(sessionKey, next);
       return next;
     });
-  }
+  }, [sessionKey]);
+  const showChatForAttention = useCallback(() => {
+    updateChatPreferences({ visible: true });
+  }, [updateChatPreferences]);
 
   function toggleFilter(key: string) {
     setFilterPreferences((current) => {
@@ -257,7 +265,7 @@ function DesktopTimelineForSession({
         {liveConversation && cloneElement(liveConversation, {
           visible: chatVisible,
           pinned: chatPinned,
-          onNeedsAttention: () => updateChatPreferences({ visible: true }),
+          onNeedsAttention: showChatForAttention,
         })}
       </div>
       <div className="timeline" ref={timelineRef}>
@@ -269,6 +277,7 @@ function DesktopTimelineForSession({
             contextText={event.kind === "file_change" ? precedingUserRequest(events, event.ts) : undefined}
             matched={targetMatchesEvent(matchTarget, event)}
             matchRequestKey={targetMatchesEvent(matchTarget, event) ? targetRequestKey(matchTarget) : null}
+            showDate={showEventDates}
             expanded={expandedEvents.has(timelineEventIdentity(event)) || autoExpandedAgentEvent === timelineEventIdentity(event)}
             onOpenFile={onOpenFile}
             onOpenSubagent={onOpenSubagent}
@@ -312,6 +321,7 @@ function DesktopTimelineEntry({
   contextText,
   matched,
   matchRequestKey,
+  showDate,
   expanded,
   onOpenFile,
   onOpenSubagent,
@@ -323,6 +333,7 @@ function DesktopTimelineEntry({
   contextText?: string;
   matched: boolean;
   matchRequestKey: string | null;
+  showDate: boolean;
   expanded: boolean;
   onOpenFile?: (filepath: string) => void;
   onOpenSubagent?: (sessionId: string) => void;
@@ -383,7 +394,7 @@ function DesktopTimelineEntry({
         <span className="desktop-context-compaction-mark" aria-hidden="true">...</span>
         <span>Context compacted</span>
         <small>agent continuing with a handoff</small>
-        <time>{formatTime(event.ts)}</time>
+        <time title={fullTimestamp(event.ts)}>{formatTimelineTime(event.ts, showDate)}</time>
       </div>
     );
   }
@@ -392,7 +403,7 @@ function DesktopTimelineEntry({
     return <div className="desktop-subagent-spawn" data-event-key={eventKey(event)} data-event-search-key={eventSearchKey(event)}>
       <span className="desktop-subagent-spawn-mark">agent</span>
       <div><strong>{event.agentNickname || event.agentPath?.split("/").filter(Boolean).at(-1) || event.sessionId.slice(0, 12)}</strong><small>{event.agentPath || `depth ${event.agentDepth}`}{event.agentStatus ? ` · ${event.agentStatus}` : ""}</small></div>
-      <time>{formatTime(event.ts)}</time>
+      <time title={fullTimestamp(event.ts)}>{formatTimelineTime(event.ts, showDate)}</time>
       <button type="button" onClick={() => onOpenSubagent?.(event.sessionId)}>Open transcript</button>
       <button type="button" onClick={() => onSplitSubagent?.(event.sessionId)}>Open split</button>
     </div>;
@@ -419,7 +430,7 @@ function DesktopTimelineEntry({
       >
         <span className={`entry-badge ${style.badge}`}>{style.label}</span>
         {collapsed && <span className="entry-summary">{summary(event)}</span>}
-        <span className="entry-time">{formatTime(event.ts)}</span>
+        <time className="entry-time" title={fullTimestamp(event.ts)}>{formatTimelineTime(event.ts, showDate)}</time>
         <button
           type="button"
           className={`entry-highlight-btn${highlighted ? " active" : ""}`}
@@ -494,6 +505,26 @@ function eventSelector(identity: string): string {
 
 function contentOffset(panel: HTMLElement, element: HTMLElement): number {
   return element.getBoundingClientRect().top - panel.getBoundingClientRect().top + panel.scrollTop;
+}
+
+function localDateKey(timestamp: string): string {
+  const date = new Date(timestamp);
+  return Number.isNaN(date.valueOf())
+    ? ""
+    : `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
+}
+
+function formatTimelineTime(timestamp: string, showDate: boolean): string {
+  const time = formatTime(timestamp);
+  if (!showDate) return time;
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.valueOf())) return time;
+  return `${date.toLocaleDateString("en-US", { month: "short", day: "numeric" })} ${time}`;
+}
+
+function fullTimestamp(timestamp: string): string {
+  const date = new Date(timestamp);
+  return Number.isNaN(date.valueOf()) ? timestamp : date.toLocaleString();
 }
 
 function eventSearchKey(event: TimelineEvent): string {

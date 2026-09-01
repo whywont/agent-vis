@@ -40,8 +40,11 @@ export function remapDesktopFileEntries(
 ): Map<string, DesktopFileEntry> {
   const output = new Map<string, DesktopFileEntry>();
   for (const [path, entry] of entries) {
-    const displayPath = resolvedPaths.get(path);
-    if (!displayPath) continue;
+    // The session transcript is the source of truth for which files were
+    // edited. Resolution can map an old path to its current Git rename, but a
+    // missing file (for example, a later deletion or an unavailable checkout)
+    // must not erase its recorded patches from the tree.
+    const displayPath = resolvedPaths.get(path) || path;
     const existing = output.get(displayPath);
     output.set(displayPath, {
       ...entry,

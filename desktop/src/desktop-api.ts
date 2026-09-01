@@ -407,6 +407,10 @@ export function chooseWorkspaceDirectory(): Promise<string | null> {
   return invoke<string | null>("choose_workspace_directory");
 }
 
+export function authorizeWorkspaceForFile(filepath: string): Promise<{ workspaceRoot: string; path: string }> {
+  return invoke<{ workspaceRoot: string; path: string }>("authorize_workspace_for_file", { request: { filepath } });
+}
+
 export function resolveWorkspaceFilepaths(workspaceRoot: string, filepaths: string[]): Promise<(string | null)[]> {
   return invoke<(string | null)[]>("resolve_workspace_filepaths", { request: { workspaceRoot, filepaths } });
 }
