@@ -1369,8 +1369,17 @@ body.resizing .desktop-collab-column-resize::after { background: rgba(224,184,92
   border-left-color: var(--accent);
 }
 
+.entry-actions {
+  display: flex;
+  flex: 0 0 76px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+}
+
 .entry-copy-message-btn {
   flex-shrink: 0;
+  width: 42px;
   padding: 2px 5px;
   border: 1px solid transparent;
   border-radius: 3px;

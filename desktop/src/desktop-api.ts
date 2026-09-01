@@ -134,6 +134,7 @@ export interface SendAgentProviderTurnRequest {
   sessionKey: string;
   threadId: string;
   turnId?: string;
+  cwd: string;
   text: string;
   imageUrls: string[];
 }
@@ -531,11 +532,12 @@ export function sendCodexTurn(
   sessionKey: string,
   threadId: string,
   turnId: string | null,
+  cwd: string,
   text: string,
   imageUrls: string[],
 ): Promise<void> {
   return invoke<void>("send_codex_turn", {
-    requestData: { sessionKey, threadId, turnId, text, imageUrls },
+    requestData: { sessionKey, threadId, turnId, cwd, text, imageUrls },
   });
 }
 

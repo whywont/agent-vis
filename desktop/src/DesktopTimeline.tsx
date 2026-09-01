@@ -8,6 +8,7 @@ import { deduplicateTimelineEvents, timelineEventIdentity } from "@/lib/timeline
 import type { SessionMatchTarget } from "./App";
 import { formatTime, formatTokens, toDisplayString, truncate } from "@/utils/format";
 import DesktopDiffView from "./DesktopDiffView";
+import { desktopImageSrc } from "./desktop-image";
 import { precedingUserRequest } from "./explain-context";
 import {
   paginateTimelineEvents,
@@ -431,26 +432,28 @@ function DesktopTimelineEntry({
         <span className={`entry-badge ${style.badge}`}>{style.label}</span>
         {collapsed && <span className="entry-summary">{summary(event)}</span>}
         <time className="entry-time" title={fullTimestamp(event.ts)}>{formatTimelineTime(event.ts, showDate)}</time>
-        <button
-          type="button"
-          className={`entry-highlight-btn${highlighted ? " active" : ""}`}
-          onClick={toggleHighlight}
-          title={highlighted ? "Remove highlight" : "Highlight"}
-          aria-label={highlighted ? "Remove highlight" : "Highlight this timeline event"}
-        >
-          ★
-        </button>
-        {event.kind === "agent_message" && (
+        <span className="entry-actions">
           <button
             type="button"
-            className={`entry-copy-message-btn${messageCopied ? " copied" : ""}`}
-            onClick={copyAgentMessage}
-            title={messageCopied ? "Copied agent message" : "Copy agent message"}
-            aria-label={messageCopied ? "Copied agent message" : "Copy agent message"}
+            className={`entry-highlight-btn${highlighted ? " active" : ""}`}
+            onClick={toggleHighlight}
+            title={highlighted ? "Remove highlight" : "Highlight"}
+            aria-label={highlighted ? "Remove highlight" : "Highlight this timeline event"}
           >
-            {messageCopied ? "copied" : "copy"}
+            ★
           </button>
-        )}
+          {event.kind === "agent_message" && (
+            <button
+              type="button"
+              className={`entry-copy-message-btn${messageCopied ? " copied" : ""}`}
+              onClick={copyAgentMessage}
+              title={messageCopied ? "Copied agent message" : "Copy agent message"}
+              aria-label={messageCopied ? "Copied agent message" : "Copy agent message"}
+            >
+              {messageCopied ? "copied" : "copy"}
+            </button>
+          )}
+        </span>
       </div>
       <div className={`entry-body${collapsed ? " collapsed" : ""}${event.kind === "file_change" ? " diff-body" : ""}`}>
         <div className="entry-body-section">
@@ -468,17 +471,20 @@ function DesktopTimelineEntry({
               {event.text}
               {userImages.length > 0 && (
                 <div className="desktop-message-images">
-                  {userImages.map((image, index) => (
-                    <button
-                      key={`${image}-${index}`}
-                      type="button"
-                      className="desktop-message-image"
-                      title="Copy image"
-                      onClick={() => void copyImage(image)}
-                    >
-                      <img src={image} alt={`User image ${index + 1}`} />
-                    </button>
-                  ))}
+                  {userImages.map((image, index) => {
+                    const src = desktopImageSrc(image);
+                    return (
+                      <button
+                        key={`${image}-${index}`}
+                        type="button"
+                        className="desktop-message-image"
+                        title="Copy image"
+                        onClick={() => void copyImage(src)}
+                      >
+                        <img src={src} alt={`User image ${index + 1}`} />
+                      </button>
+                    );
+                  })}
                 </div>
               )}
             </>

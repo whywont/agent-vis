@@ -322,6 +322,7 @@ pub(crate) struct SendAgentProviderTurnRequest {
     session_key: String,
     thread_id: String,
     turn_id: Option<String>,
+    cwd: String,
     text: String,
     image_urls: Vec<String>,
 }
@@ -829,6 +830,7 @@ pub(crate) fn send_agent_provider_turn(
                 session_key: request.session_key,
                 thread_id: request.thread_id,
                 turn_id: request.turn_id,
+                cwd: request.cwd,
                 text: request.text,
                 image_urls: request.image_urls,
             },

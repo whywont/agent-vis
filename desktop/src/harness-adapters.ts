@@ -125,8 +125,8 @@ const codexAdapter: HarnessAdapter = {
   label: "Codex",
   initialCommands: CODEX_COMMANDS,
   connect: ({ sessionKey, threadId, cwd }) => connectCodexThread(sessionKey, threadId, cwd),
-  sendTurn: ({ sessionKey, threadId, activeTurnId }, text, imageUrls) =>
-    sendCodexTurn(sessionKey, threadId, activeTurnId === "pending-turn" ? null : activeTurnId, text, imageUrls),
+  sendTurn: ({ sessionKey, threadId, cwd, activeTurnId }, text, imageUrls) =>
+    sendCodexTurn(sessionKey, threadId, activeTurnId === "pending-turn" ? null : activeTurnId, cwd, text, imageUrls),
   async models({ sessionKey, threadId, cwd }) {
     const models = await listCodexModels(sessionKey, threadId, cwd);
     return models.map((model): ModelOption => [
@@ -142,7 +142,14 @@ const codexAdapter: HarnessAdapter = {
   commandDescription: commandDescription(CODEX_COMMANDS),
   interactiveRequests: {
     decode: decodeCodexServerRequest,
-    isResolved: (message) => message.method === "serverRequest/resolved",
+    isResolved: (message, request) => {
+      const params = typeof message.params === "object" && message.params !== null
+        ? message.params as Record<string, unknown>
+        : {};
+      return message.method === "serverRequest/resolved"
+        && request !== null
+        && params.requestId === request.requestId;
+    },
     async respond(context, request, response) {
       await respondToCodexServerRequest(
         context.sessionKey,

@@ -83,6 +83,7 @@ pub(crate) struct CodexTurnRequest {
     pub(crate) session_key: String,
     pub(crate) thread_id: String,
     pub(crate) turn_id: Option<String>,
+    pub(crate) cwd: String,
     pub(crate) text: String,
     pub(crate) image_urls: Vec<String>,
 }
@@ -1076,13 +1077,27 @@ pub(crate) fn send_codex_turn(
             json!({ "threadId": request_data.thread_id, "expectedTurnId": turn_id, "input": input }),
         )?;
     } else {
+        let sandbox_policy = workspace_write_sandbox_policy(&request_data.cwd);
         request(
             &connection,
             "turn/start",
-            json!({ "threadId": request_data.thread_id, "input": input }),
+            json!({
+                "threadId": request_data.thread_id,
+                "input": input,
+                "cwd": request_data.cwd,
+                "sandboxPolicy": sandbox_policy,
+            }),
         )?;
     }
     Ok(())
+}
+
+fn workspace_write_sandbox_policy(cwd: &str) -> Value {
+    json!({
+        "type": "workspaceWrite",
+        "writableRoots": [cwd],
+        "networkAccess": false,
+    })
 }
 
 #[tauri::command]
@@ -1276,10 +1291,17 @@ pub(crate) fn respond_to_codex_server_request(
     response: CodexServerRequestResponse,
 ) -> Result<(), String> {
     let connection = connection_for(&app, &state, &response.session_key)?;
+    let request_id = response.request_id.clone();
     write_message(
         &connection,
         &json!({ "jsonrpc": "2.0", "id": response.request_id, "result": response.result }),
-    )
+    )?;
+    emit_event(
+        &app,
+        &response.session_key,
+        json!({ "method": "serverRequest/resolved", "params": { "requestId": request_id } }),
+    );
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1287,7 +1309,8 @@ mod tests {
     use super::{
         agent_vis_listener_parent, agent_vis_runtime_parent, initialize_params, parse_lsof_writer,
         parse_process_identity, response_error, supports_interactive_server_request,
-        unsupported_server_request_response, validate_thread_id, CodexWriterInfo, ProcessIdentity,
+        unsupported_server_request_response, validate_thread_id, workspace_write_sandbox_policy,
+        CodexWriterInfo, ProcessIdentity,
     };
     use serde_json::json;
 
@@ -1378,6 +1401,18 @@ mod tests {
                 .get("capabilities")
                 .and_then(|capabilities| capabilities.get("experimentalApi")),
             Some(&json!(true))
+        );
+    }
+
+    #[test]
+    fn scopes_workspace_write_to_the_active_repository() {
+        assert_eq!(
+            workspace_write_sandbox_policy("/Users/me/project"),
+            json!({
+                "type": "workspaceWrite",
+                "writableRoots": ["/Users/me/project"],
+                "networkAccess": false,
+            })
         );
     }
 

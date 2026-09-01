@@ -17,6 +17,7 @@ import type { LiveStreamEntry } from "./DesktopLiveStream";
 import InteractiveAgentRequestPanel from "./InteractiveAgentRequestPanel";
 import { contiguousRuntimeEvents, unappliedRuntimeEvents } from "./sequenced-runtime-events";
 import type { InteractiveAgentRequest, InteractiveAgentResponse } from "./interactive-agent-requests";
+import { enqueueInteractiveRequest, removeInteractiveRequest } from "./interactive-request-queue";
 
 type ConnectionState = "idle" | "connecting" | "ready" | "error";
 
@@ -70,8 +71,9 @@ export default function DesktopLiveConversation({
   const [error, setError] = useState("");
   const [externalWriter, setExternalWriter] = useState<CodexWriterInfo | null>(null);
   const [takeControlConfirmation, setTakeControlConfirmation] = useState<{ threadId: string; pid: number } | null>(null);
-  const [interactiveRequest, setInteractiveRequest] = useState<InteractiveAgentRequest | null>(null);
-  const interactiveRequestRef = useRef<InteractiveAgentRequest | null>(null);
+  const [interactiveRequests, setInteractiveRequests] = useState<InteractiveAgentRequest[]>([]);
+  const interactiveRequestsRef = useRef<InteractiveAgentRequest[]>([]);
+  const interactiveRequest = interactiveRequests[0] || null;
   const [respondingToRequest, setRespondingToRequest] = useState(false);
   const [sending, setSending] = useState(false);
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -97,8 +99,8 @@ export default function DesktopLiveConversation({
   }, [interactiveRequest, onNeedsAttention]);
 
   useEffect(() => {
-    interactiveRequestRef.current = interactiveRequest;
-  }, [interactiveRequest]);
+    onApprovalChange?.(interactiveRequest?.type === "approval" ? interactiveRequest.command || null : null);
+  }, [interactiveRequest, onApprovalChange]);
 
   useEffect(() => {
     if (!draft) composerRef.current?.style.removeProperty("height");
@@ -165,6 +167,15 @@ export default function DesktopLiveConversation({
       runtimeSequence.current = { scope, sequence: 0 };
     }
 
+    const replaceInteractiveRequests = (requests: InteractiveAgentRequest[]) => {
+      interactiveRequestsRef.current = requests;
+      setInteractiveRequests(requests);
+    };
+    const dismissInteractiveRequest = (request: InteractiveAgentRequest) => {
+      replaceInteractiveRequests(removeInteractiveRequest(interactiveRequestsRef.current, request));
+    };
+    const clearInteractiveRequests = () => replaceInteractiveRequests([]);
+
     const applyRuntimeEvent = (runtimeEvent: AgentProviderRuntimeEvent, replayed = false) => {
       if (runtimeEvent.sequence <= runtimeSequence.current.sequence) return;
       const message = asRecord(runtimeEvent.message);
@@ -172,7 +183,7 @@ export default function DesktopLiveConversation({
       runtimeSequence.current = { scope, sequence: runtimeEvent.sequence };
       onActivity?.();
 
-      const activeInteractiveRequest = interactiveRequestRef.current;
+      const activeInteractiveRequest = interactiveRequestsRef.current[0] || null;
       const completionResponse = adapter.interactiveRequests?.completionResponse?.(
         message,
         activeInteractiveRequest,
@@ -184,19 +195,17 @@ export default function DesktopLiveConversation({
           activeInteractiveRequest,
           completionResponse,
         ).then(() => {
-          if (interactiveRequestRef.current?.requestId !== activeInteractiveRequest.requestId) return;
-          interactiveRequestRef.current = null;
-          setInteractiveRequest(null);
-          onApprovalChange?.(null);
+          dismissInteractiveRequest(activeInteractiveRequest);
         }).catch((reason: unknown) => {
           setError(reason instanceof Error ? reason.message : String(reason));
         }).finally(() => setRespondingToRequest(false));
       }
-      if (!completionResponse && adapter.interactiveRequests?.isResolved?.(message, activeInteractiveRequest)) {
-        interactiveRequestRef.current = null;
-        setInteractiveRequest(null);
+      const resolvedInteractiveRequest = !completionResponse
+        ? interactiveRequestsRef.current.find((request) => adapter.interactiveRequests?.isResolved?.(message, request))
+        : undefined;
+      if (resolvedInteractiveRequest) {
+        dismissInteractiveRequest(resolvedInteractiveRequest);
         setRespondingToRequest(false);
-        onApprovalChange?.(null);
       }
       const serverRequest = adapter.interactiveRequests?.decode(message);
       if (serverRequest?.type === "unsupported") {
@@ -205,16 +214,13 @@ export default function DesktopLiveConversation({
         return;
       }
       if (serverRequest) {
-        interactiveRequestRef.current = serverRequest;
-        setInteractiveRequest(serverRequest);
-        onApprovalChange?.(serverRequest.type === "approval" ? serverRequest.command || null : null);
+        replaceInteractiveRequests(enqueueInteractiveRequest(interactiveRequestsRef.current, serverRequest));
       }
 
       if (provider === "claude-code") {
         if (message.type === "agent-vis/disconnected") {
-          setInteractiveRequest(null);
+          clearInteractiveRequests();
           setRespondingToRequest(false);
-          onApprovalChange?.(null);
           setState("error");
           setError("Claude disconnected");
           setActiveTurnId(null);
@@ -268,9 +274,8 @@ export default function DesktopLiveConversation({
           }
         }
         if (message.type === "result") {
-          setInteractiveRequest(null);
+          clearInteractiveRequests();
           setRespondingToRequest(false);
-          onApprovalChange?.(null);
           const pending = pendingSlashCommand.current;
           const result = typeof message.result === "string" ? message.result.trim() : "";
           if (pending && result && result !== pending.output) {
@@ -298,9 +303,8 @@ export default function DesktopLiveConversation({
       const method = typeof message.method === "string" ? message.method : undefined;
       const params = asRecord(message.params) || {};
       if (method === "agent-vis/disconnected") {
-        setInteractiveRequest(null);
+        clearInteractiveRequests();
         setRespondingToRequest(false);
-        onApprovalChange?.(null);
         setState("error");
         setError("Codex disconnected");
         return;
@@ -312,9 +316,8 @@ export default function DesktopLiveConversation({
         onStreamEvent?.(streamEntry("system", "Codex is working.", `codex:turn:${turn?.id || "current"}:started`));
       }
       if (method === "turn/completed") {
-        setInteractiveRequest(null);
+        clearInteractiveRequests();
         setRespondingToRequest(false);
-        onApprovalChange?.(null);
         setActiveTurnId(null);
         const turn = params.turn as { id?: string; status?: string; error?: { message?: string } | string } | undefined;
         const error = typeof turn?.error === "string"
@@ -591,9 +594,9 @@ export default function DesktopLiveConversation({
         interactiveRequest,
         response,
       );
-      interactiveRequestRef.current = null;
-      setInteractiveRequest(null);
-      onApprovalChange?.(null);
+      const remaining = removeInteractiveRequest(interactiveRequestsRef.current, interactiveRequest);
+      interactiveRequestsRef.current = remaining;
+      setInteractiveRequests(remaining);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
