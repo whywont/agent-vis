@@ -318,6 +318,7 @@ pub(crate) fn send_claude_turn(
 
 #[tauri::command]
 pub(crate) fn respond_to_claude_server_request(
+    app: AppHandle,
     state: State<'_, ClaudeStreamState>,
     response: ClaudeServerRequestResponse,
 ) -> Result<(), String> {
@@ -328,10 +329,17 @@ pub(crate) fn respond_to_claude_server_request(
         .get(&response.session_key)
         .cloned()
         .ok_or_else(|| "Open the Claude session before answering its request.".to_owned())?;
+    let request_id = response.request_id.clone();
     write_message(
         &connection,
         &control_request_response(response.request_id, response.result),
-    )
+    )?;
+    emit_event(
+        &app,
+        &response.session_key,
+        json!({ "type": "agent-vis/server-request-resolved", "request_id": request_id }),
+    );
+    Ok(())
 }
 
 fn claude_image_input(url: String) -> Option<Value> {

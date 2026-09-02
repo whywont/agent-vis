@@ -29,6 +29,7 @@ interface DesktopSessionListProps {
   sessionSharingMode: SessionSharingMode;
   sharedSessionKeys: Set<string>;
   meshSyncReceipts: MeshSyncReceipts;
+  attentionCounts: ReadonlyMap<string, number>;
   hasConfiguredSharingDevice: boolean;
   onOpenSettings: () => void;
   onStartSession: (provider: LiveProvider, model: string, effort: string, cwd: string) => Promise<unknown>;
@@ -84,6 +85,7 @@ export default function DesktopSessionList({
   sessionSharingMode,
   sharedSessionKeys,
   meshSyncReceipts,
+  attentionCounts,
   hasConfiguredSharingDevice,
   onOpenSettings,
   onStartSession,
@@ -495,6 +497,7 @@ export default function DesktopSessionList({
               const children = childSessions.get(session.id) || [];
               const childCount = descendantSessions(session.id, childSessions).length;
               const childrenOpen = visibleExpandedSubagents.has(session.id);
+              const attentionCount = attentionCounts.get(sessionKey) || 0;
               return (
                 <div className="desktop-session-family" key={files}>
                 <div
@@ -519,6 +522,11 @@ export default function DesktopSessionList({
                   <span className={`session-id${alias ? " desktop-session-alias" : ""}`} title={alias || session.id}>
                     {alias || session.id.slice(0, 12)}
                   </span>
+                  {attentionCount > 0 && (
+                    <span className="desktop-session-attention" title={`${attentionCount} action${attentionCount === 1 ? "" : "s"} needed`}>
+                      !{attentionCount > 1 ? attentionCount : ""}
+                    </span>
+                  )}
                   {session.synced ? (
                     <span
                       className="desktop-session-json-only"

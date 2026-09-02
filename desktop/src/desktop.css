@@ -1,3 +1,4 @@
+#app,
 .platform-macos #app {
   flex-direction: column;
 }
@@ -12,6 +13,57 @@
   padding: 2px 6px 6px;
   background: var(--bg);
 }
+
+.desktop-attention-bar {
+  display: flex;
+  height: 28px;
+  min-height: 28px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 9px;
+  border-top: 1px solid var(--border);
+  background: #151515;
+  color: var(--text-dim);
+  font: 9px var(--font-mono);
+}
+
+.desktop-attention-icon {
+  display: flex;
+  width: 13px;
+  color: var(--text-dim);
+}
+
+.desktop-attention-icon svg { width: 13px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
+
+.desktop-attention-bar.active .desktop-attention-icon {
+  color: #e0b85c;
+  filter: drop-shadow(0 0 4px rgba(224, 184, 92, 0.72));
+  animation: desktop-attention-pulse 1.4s ease-in-out infinite;
+}
+
+.desktop-attention-summary { margin-right: auto; }
+
+.desktop-attention-bar.active .desktop-attention-summary { color: #e0b85c; }
+
+.desktop-attention-bar button {
+  display: inline-flex;
+  max-width: 240px;
+  height: 20px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px;
+  overflow: hidden;
+  border: 1px solid rgba(224, 184, 92, 0.3);
+  border-radius: 10px;
+  background: rgba(224, 184, 92, 0.08);
+  color: #e0b85c;
+  cursor: pointer;
+  font: 9px var(--font-mono);
+}
+
+.desktop-attention-bar button:hover { background: rgba(224, 184, 92, 0.16); color: var(--text); }
+.desktop-attention-bar button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.desktop-attention-bar button b { font-size: 8px; }
 
 /* A terminal dropped on Sessions shares the left two columns with Sessions
    and Changed Files. The Timeline stays an independent full-height column. */
@@ -285,6 +337,23 @@ body.terminal-over-sessions #sidebar {
 }
 
 .desktop-session-family { min-width: 0; }
+
+.desktop-session-attention {
+  display: inline-flex;
+  min-width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  margin-left: 5px;
+  padding: 0 4px;
+  border: 1px solid rgba(224, 184, 92, 0.48);
+  border-radius: 8px;
+  background: rgba(224, 184, 92, 0.14);
+  box-shadow: 0 0 8px rgba(224, 184, 92, 0.13);
+  color: #e0b85c;
+  font: 700 8px var(--font-mono);
+  vertical-align: 1px;
+}
 
 .desktop-subagent-toggle {
   display: inline-flex;
@@ -2522,6 +2591,10 @@ body.resizing .desktop-collab-column-resize::after { background: rgba(224,184,92
 
 @keyframes desktop-live-pulse {
   50% { opacity: 0.35; }
+}
+
+@keyframes desktop-attention-pulse {
+  50% { opacity: 0.38; transform: scale(0.82); }
 }
 
 @keyframes desktop-approval-glow {

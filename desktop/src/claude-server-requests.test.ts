@@ -159,6 +159,7 @@ describe("Claude interactive request bridge", () => {
     expect(urlRequest?.type).toBe("mcp_elicitation");
     if (!urlRequest || urlRequest.type === "unsupported") return;
     expect(isClaudeServerRequestResolved({ type: "control_cancel_request", request_id: "r-1" }, urlRequest)).toBe(true);
+    expect(isClaudeServerRequestResolved({ type: "agent-vis/server-request-resolved", request_id: "r-1" }, urlRequest)).toBe(true);
     const completion = {
       type: "system",
       subtype: "elicitation_complete",
