@@ -22,7 +22,7 @@ import {
   type SessionSharingMode,
   type SessionSharingSettings,
 } from "./desktop-api";
-import { type LiveProvider } from "./harness-adapters";
+import { getHarnessAdapter, type LiveProvider } from "./harness-adapters";
 import DesktopSessionList from "./DesktopSessionList";
 import DesktopAttentionBar, { type AttentionSession } from "./DesktopAttentionBar";
 import DesktopSettingsPage from "./DesktopSettingsPage";
@@ -45,8 +45,12 @@ import {
   saveMeshSyncReceipts,
 } from "./mesh-sync-receipts";
 import { buildSessionHandoff, continuationModel } from "./session-handoff";
-import { notifyAgentNeedsAttention } from "./desktop-notifications";
+import {
+  listenForNotificationApprovalActions,
+  notifyAgentNeedsAttention,
+} from "./desktop-notifications";
 import { applyRuntimeAttentionEvent, attentionDetail, type SessionAttention } from "./session-attention";
+import { notificationApprovalDecision } from "./notification-approval";
 
 const SESSION_POLL_INTERVAL_MS = 5000;
 const LIVE_SESSION_REFRESH_DEBOUNCE_MS = 2_000;
@@ -114,7 +118,41 @@ export default function App() {
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
+    let unlistenNotificationActions: (() => void) | undefined;
     let cancelled = false;
+    void listenForNotificationApprovalActions(async (attention, action) => {
+      const active = attentionsRef.current.find((candidate) => candidate.key === attention.key);
+      if (!active || active.request.type !== "approval") return;
+      const decision = notificationApprovalDecision(active.request, action);
+      if (!decision) {
+        setError(`Codex did not offer a compatible ${action} decision for this request.`);
+        return;
+      }
+      const interactive = getHarnessAdapter(active.provider).interactiveRequests;
+      if (!interactive) return;
+      try {
+        await interactive.respond(
+          {
+            sessionKey: active.sessionKey,
+            threadId: "",
+            cwd: "",
+            activeTurnId: null,
+          },
+          active.request,
+          { type: "approval", decision },
+        );
+        const remaining = attentionsRef.current.filter((candidate) => candidate.key !== active.key);
+        attentionsRef.current = remaining;
+        setAttentions(remaining);
+      } catch (reason) {
+        setError(`Could not respond from the notification: ${reason instanceof Error ? reason.message : String(reason)}`);
+      }
+    }).then((stop) => {
+      if (cancelled) stop();
+      else unlistenNotificationActions = stop;
+    }).catch((reason: unknown) => {
+      setError(`Could not enable notification actions: ${reason instanceof Error ? reason.message : String(reason)}`);
+    });
     void listen<AgentProviderRuntimeEvent>("agent-provider-runtime-event", (event) => {
       const result = applyRuntimeAttentionEvent(attentionsRef.current, event.payload);
       if (!sameAttentionList(attentionsRef.current, result.attentions)) {
@@ -129,7 +167,7 @@ export default function App() {
         result.added.sessionKey,
       );
       const label = session ? attentionSessionLabel(loadSessionAliases(), session) : result.added.sessionKey;
-      notifyAgentNeedsAttention(label, attentionDetail(result.added));
+      notifyAgentNeedsAttention(label, attentionDetail(result.added), result.added);
     }).then((stop) => {
       if (cancelled) stop();
       else unlisten = stop;
@@ -137,6 +175,7 @@ export default function App() {
     return () => {
       cancelled = true;
       unlisten?.();
+      unlistenNotificationActions?.();
     };
   }, []);
 
