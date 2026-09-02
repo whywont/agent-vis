@@ -18,6 +18,13 @@ import InteractiveAgentRequestPanel from "./InteractiveAgentRequestPanel";
 import { contiguousRuntimeEvents, unappliedRuntimeEvents } from "./sequenced-runtime-events";
 import type { InteractiveAgentRequest, InteractiveAgentResponse } from "./interactive-agent-requests";
 import { enqueueInteractiveRequest, removeInteractiveRequest } from "./interactive-request-queue";
+import {
+  acknowledgePendingCodexSteer,
+  codexUserMessageId,
+  loadPendingCodexSteers,
+  savePendingCodexSteers,
+  type PendingCodexSteer,
+} from "./codex-steer-outbox";
 
 type ConnectionState = "idle" | "connecting" | "ready" | "error";
 
@@ -25,6 +32,7 @@ type ImageAttachment = { id: string; url: string; name: string };
 const MAX_IMAGE_ATTACHMENTS = 4;
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const RUNTIME_REPLAY_INTERVAL_MS = 1_000;
+const STALLED_TURN_TIMEOUT_MS = 45_000;
 
 export default function DesktopLiveConversation({
   provider,
@@ -67,6 +75,19 @@ export default function DesktopLiveConversation({
   const [state, setState] = useState<ConnectionState>("idle");
   const [draft, setDraft] = useState(initialDraft);
   const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
+  const activeTurnIdRef = useRef<string | null>(null);
+  activeTurnIdRef.current = activeTurnId;
+  const [turnStalled, setTurnStalled] = useState(false);
+  const lastRuntimeActivityAt = useRef(Date.now());
+  const stallTimer = useRef<number | undefined>(undefined);
+  const pendingSteersRef = useRef<PendingCodexSteer[]>(
+    provider === "codex" ? loadPendingCodexSteers(sessionKey, threadId) : [],
+  );
+  const acknowledgedUserMessages = useRef(new Set<string>());
+  const recoveringSteerRef = useRef(false);
+  const noteRuntimeActivityRef = useRef<(turnActive: boolean) => void>(() => {});
+  const acknowledgePendingSteerRef = useRef<(sequence: number) => void>(() => {});
+  const recoverPendingSteerRef = useRef<() => Promise<void>>(async () => {});
   harnessContextRef.current.activeTurnId = activeTurnId;
   const [error, setError] = useState("");
   const [externalWriter, setExternalWriter] = useState<CodexWriterInfo | null>(null);
@@ -106,6 +127,10 @@ export default function DesktopLiveConversation({
     if (!draft) composerRef.current?.style.removeProperty("height");
   }, [activeTurnId, draft]);
 
+  useEffect(() => () => {
+    if (stallTimer.current !== undefined) window.clearTimeout(stallTimer.current);
+  }, []);
+
   useEffect(() => {
     // A continuation opens with a reviewable handoff draft. Attach now so the
     // status dot reflects the real harness state before the user sends it.
@@ -116,7 +141,14 @@ export default function DesktopLiveConversation({
     if (provider !== "codex") return;
     let cancelled = false;
     void getActiveCodexTurn(sessionKey, threadId, cwd).then(({ turnId }) => {
-      if (!cancelled && turnId) setActiveTurnId((current) => current || turnId);
+      if (cancelled) return;
+      if (turnId) {
+        activeTurnIdRef.current = activeTurnIdRef.current || turnId;
+        setActiveTurnId((current) => current || turnId);
+        noteRuntimeActivityRef.current(true);
+      } else if (pendingSteersRef.current.length) {
+        void recoverPendingSteerRef.current();
+      }
     }).catch(() => {});
     return () => { cancelled = true; };
   }, [cwd, provider, sessionKey, threadId]);
@@ -182,6 +214,7 @@ export default function DesktopLiveConversation({
       if (!message) return;
       runtimeSequence.current = { scope, sequence: runtimeEvent.sequence };
       onActivity?.();
+      noteRuntimeActivityRef.current(Boolean(activeTurnIdRef.current));
 
       const activeInteractiveRequest = interactiveRequestsRef.current[0] || null;
       const completionResponse = adapter.interactiveRequests?.completionResponse?.(
@@ -302,6 +335,11 @@ export default function DesktopLiveConversation({
 
       const method = typeof message.method === "string" ? message.method : undefined;
       const params = asRecord(message.params) || {};
+      const userMessageId = codexUserMessageId(message);
+      if (userMessageId && !acknowledgedUserMessages.current.has(userMessageId)) {
+        acknowledgedUserMessages.current.add(userMessageId);
+        acknowledgePendingSteerRef.current(runtimeEvent.sequence);
+      }
       if (method === "agent-vis/disconnected") {
         clearInteractiveRequests();
         setRespondingToRequest(false);
@@ -311,14 +349,18 @@ export default function DesktopLiveConversation({
       }
       if (method === "turn/started") {
         const turn = params.turn as { id?: string } | undefined;
+        activeTurnIdRef.current = turn?.id || null;
         setActiveTurnId(turn?.id || null);
+        noteRuntimeActivityRef.current(true);
         setInterrupted(false);
         onStreamEvent?.(streamEntry("system", "Codex is working.", `codex:turn:${turn?.id || "current"}:started`));
       }
       if (method === "turn/completed") {
         clearInteractiveRequests();
         setRespondingToRequest(false);
+        activeTurnIdRef.current = null;
         setActiveTurnId(null);
+        clearStallTimer();
         const turn = params.turn as { id?: string; status?: string; error?: { message?: string } | string } | undefined;
         const error = typeof turn?.error === "string"
           ? turn.error
@@ -333,10 +375,15 @@ export default function DesktopLiveConversation({
           `codex:turn:${turn?.id || "current"}:completed`,
         ));
         if (!replayed) onTurnCompleted?.();
+        if (pendingSteersRef.current.length) void recoverPendingSteerRef.current();
       }
       if (method === "thread/status/changed") {
         const status = params.status as { type?: string } | undefined;
-        if (status?.type === "idle") setActiveTurnId(null);
+        if (status?.type === "idle") {
+          activeTurnIdRef.current = null;
+          setActiveTurnId(null);
+          clearStallTimer();
+        }
       }
       if (!replayed && method === "item/started" && isCodexCompaction(params.item)) {
         onContextCompaction?.();
@@ -458,6 +505,68 @@ export default function DesktopLiveConversation({
   }
   reconnect.current = connect;
 
+  function clearStallTimer() {
+    if (stallTimer.current !== undefined) window.clearTimeout(stallTimer.current);
+    stallTimer.current = undefined;
+    setTurnStalled(false);
+  }
+
+  function noteRuntimeActivity(turnActive: boolean) {
+    lastRuntimeActivityAt.current = Date.now();
+    setTurnStalled(false);
+    if (stallTimer.current !== undefined) window.clearTimeout(stallTimer.current);
+    stallTimer.current = undefined;
+    if (!turnActive) return;
+    stallTimer.current = window.setTimeout(() => {
+      if (!activeTurnIdRef.current) return;
+      if (Date.now() - lastRuntimeActivityAt.current < STALLED_TURN_TIMEOUT_MS) {
+        noteRuntimeActivity(true);
+        return;
+      }
+      setTurnStalled(true);
+      onNeedsAttention?.();
+    }, STALLED_TURN_TIMEOUT_MS);
+  }
+
+  function persistPendingSteers() {
+    savePendingCodexSteers(sessionKey, threadId, pendingSteersRef.current);
+  }
+
+  function acknowledgePendingSteer(sequence: number) {
+    const next = acknowledgePendingCodexSteer(pendingSteersRef.current, sequence);
+    if (next.length === pendingSteersRef.current.length) return;
+    pendingSteersRef.current = next;
+    persistPendingSteers();
+  }
+
+  async function recoverPendingSteer() {
+    const pending = pendingSteersRef.current[0];
+    if (!pending || recoveringSteerRef.current || provider !== "codex") return;
+    recoveringSteerRef.current = true;
+    try {
+      if (state !== "ready" && !(await connect())) return;
+      pending.afterSequence = runtimeSequence.current.sequence;
+      persistPendingSteers();
+      await adapter.sendTurn(
+        { sessionKey, threadId, cwd, activeTurnId: null, tokenUsage },
+        pending.text,
+        pending.imageUrls,
+      );
+      activeTurnIdRef.current = "pending-turn";
+      setActiveTurnId("pending-turn");
+      noteRuntimeActivity(true);
+    } catch (reason) {
+      setError(`Queued message was preserved but could not be retried: ${reason instanceof Error ? reason.message : String(reason)}`);
+      setState("error");
+      setDraft((current) => current || pending.text);
+    } finally {
+      recoveringSteerRef.current = false;
+    }
+  }
+  noteRuntimeActivityRef.current = noteRuntimeActivity;
+  acknowledgePendingSteerRef.current = acknowledgePendingSteer;
+  recoverPendingSteerRef.current = recoverPendingSteer;
+
   async function submit(textOverride?: string, alreadyConnected = false) {
     const text = (textOverride ?? draft).trim();
     if ((!text && !images.length) || sending) return;
@@ -504,6 +613,19 @@ export default function DesktopLiveConversation({
           onTimelineEvent?.({ kind: "tool_output", ts: new Date().toISOString(), callId, output });
         }
       } else {
+        const steering = provider === "codex" && Boolean(activeTurnId && activeTurnId !== "pending-turn");
+        if (steering) {
+          const pending: PendingCodexSteer = {
+            id: crypto.randomUUID(),
+            text,
+            imageUrls,
+            streamInput,
+            submittedAt: Date.now(),
+            afterSequence: runtimeSequence.current.sequence,
+          };
+          pendingSteersRef.current = [...pendingSteersRef.current, pending];
+          persistPendingSteers();
+        }
         await adapter.sendTurn({ sessionKey, threadId, cwd, activeTurnId, tokenUsage }, text, imageUrls);
         // Do not show a local input as delivered until the harness has accepted
         // it; otherwise a rejected request becomes a misleading ghost entry.
@@ -519,7 +641,9 @@ export default function DesktopLiveConversation({
           // immediately. It keeps Steer visibly ready if that notification is
           // delayed; it is deliberately not passed back as a real turn ID.
           setActiveTurnId("pending-turn");
+          activeTurnIdRef.current = "pending-turn";
           setInterrupted(false);
+          noteRuntimeActivity(true);
         }
         // A continuation handoff is a one-time composer seed. Users often
         // edit it before sending, so consume it after the first normal turn.
@@ -645,10 +769,10 @@ export default function DesktopLiveConversation({
         {provider === "codex" && activeTurnId ? (
           <button
             type="button"
-            className="desktop-codex-live-interrupt"
+            className={`desktop-codex-live-interrupt${turnStalled ? " stalled" : ""}`}
             onClick={() => void interruptActiveTurn()}
-            title="Stop Codex (Esc)"
-            aria-label="Stop Codex"
+            title={turnStalled ? "Codex has emitted no activity for 45 seconds — stop and recover" : "Stop Codex (Esc)"}
+            aria-label={turnStalled ? "Stop stalled Codex turn" : "Stop Codex"}
           >
             <span aria-hidden="true" />
           </button>
@@ -662,6 +786,16 @@ export default function DesktopLiveConversation({
             aria-label={interactiveRequest ? `${adapter.label} needs input` : `${adapter.label} ready`}
             role="status"
           />
+        )}
+        {turnStalled && (
+          <button
+            type="button"
+            className="desktop-codex-stalled"
+            onClick={() => void interruptActiveTurn()}
+            title="Stop this stalled turn. Any unconsumed steer is preserved and retried as a clean turn."
+          >
+            Stalled — stop &amp; recover
+          </button>
         )}
         <textarea
           ref={composerRef}
