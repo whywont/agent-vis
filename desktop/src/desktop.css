@@ -1679,11 +1679,11 @@ body.resizing .desktop-collab-column-resize::after { background: rgba(224,184,92
   clip-path: polygon(8% 0, 100% 50%, 8% 100%);
 }
 .desktop-codex-live-interrupt:hover span { background: var(--text); }
-.desktop-codex-live-interrupt.stalled span {
+.desktop-codex-live-interrupt.quiet span {
   background: var(--gold);
   box-shadow: 0 0 10px color-mix(in srgb, var(--gold) 55%, transparent);
 }
-.desktop-codex-stalled {
+.desktop-codex-quiet {
   min-width: auto !important;
   padding-inline: 8px !important;
   border-color: color-mix(in srgb, var(--gold) 58%, transparent) !important;

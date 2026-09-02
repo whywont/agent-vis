@@ -32,7 +32,7 @@ type ImageAttachment = { id: string; url: string; name: string };
 const MAX_IMAGE_ATTACHMENTS = 4;
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const RUNTIME_REPLAY_INTERVAL_MS = 1_000;
-const STALLED_TURN_TIMEOUT_MS = 45_000;
+const QUIET_TURN_TIMEOUT_MS = 45_000;
 
 export default function DesktopLiveConversation({
   provider,
@@ -77,7 +77,7 @@ export default function DesktopLiveConversation({
   const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
   const activeTurnIdRef = useRef<string | null>(null);
   activeTurnIdRef.current = activeTurnId;
-  const [turnStalled, setTurnStalled] = useState(false);
+  const [turnQuiet, setTurnQuiet] = useState(false);
   const lastRuntimeActivityAt = useRef(Date.now());
   const stallTimer = useRef<number | undefined>(undefined);
   const pendingSteersRef = useRef<PendingCodexSteer[]>(
@@ -508,24 +508,23 @@ export default function DesktopLiveConversation({
   function clearStallTimer() {
     if (stallTimer.current !== undefined) window.clearTimeout(stallTimer.current);
     stallTimer.current = undefined;
-    setTurnStalled(false);
+    setTurnQuiet(false);
   }
 
   function noteRuntimeActivity(turnActive: boolean) {
     lastRuntimeActivityAt.current = Date.now();
-    setTurnStalled(false);
+    setTurnQuiet(false);
     if (stallTimer.current !== undefined) window.clearTimeout(stallTimer.current);
     stallTimer.current = undefined;
     if (!turnActive) return;
     stallTimer.current = window.setTimeout(() => {
       if (!activeTurnIdRef.current) return;
-      if (Date.now() - lastRuntimeActivityAt.current < STALLED_TURN_TIMEOUT_MS) {
+      if (Date.now() - lastRuntimeActivityAt.current < QUIET_TURN_TIMEOUT_MS) {
         noteRuntimeActivity(true);
         return;
       }
-      setTurnStalled(true);
-      onNeedsAttention?.();
-    }, STALLED_TURN_TIMEOUT_MS);
+      setTurnQuiet(true);
+    }, QUIET_TURN_TIMEOUT_MS);
   }
 
   function persistPendingSteers() {
@@ -769,10 +768,10 @@ export default function DesktopLiveConversation({
         {provider === "codex" && activeTurnId ? (
           <button
             type="button"
-            className={`desktop-codex-live-interrupt${turnStalled ? " stalled" : ""}`}
+            className={`desktop-codex-live-interrupt${turnQuiet ? " quiet" : ""}`}
             onClick={() => void interruptActiveTurn()}
-            title={turnStalled ? "Codex has emitted no activity for 45 seconds — stop and recover" : "Stop Codex (Esc)"}
-            aria-label={turnStalled ? "Stop stalled Codex turn" : "Stop Codex"}
+            title={turnQuiet ? "Codex has emitted no visible events for 45 seconds; it may still be reasoning" : "Stop Codex (Esc)"}
+            aria-label={turnQuiet ? "Stop quiet Codex turn" : "Stop Codex"}
           >
             <span aria-hidden="true" />
           </button>
@@ -787,14 +786,14 @@ export default function DesktopLiveConversation({
             role="status"
           />
         )}
-        {turnStalled && (
+        {turnQuiet && (
           <button
             type="button"
-            className="desktop-codex-stalled"
+            className="desktop-codex-quiet"
             onClick={() => void interruptActiveTurn()}
-            title="Stop this stalled turn. Any unconsumed steer is preserved and retried as a clean turn."
+            title="Codex may still be reasoning. Stop only if you want to interrupt; any unconsumed steer is preserved."
           >
-            Stalled — stop &amp; recover
+            Quiet 45s — stop if needed
           </button>
         )}
         <textarea
