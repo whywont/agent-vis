@@ -27,7 +27,11 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; base-uri 'none'; object-src 'none'; img-src 'self' asset: http://asset.localhost; font-src 'self'; style-src 'self' 'unsafe-inline'; worker-src 'self'; connect-src ipc: http://ipc.localhost"
+      "csp": "default-src 'self'; base-uri 'none'; object-src 'none'; img-src 'self' asset: http://asset.localhost data: blob:; font-src 'self'; style-src 'self' 'unsafe-inline'; worker-src 'self'; connect-src ipc: http://ipc.localhost asset: http://asset.localhost",
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$HOME/**", "$TEMP/**"]
+      }
     }
   },
   "bundle": {

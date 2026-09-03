@@ -52,17 +52,19 @@ use settings::{
     get_desktop_appearance, get_desktop_settings, get_session_sharing_settings,
     save_desktop_settings, update_session_share,
 };
-use tauri::Manager;
+use tauri::{Manager, RunEvent};
 use terminal::{resize_terminal, start_terminal, stop_terminal, write_terminal, TerminalState};
 use workspace::{
-    choose_workspace_directory, get_git_branch, list_workspace_files, read_workspace_file,
-    resolve_workspace_filepaths, save_workspace_file,
+    authorize_workspace_for_file, choose_workspace_directory, get_git_branch, list_workspace_files,
+    read_workspace_file, resolve_workspace_filepaths, save_workspace_file,
+    WorkspaceAuthorizationState,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     shell_environment::initialize_desktop_shell_environment();
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let search = SearchIndexState::new(app.handle())?;
@@ -72,6 +74,7 @@ pub fn run() {
             app.manage(CodexAppServerState::new());
             app.manage(ClaudeStreamState::new());
             app.manage(SessionHistoryState::new());
+            app.manage(WorkspaceAuthorizationState::new());
             let provider_runtime = ProviderRuntimeState::new();
             provider_runtime.start_background_inventory(app.handle().clone());
             app.manage(provider_runtime);
@@ -81,6 +84,7 @@ pub fn run() {
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
                 capture_active_session_histories_now(window.app_handle());
+                shutdown_codex_runtime(window.app_handle());
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -121,6 +125,7 @@ pub fn run() {
             explain_diff,
             get_git_branch,
             choose_workspace_directory,
+            authorize_workspace_for_file,
             list_workspace_files,
             resolve_workspace_filepaths,
             read_workspace_file,
@@ -157,6 +162,18 @@ pub fn run() {
             resume_agent_provider_session,
             send_agent_provider_turn,
         ])
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .expect("error while running agent-vis desktop");
+    app.run(|app_handle, event| {
+        if matches!(event, RunEvent::ExitRequested { .. } | RunEvent::Exit) {
+            capture_active_session_histories_now(app_handle);
+            shutdown_codex_runtime(app_handle);
+        }
+    });
+}
+
+fn shutdown_codex_runtime(app: &tauri::AppHandle) {
+    if let Some(state) = app.try_state::<CodexAppServerState>() {
+        state.shutdown();
+    }
 }

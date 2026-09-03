@@ -15,14 +15,24 @@ import {
 import { getHarnessAdapter, type HarnessContext, type LiveProvider, type ModelOption } from "./harness-adapters";
 import type { LiveStreamEntry } from "./DesktopLiveStream";
 import InteractiveAgentRequestPanel from "./InteractiveAgentRequestPanel";
-import { unappliedRuntimeEvents } from "./sequenced-runtime-events";
+import { contiguousRuntimeEvents, unappliedRuntimeEvents } from "./sequenced-runtime-events";
 import type { InteractiveAgentRequest, InteractiveAgentResponse } from "./interactive-agent-requests";
+import { enqueueInteractiveRequest, removeInteractiveRequest } from "./interactive-request-queue";
+import {
+  acknowledgePendingCodexSteer,
+  codexUserMessageId,
+  loadPendingCodexSteers,
+  savePendingCodexSteers,
+  type PendingCodexSteer,
+} from "./codex-steer-outbox";
 
 type ConnectionState = "idle" | "connecting" | "ready" | "error";
 
 type ImageAttachment = { id: string; url: string; name: string };
 const MAX_IMAGE_ATTACHMENTS = 4;
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+const RUNTIME_REPLAY_INTERVAL_MS = 1_000;
+const QUIET_TURN_TIMEOUT_MS = 45_000;
 
 export default function DesktopLiveConversation({
   provider,
@@ -65,12 +75,26 @@ export default function DesktopLiveConversation({
   const [state, setState] = useState<ConnectionState>("idle");
   const [draft, setDraft] = useState(initialDraft);
   const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
+  const activeTurnIdRef = useRef<string | null>(null);
+  activeTurnIdRef.current = activeTurnId;
+  const [turnQuiet, setTurnQuiet] = useState(false);
+  const lastRuntimeActivityAt = useRef(Date.now());
+  const stallTimer = useRef<number | undefined>(undefined);
+  const pendingSteersRef = useRef<PendingCodexSteer[]>(
+    provider === "codex" ? loadPendingCodexSteers(sessionKey, threadId) : [],
+  );
+  const acknowledgedUserMessages = useRef(new Set<string>());
+  const recoveringSteerRef = useRef(false);
+  const noteRuntimeActivityRef = useRef<(turnActive: boolean) => void>(() => {});
+  const acknowledgePendingSteerRef = useRef<(sequence: number) => void>(() => {});
+  const recoverPendingSteerRef = useRef<() => Promise<void>>(async () => {});
   harnessContextRef.current.activeTurnId = activeTurnId;
   const [error, setError] = useState("");
   const [externalWriter, setExternalWriter] = useState<CodexWriterInfo | null>(null);
   const [takeControlConfirmation, setTakeControlConfirmation] = useState<{ threadId: string; pid: number } | null>(null);
-  const [interactiveRequest, setInteractiveRequest] = useState<InteractiveAgentRequest | null>(null);
-  const interactiveRequestRef = useRef<InteractiveAgentRequest | null>(null);
+  const [interactiveRequests, setInteractiveRequests] = useState<InteractiveAgentRequest[]>([]);
+  const interactiveRequestsRef = useRef<InteractiveAgentRequest[]>([]);
+  const interactiveRequest = interactiveRequests[0] || null;
   const [respondingToRequest, setRespondingToRequest] = useState(false);
   const [sending, setSending] = useState(false);
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -96,12 +120,16 @@ export default function DesktopLiveConversation({
   }, [interactiveRequest, onNeedsAttention]);
 
   useEffect(() => {
-    interactiveRequestRef.current = interactiveRequest;
-  }, [interactiveRequest]);
+    onApprovalChange?.(interactiveRequest?.type === "approval" ? interactiveRequest.command || null : null);
+  }, [interactiveRequest, onApprovalChange]);
 
   useEffect(() => {
     if (!draft) composerRef.current?.style.removeProperty("height");
   }, [activeTurnId, draft]);
+
+  useEffect(() => () => {
+    if (stallTimer.current !== undefined) window.clearTimeout(stallTimer.current);
+  }, []);
 
   useEffect(() => {
     // A continuation opens with a reviewable handoff draft. Attach now so the
@@ -113,7 +141,14 @@ export default function DesktopLiveConversation({
     if (provider !== "codex") return;
     let cancelled = false;
     void getActiveCodexTurn(sessionKey, threadId, cwd).then(({ turnId }) => {
-      if (!cancelled && turnId) setActiveTurnId((current) => current || turnId);
+      if (cancelled) return;
+      if (turnId) {
+        activeTurnIdRef.current = activeTurnIdRef.current || turnId;
+        setActiveTurnId((current) => current || turnId);
+        noteRuntimeActivityRef.current(true);
+      } else if (pendingSteersRef.current.length) {
+        void recoverPendingSteerRef.current();
+      }
     }).catch(() => {});
     return () => { cancelled = true; };
   }, [cwd, provider, sessionKey, threadId]);
@@ -155,6 +190,8 @@ export default function DesktopLiveConversation({
   useEffect(() => {
     let cancelled = false;
     let unlisten: UnlistenFn | undefined;
+    let replayTimer: number | undefined;
+    let replaying = false;
     let catchingUp = true;
     const queuedLiveEvents: AgentProviderRuntimeEvent[] = [];
     const scope = `${provider}:${sessionKey}`;
@@ -162,14 +199,24 @@ export default function DesktopLiveConversation({
       runtimeSequence.current = { scope, sequence: 0 };
     }
 
-    const applyRuntimeEvent = (runtimeEvent: AgentProviderRuntimeEvent) => {
+    const replaceInteractiveRequests = (requests: InteractiveAgentRequest[]) => {
+      interactiveRequestsRef.current = requests;
+      setInteractiveRequests(requests);
+    };
+    const dismissInteractiveRequest = (request: InteractiveAgentRequest) => {
+      replaceInteractiveRequests(removeInteractiveRequest(interactiveRequestsRef.current, request));
+    };
+    const clearInteractiveRequests = () => replaceInteractiveRequests([]);
+
+    const applyRuntimeEvent = (runtimeEvent: AgentProviderRuntimeEvent, replayed = false) => {
       if (runtimeEvent.sequence <= runtimeSequence.current.sequence) return;
       const message = asRecord(runtimeEvent.message);
       if (!message) return;
       runtimeSequence.current = { scope, sequence: runtimeEvent.sequence };
       onActivity?.();
+      noteRuntimeActivityRef.current(Boolean(activeTurnIdRef.current));
 
-      const activeInteractiveRequest = interactiveRequestRef.current;
+      const activeInteractiveRequest = interactiveRequestsRef.current[0] || null;
       const completionResponse = adapter.interactiveRequests?.completionResponse?.(
         message,
         activeInteractiveRequest,
@@ -181,19 +228,17 @@ export default function DesktopLiveConversation({
           activeInteractiveRequest,
           completionResponse,
         ).then(() => {
-          if (interactiveRequestRef.current?.requestId !== activeInteractiveRequest.requestId) return;
-          interactiveRequestRef.current = null;
-          setInteractiveRequest(null);
-          onApprovalChange?.(null);
+          dismissInteractiveRequest(activeInteractiveRequest);
         }).catch((reason: unknown) => {
           setError(reason instanceof Error ? reason.message : String(reason));
         }).finally(() => setRespondingToRequest(false));
       }
-      if (!completionResponse && adapter.interactiveRequests?.isResolved?.(message, activeInteractiveRequest)) {
-        interactiveRequestRef.current = null;
-        setInteractiveRequest(null);
+      const resolvedInteractiveRequest = !completionResponse
+        ? interactiveRequestsRef.current.find((request) => adapter.interactiveRequests?.isResolved?.(message, request))
+        : undefined;
+      if (resolvedInteractiveRequest) {
+        dismissInteractiveRequest(resolvedInteractiveRequest);
         setRespondingToRequest(false);
-        onApprovalChange?.(null);
       }
       const serverRequest = adapter.interactiveRequests?.decode(message);
       if (serverRequest?.type === "unsupported") {
@@ -202,16 +247,13 @@ export default function DesktopLiveConversation({
         return;
       }
       if (serverRequest) {
-        interactiveRequestRef.current = serverRequest;
-        setInteractiveRequest(serverRequest);
-        onApprovalChange?.(serverRequest.type === "approval" ? serverRequest.command || null : null);
+        replaceInteractiveRequests(enqueueInteractiveRequest(interactiveRequestsRef.current, serverRequest));
       }
 
       if (provider === "claude-code") {
         if (message.type === "agent-vis/disconnected") {
-          setInteractiveRequest(null);
+          clearInteractiveRequests();
           setRespondingToRequest(false);
-          onApprovalChange?.(null);
           setState("error");
           setError("Claude disconnected");
           setActiveTurnId(null);
@@ -241,7 +283,7 @@ export default function DesktopLiveConversation({
             });
           }
         }
-        if (isClaudeCompaction(message)) onContextCompaction?.();
+        if (!replayed && isClaudeCompaction(message)) onContextCompaction?.();
         if (message.type === "assistant" && pendingSlashCommand.current) {
           const output = assistantText(message);
           if (output) {
@@ -265,9 +307,8 @@ export default function DesktopLiveConversation({
           }
         }
         if (message.type === "result") {
-          setInteractiveRequest(null);
+          clearInteractiveRequests();
           setRespondingToRequest(false);
-          onApprovalChange?.(null);
           const pending = pendingSlashCommand.current;
           const result = typeof message.result === "string" ? message.result.trim() : "";
           if (pending && result && result !== pending.output) {
@@ -287,32 +328,39 @@ export default function DesktopLiveConversation({
           } else {
             setState("ready");
           }
-          onTurnCompleted?.();
+          if (!replayed) onTurnCompleted?.();
         }
         return;
       }
 
       const method = typeof message.method === "string" ? message.method : undefined;
       const params = asRecord(message.params) || {};
+      const userMessageId = codexUserMessageId(message);
+      if (userMessageId && !acknowledgedUserMessages.current.has(userMessageId)) {
+        acknowledgedUserMessages.current.add(userMessageId);
+        acknowledgePendingSteerRef.current(runtimeEvent.sequence);
+      }
       if (method === "agent-vis/disconnected") {
-        setInteractiveRequest(null);
+        clearInteractiveRequests();
         setRespondingToRequest(false);
-        onApprovalChange?.(null);
         setState("error");
         setError("Codex disconnected");
         return;
       }
       if (method === "turn/started") {
         const turn = params.turn as { id?: string } | undefined;
+        activeTurnIdRef.current = turn?.id || null;
         setActiveTurnId(turn?.id || null);
+        noteRuntimeActivityRef.current(true);
         setInterrupted(false);
         onStreamEvent?.(streamEntry("system", "Codex is working.", `codex:turn:${turn?.id || "current"}:started`));
       }
       if (method === "turn/completed") {
-        setInteractiveRequest(null);
+        clearInteractiveRequests();
         setRespondingToRequest(false);
-        onApprovalChange?.(null);
+        activeTurnIdRef.current = null;
         setActiveTurnId(null);
+        clearStallTimer();
         const turn = params.turn as { id?: string; status?: string; error?: { message?: string } | string } | undefined;
         const error = typeof turn?.error === "string"
           ? turn.error
@@ -326,13 +374,18 @@ export default function DesktopLiveConversation({
           turn?.status === "completed" ? "Codex finished." : "Codex stopped.",
           `codex:turn:${turn?.id || "current"}:completed`,
         ));
-        onTurnCompleted?.();
+        if (!replayed) onTurnCompleted?.();
+        if (pendingSteersRef.current.length) void recoverPendingSteerRef.current();
       }
       if (method === "thread/status/changed") {
         const status = params.status as { type?: string } | undefined;
-        if (status?.type === "idle") setActiveTurnId(null);
+        if (status?.type === "idle") {
+          activeTurnIdRef.current = null;
+          setActiveTurnId(null);
+          clearStallTimer();
+        }
       }
-      if (method === "item/started" && isCodexCompaction(params.item)) {
+      if (!replayed && method === "item/started" && isCodexCompaction(params.item)) {
         onContextCompaction?.();
       }
       if (method === "item/started") {
@@ -343,17 +396,9 @@ export default function DesktopLiveConversation({
       if (streamEvent) onStreamEvent?.(streamEvent);
     };
 
-    void listen<AgentProviderRuntimeEvent>("agent-provider-runtime-event", (event) => {
-      const runtimeEvent = event.payload;
-      if (runtimeEvent.providerInstanceId !== provider || runtimeEvent.sessionKey !== sessionKey) return;
-      if (catchingUp) queuedLiveEvents.push(runtimeEvent);
-      else applyRuntimeEvent(runtimeEvent);
-    }).then(async (stop) => {
-      if (cancelled) {
-        stop();
-        return;
-      }
-      unlisten = stop;
+    const replayMissedEvents = async () => {
+      if (cancelled || replaying) return;
+      replaying = true;
       const afterSequence = runtimeSequence.current.sequence || undefined;
       try {
         const replay = await readAgentProviderRuntimeEvents(provider, sessionKey, afterSequence);
@@ -363,23 +408,60 @@ export default function DesktopLiveConversation({
           onTurnCompleted?.();
         }
         for (const runtimeEvent of unappliedRuntimeEvents(runtimeSequence.current.sequence, replay.events)) {
-          applyRuntimeEvent(runtimeEvent);
+          applyRuntimeEvent(runtimeEvent, true);
         }
       } catch {
-        // The live subscription remains useful if catch-up is unavailable
-        // during a backend restart. Its first event establishes the watermark.
+        // Live delivery remains useful during a transient replay failure. The
+        // next interval retries from the last successfully applied sequence.
+      } finally {
+        replaying = false;
+        const queued = contiguousRuntimeEvents(runtimeSequence.current.sequence, queuedLiveEvents);
+        if (queued.length) {
+          const applied = new Set(queued.map((event) => event.sequence));
+          for (const runtimeEvent of queued) applyRuntimeEvent(runtimeEvent);
+          for (let index = queuedLiveEvents.length - 1; index >= 0; index -= 1) {
+            if (applied.has(queuedLiveEvents[index].sequence)) queuedLiveEvents.splice(index, 1);
+          }
+        }
+      }
+    };
+
+    void listen<AgentProviderRuntimeEvent>("agent-provider-runtime-event", (event) => {
+      const runtimeEvent = event.payload;
+      if (runtimeEvent.providerInstanceId !== provider || runtimeEvent.sessionKey !== sessionKey) return;
+      if (catchingUp || replaying) {
+        queuedLiveEvents.push(runtimeEvent);
+      } else if (runtimeEvent.sequence === runtimeSequence.current.sequence + 1) {
+        applyRuntimeEvent(runtimeEvent);
+      } else if (runtimeEvent.sequence > runtimeSequence.current.sequence) {
+        // Do not advance beyond a missing sequence. The backend records before
+        // emitting, so replay can recover the complete gap immediately.
+        queuedLiveEvents.push(runtimeEvent);
+        void replayMissedEvents();
+      }
+    }).then(async (stop) => {
+      if (cancelled) {
+        stop();
+        return;
+      }
+      unlisten = stop;
+      try {
+        await replayMissedEvents();
       } finally {
         catchingUp = false;
         if (!cancelled) {
-          for (const runtimeEvent of unappliedRuntimeEvents(runtimeSequence.current.sequence, queuedLiveEvents)) {
-            applyRuntimeEvent(runtimeEvent);
-          }
+          // Tauri's live event channel is intentionally backed by a replay
+          // buffer. Poll its sequence watermark so a dropped renderer event
+          // cannot leave the active timeline or an approval prompt stale until
+          // the user remounts the session.
+          replayTimer = window.setInterval(() => void replayMissedEvents(), RUNTIME_REPLAY_INTERVAL_MS);
         }
         queuedLiveEvents.length = 0;
       }
     });
     return () => {
       cancelled = true;
+      if (replayTimer !== undefined) window.clearInterval(replayTimer);
       unlisten?.();
     };
   }, [adapter.interactiveRequests, onActivity, onApprovalChange, onContextCompaction, onStreamEvent, onTimelineEvent, onTurnCompleted, provider, sessionKey]);
@@ -422,6 +504,67 @@ export default function DesktopLiveConversation({
     return attempt;
   }
   reconnect.current = connect;
+
+  function clearStallTimer() {
+    if (stallTimer.current !== undefined) window.clearTimeout(stallTimer.current);
+    stallTimer.current = undefined;
+    setTurnQuiet(false);
+  }
+
+  function noteRuntimeActivity(turnActive: boolean) {
+    lastRuntimeActivityAt.current = Date.now();
+    setTurnQuiet(false);
+    if (stallTimer.current !== undefined) window.clearTimeout(stallTimer.current);
+    stallTimer.current = undefined;
+    if (!turnActive) return;
+    stallTimer.current = window.setTimeout(() => {
+      if (!activeTurnIdRef.current) return;
+      if (Date.now() - lastRuntimeActivityAt.current < QUIET_TURN_TIMEOUT_MS) {
+        noteRuntimeActivity(true);
+        return;
+      }
+      setTurnQuiet(true);
+    }, QUIET_TURN_TIMEOUT_MS);
+  }
+
+  function persistPendingSteers() {
+    savePendingCodexSteers(sessionKey, threadId, pendingSteersRef.current);
+  }
+
+  function acknowledgePendingSteer(sequence: number) {
+    const next = acknowledgePendingCodexSteer(pendingSteersRef.current, sequence);
+    if (next.length === pendingSteersRef.current.length) return;
+    pendingSteersRef.current = next;
+    persistPendingSteers();
+  }
+
+  async function recoverPendingSteer() {
+    const pending = pendingSteersRef.current[0];
+    if (!pending || recoveringSteerRef.current || provider !== "codex") return;
+    recoveringSteerRef.current = true;
+    try {
+      if (state !== "ready" && !(await connect())) return;
+      pending.afterSequence = runtimeSequence.current.sequence;
+      persistPendingSteers();
+      await adapter.sendTurn(
+        { sessionKey, threadId, cwd, activeTurnId: null, tokenUsage },
+        pending.text,
+        pending.imageUrls,
+      );
+      activeTurnIdRef.current = "pending-turn";
+      setActiveTurnId("pending-turn");
+      noteRuntimeActivity(true);
+    } catch (reason) {
+      setError(`Queued message was preserved but could not be retried: ${reason instanceof Error ? reason.message : String(reason)}`);
+      setState("error");
+      setDraft((current) => current || pending.text);
+    } finally {
+      recoveringSteerRef.current = false;
+    }
+  }
+  noteRuntimeActivityRef.current = noteRuntimeActivity;
+  acknowledgePendingSteerRef.current = acknowledgePendingSteer;
+  recoverPendingSteerRef.current = recoverPendingSteer;
 
   async function submit(textOverride?: string, alreadyConnected = false) {
     const text = (textOverride ?? draft).trim();
@@ -469,6 +612,19 @@ export default function DesktopLiveConversation({
           onTimelineEvent?.({ kind: "tool_output", ts: new Date().toISOString(), callId, output });
         }
       } else {
+        const steering = provider === "codex" && Boolean(activeTurnId && activeTurnId !== "pending-turn");
+        if (steering) {
+          const pending: PendingCodexSteer = {
+            id: crypto.randomUUID(),
+            text,
+            imageUrls,
+            streamInput,
+            submittedAt: Date.now(),
+            afterSequence: runtimeSequence.current.sequence,
+          };
+          pendingSteersRef.current = [...pendingSteersRef.current, pending];
+          persistPendingSteers();
+        }
         await adapter.sendTurn({ sessionKey, threadId, cwd, activeTurnId, tokenUsage }, text, imageUrls);
         // Do not show a local input as delivered until the harness has accepted
         // it; otherwise a rejected request becomes a misleading ghost entry.
@@ -484,7 +640,9 @@ export default function DesktopLiveConversation({
           // immediately. It keeps Steer visibly ready if that notification is
           // delayed; it is deliberately not passed back as a real turn ID.
           setActiveTurnId("pending-turn");
+          activeTurnIdRef.current = "pending-turn";
           setInterrupted(false);
+          noteRuntimeActivity(true);
         }
         // A continuation handoff is a one-time composer seed. Users often
         // edit it before sending, so consume it after the first normal turn.
@@ -559,9 +717,9 @@ export default function DesktopLiveConversation({
         interactiveRequest,
         response,
       );
-      interactiveRequestRef.current = null;
-      setInteractiveRequest(null);
-      onApprovalChange?.(null);
+      const remaining = removeInteractiveRequest(interactiveRequestsRef.current, interactiveRequest);
+      interactiveRequestsRef.current = remaining;
+      setInteractiveRequests(remaining);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -610,10 +768,10 @@ export default function DesktopLiveConversation({
         {provider === "codex" && activeTurnId ? (
           <button
             type="button"
-            className="desktop-codex-live-interrupt"
+            className={`desktop-codex-live-interrupt${turnQuiet ? " quiet" : ""}`}
             onClick={() => void interruptActiveTurn()}
-            title="Stop Codex (Esc)"
-            aria-label="Stop Codex"
+            title={turnQuiet ? "Codex has emitted no visible events for 45 seconds; it may still be reasoning" : "Stop Codex (Esc)"}
+            aria-label={turnQuiet ? "Stop quiet Codex turn" : "Stop Codex"}
           >
             <span aria-hidden="true" />
           </button>
@@ -627,6 +785,16 @@ export default function DesktopLiveConversation({
             aria-label={interactiveRequest ? `${adapter.label} needs input` : `${adapter.label} ready`}
             role="status"
           />
+        )}
+        {turnQuiet && (
+          <button
+            type="button"
+            className="desktop-codex-quiet"
+            onClick={() => void interruptActiveTurn()}
+            title="Codex may still be reasoning. Stop only if you want to interrupt; any unconsumed steer is preserved."
+          >
+            Quiet 45s — stop if needed
+          </button>
         )}
         <textarea
           ref={composerRef}

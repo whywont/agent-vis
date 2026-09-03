@@ -202,7 +202,7 @@ function explainTargetForView(view: EditorView, hostElement: HTMLDivElement | nu
 
 export default function DesktopEditor({ workspaceRoot, navigation, threadId, events }: {
   workspaceRoot: string;
-  navigation?: { path: string; requestId: number } | null;
+  navigation?: { workspaceRoot?: string; path: string; requestId: number } | null;
   threadId: string;
   events: AppEvent[];
 }) {

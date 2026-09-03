@@ -12,7 +12,7 @@ import DesktopTimeline from "./DesktopTimeline";
 import DesktopTerminal from "./DesktopTerminal";
 import DesktopLiveConversation from "./DesktopLiveConversation";
 import DesktopLiveStream, { type LiveStreamEntry } from "./DesktopLiveStream";
-import { captureSessionHistory, ensureSessionHistory, getGitBranch, readSession, resolveWorkspaceFilepaths, stopTerminal } from "./desktop-api";
+import { authorizeWorkspaceForFile, captureSessionHistory, ensureSessionHistory, getGitBranch, readSession, resolveWorkspaceFilepaths, stopTerminal } from "./desktop-api";
 import { startWindowDrag } from "./window-drag";
 import { workspaceRelativePath } from "./workspace-path";
 
@@ -67,7 +67,7 @@ export default function DesktopSessionDetail({
   const [branchCopied, setBranchCopied] = useState(false);
   const [filePanelOpen, setFilePanelOpen] = useState(true);
   const [filePanelView, setFilePanelView] = useState<"patches" | "stream">("patches");
-  const [editorNavigation, setEditorNavigation] = useState<{ path: string; requestId: number } | null>(null);
+  const [editorNavigation, setEditorNavigation] = useState<{ workspaceRoot: string; path: string; requestId: number } | null>(null);
   const [liveStream, setLiveStream] = useState<{ scope: string; entries: LiveStreamEntry[] }>({ scope: "", entries: [] });
   // Match the resize floor so opening a terminal never takes more room than
   // the user can immediately reclaim.
@@ -91,6 +91,7 @@ export default function DesktopSessionDetail({
     return (Number.isNaN(leftTime) ? 0 : leftTime) - (Number.isNaN(rightTime) ? 0 : rightTime);
   }), [events, subagentEvents]);
   const [terminalPlacement, setTerminalPlacement] = useState<"bottom" | "sessions">("bottom");
+  const [terminalMinimized, setTerminalMinimized] = useState(false);
   const [terminalDockBounds, setTerminalDockBounds] = useState<CSSProperties | null>(null);
   const [terminals, setTerminals] = useState<TerminalSession[]>([]);
   const [activeTerminalBySession, setActiveTerminalBySession] = useState<Record<string, string>>({});
@@ -109,6 +110,7 @@ export default function DesktopSessionDetail({
   const liveStreamEpochRef = useRef(0);
   const files = session.files?.join(",") || session.file;
   const transcriptOnly = Boolean(session.synced);
+  const terminalDockHeight = terminalMinimized ? 29 : terminalHeight;
 
   useEffect(() => {
     if (isNewSession) return;
@@ -202,7 +204,7 @@ export default function DesktopSessionDetail({
           left: mainBounds.left - bodyBounds.left,
           bottom: 0,
           width: mainBounds.width,
-          height: terminalHeight,
+          height: terminalDockHeight,
         });
         return;
       }
@@ -213,11 +215,11 @@ export default function DesktopSessionDetail({
         left: sidebarBounds.left - bodyBounds.left,
         bottom: 0,
         width: timelineBounds.left - sidebarBounds.left - 6,
-        height: terminalHeight,
+        height: terminalDockHeight,
       });
     }
     updateBounds();
-    app.style.setProperty("--terminal-sessions-height", `${terminalHeight}px`);
+    app.style.setProperty("--terminal-sessions-height", `${terminalDockHeight}px`);
     const observer = new ResizeObserver(updateBounds);
     observer.observe(dockBody);
     observer.observe(dockMain);
@@ -228,9 +230,10 @@ export default function DesktopSessionDetail({
       observer.disconnect();
       app.style.removeProperty("--terminal-sessions-height");
     };
-  }, [terminalHeight, terminalPlacement]);
+  }, [terminalDockHeight, terminalPlacement]);
 
   function resizeTerminal(event: React.MouseEvent<HTMLDivElement>) {
+    if (terminalMinimized) return;
     event.preventDefault();
     const startY = event.clientY;
     const startHeight = terminalHeight;
@@ -311,8 +314,10 @@ export default function DesktopSessionDetail({
   const openTimelineFileInEditor = useCallback(async (filepath: string) => {
     try {
       const [resolved] = await resolveWorkspaceFilepaths(cwd, [filepath]);
-      if (!resolved) return;
-      setEditorNavigation({ path: workspaceRelativePath(resolved, cwd), requestId: Date.now() });
+      const target = resolved
+        ? { workspaceRoot: cwd, path: workspaceRelativePath(resolved, cwd) }
+        : await authorizeWorkspaceForFile(filepath);
+      setEditorNavigation({ ...target, requestId: Date.now() });
       onActiveTabChange("editor");
     } catch {
       // The timeline remains usable if the file was removed or the workspace changed.
@@ -369,6 +374,7 @@ export default function DesktopSessionDetail({
     function openTerminal(event: Event) {
       const requested = (event as CustomEvent<TranscriptSessionMeta>).detail;
       if (!requested || requested.synced || terminalSessionKey(requested, requested.id) !== currentSessionKey) return;
+      setTerminalMinimized(false);
       const terminal = firstTerminalSession(requested, requested.id, requested.cwd);
       setTerminals((current) => {
         if (current.some((item) => item.sessionKey === terminal.sessionKey)) return current;
@@ -400,7 +406,10 @@ export default function DesktopSessionDetail({
         });
       }
       if (!next.length) onTerminalClose();
-      if (!next.length) setTerminalPlacement("bottom");
+      if (!next.length) {
+        setTerminalPlacement("bottom");
+        setTerminalMinimized(false);
+      }
       return next;
     });
   }
@@ -543,7 +552,7 @@ export default function DesktopSessionDetail({
         <DesktopTestingCanvas events={events} sessionCwd={cwd} onOpenFile={(path) => void openTimelineFileInEditor(path)} />
       ) : activeTab === "editor" && !splitView && !transcriptOnly ? (
         <Suspense fallback={<div className="desktop-detail-state">Loading editor...</div>}>
-          <DesktopEditor workspaceRoot={cwd} navigation={editorNavigation} threadId={id} events={events} />
+          <DesktopEditor workspaceRoot={editorNavigation?.workspaceRoot || cwd} navigation={editorNavigation} threadId={id} events={events} />
         </Suspense>
       ) : (
         <div className="detail-body">
@@ -676,7 +685,7 @@ export default function DesktopSessionDetail({
     const parked = !visibleTerminal;
     return (
       <section
-        className={`desktop-terminal-panel${snapped ? " desktop-terminal-sessions" : " desktop-terminal-bottom"}${parked ? " desktop-terminal-parked" : ""}`}
+        className={`desktop-terminal-panel${snapped ? " desktop-terminal-sessions" : " desktop-terminal-bottom"}${parked ? " desktop-terminal-parked" : ""}${terminalMinimized ? " desktop-terminal-minimized" : ""}`}
         style={terminalDockBounds || { visibility: "hidden" }}
         aria-label="Terminal panel"
       >
@@ -688,7 +697,11 @@ export default function DesktopSessionDetail({
           <div className="desktop-terminal-panel-header" onMouseDown={startTerminalDrag}>
             <button
               className="desktop-terminal-panel-tab active"
-              title={`Drag ${visibleTerminal?.source === "codex" ? "Codex" : "Claude"} terminal into Sessions to snap`}
+              onClick={() => { if (terminalMinimized) setTerminalMinimized(false); }}
+              aria-expanded={!terminalMinimized}
+              title={terminalMinimized
+                ? "Restore terminal"
+                : `Drag ${visibleTerminal?.source === "codex" ? "Codex" : "Claude"} terminal into Sessions to snap`}
             >
               <TerminalGlyph />
             </button>
@@ -720,6 +733,14 @@ export default function DesktopSessionDetail({
               <SplitTerminalGlyph />
             </button>
             <button
+              className="desktop-terminal-minimize"
+              onClick={() => setTerminalMinimized((current) => !current)}
+              title={terminalMinimized ? "Restore terminal" : "Minimize terminal"}
+              aria-label={terminalMinimized ? "Restore terminal" : "Minimize terminal"}
+            >
+              {terminalMinimized ? "⌃" : "−"}
+            </button>
+            <button
               className="desktop-terminal-close"
               onClick={closeActiveTerminal}
               title="Close active terminal"
@@ -736,7 +757,7 @@ export default function DesktopSessionDetail({
             <div className={`desktop-terminal-pane-grid${isCurrent ? " active" : ""}${isSplit ? " split" : ""}`} key={sessionKey}>
               {panes.map((terminal) => (
                 <DesktopTerminal
-                  active={isCurrent && (isSplit || terminal.key === activeKey)}
+                  active={!terminalMinimized && isCurrent && (isSplit || terminal.key === activeKey)}
                   key={terminal.key}
                   sessionCwd={terminal.cwd}
                   sessionId={terminal.id}

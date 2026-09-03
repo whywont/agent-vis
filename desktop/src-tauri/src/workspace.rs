@@ -5,6 +5,33 @@ use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
+use tauri::Manager;
+
+#[derive(Default)]
+pub(crate) struct WorkspaceAuthorizationState {
+    roots: Mutex<HashSet<PathBuf>>,
+}
+
+impl WorkspaceAuthorizationState {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    fn roots(&self) -> HashSet<PathBuf> {
+        self.roots
+            .lock()
+            .unwrap_or_else(|value| value.into_inner())
+            .clone()
+    }
+
+    fn authorize(&self, root: PathBuf) {
+        self.roots
+            .lock()
+            .unwrap_or_else(|value| value.into_inner())
+            .insert(root);
+    }
+}
 
 pub(crate) const MAX_EDIT_FILE_BYTES: u64 = 8 * 1024 * 1024;
 pub(crate) const MAX_WORKSPACE_FILES: usize = 10_000;
@@ -13,6 +40,9 @@ pub(crate) const MAX_WORKSPACE_DEPTH: usize = 32;
 fn authorized_workspace_roots(app: &tauri::AppHandle) -> Result<HashSet<PathBuf>, String> {
     let mut roots = trusted_workspace_roots()?;
     roots.extend(crate::collab::collab_workspace_roots(app)?);
+    if let Some(authorizations) = app.try_state::<WorkspaceAuthorizationState>() {
+        roots.extend(authorizations.roots());
+    }
     Ok(roots)
 }
 
@@ -37,6 +67,19 @@ pub(crate) struct SaveWorkspaceFileRequest {
 pub(crate) struct ResolveWorkspaceFilepathsRequest {
     workspace_root: String,
     filepaths: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AuthorizeWorkspaceForFileRequest {
+    filepath: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AuthorizedWorkspaceFile {
+    workspace_root: String,
+    path: String,
 }
 
 #[derive(Deserialize)]
@@ -134,6 +177,45 @@ pub(crate) fn choose_workspace_directory() -> Result<Option<String>, String> {
     #[cfg(not(target_os = "macos"))]
     {
         Err("Choosing a workspace directory is currently supported on macOS only.".to_owned())
+    }
+}
+
+#[tauri::command]
+pub(crate) fn authorize_workspace_for_file(
+    state: tauri::State<'_, WorkspaceAuthorizationState>,
+    request: AuthorizeWorkspaceForFileRequest,
+) -> Result<AuthorizedWorkspaceFile, String> {
+    let requested = validate_workspace_filepath(&request.filepath)?;
+    if !requested.is_absolute() {
+        return Err(
+            "A transcript file outside the session workspace must use an absolute path.".to_owned(),
+        );
+    }
+    let canonical = requested
+        .canonicalize()
+        .map_err(|_| "The transcript file is no longer available.".to_owned())?;
+    if !canonical.is_file() {
+        return Err("The transcript path is not a file.".to_owned());
+    }
+    let root = workspace_root_for_file(&canonical)
+        .ok_or_else(|| "The transcript file is not inside a Git workspace.".to_owned())?;
+    let relative = canonical
+        .strip_prefix(&root)
+        .map_err(|_| "Could not resolve the transcript file in its workspace.".to_owned())?;
+    state.authorize(root.clone());
+    Ok(AuthorizedWorkspaceFile {
+        workspace_root: root.to_string_lossy().into_owned(),
+        path: relative.to_string_lossy().into_owned(),
+    })
+}
+
+fn workspace_root_for_file(filepath: &Path) -> Option<PathBuf> {
+    let mut directory = filepath.parent()?;
+    loop {
+        if directory.join(".git").exists() {
+            return directory.canonicalize().ok();
+        }
+        directory = directory.parent()?;
     }
 }
 
@@ -387,6 +469,21 @@ mod tests {
 
     fn trusted_roots(root: &Path) -> HashSet<PathBuf> {
         HashSet::from([root.canonicalize().unwrap()])
+    }
+
+    #[test]
+    fn finds_the_git_workspace_for_a_clicked_transcript_file() {
+        let root = temp_dir("clicked-transcript-file");
+        fs::create_dir(root.join(".git")).unwrap();
+        let nested = root.join("apps/example/src");
+        fs::create_dir_all(&nested).unwrap();
+        let file = nested.join("app.ts");
+        fs::write(&file, "export {};\n").unwrap();
+
+        assert_eq!(
+            workspace_root_for_file(&file.canonicalize().unwrap()),
+            Some(root.canonicalize().unwrap()),
+        );
     }
 
     #[test]

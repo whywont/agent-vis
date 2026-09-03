@@ -11,6 +11,7 @@ import { MAX_SESSION_ALIAS_LENGTH, sessionAlias, type SessionAliases } from "./s
 import { loadPinnedSessions, savePinnedSessions } from "./session-pins";
 import { sessionIdentity } from "./session-refresh";
 import { hasCurrentMeshSyncReceipt, type MeshSyncReceipts } from "./mesh-sync-receipts";
+import { previousNewSessionSelection } from "./new-session-flow";
 import { descendantSessions, subagentChildren, subagentLabel, topLevelSessions } from "./subagent-sessions";
 
 type SortBy = "newest" | "oldest" | "project";
@@ -28,6 +29,7 @@ interface DesktopSessionListProps {
   sessionSharingMode: SessionSharingMode;
   sharedSessionKeys: Set<string>;
   meshSyncReceipts: MeshSyncReceipts;
+  attentionCounts: ReadonlyMap<string, number>;
   hasConfiguredSharingDevice: boolean;
   onOpenSettings: () => void;
   onStartSession: (provider: LiveProvider, model: string, effort: string, cwd: string) => Promise<unknown>;
@@ -83,6 +85,7 @@ export default function DesktopSessionList({
   sessionSharingMode,
   sharedSessionKeys,
   meshSyncReceipts,
+  attentionCounts,
   hasConfiguredSharingDevice,
   onOpenSettings,
   onStartSession,
@@ -119,6 +122,7 @@ export default function DesktopSessionList({
   const [ignoreNextClick, setIgnoreNextClick] = useState(false);
   const [expandedSubagents, setExpandedSubagents] = useState<Set<string>>(() => new Set());
   const menuRef = useRef<HTMLDivElement>(null);
+  const newSessionModelRequestRef = useRef(0);
   const activeQuery = search.trim();
   const searchResponse = searchState?.query === activeQuery ? searchState.response : null;
   const searching = activeQuery.length >= 2 && !searchResponse;
@@ -355,18 +359,22 @@ export default function DesktopSessionList({
             newSessionLoading={newSessionLoading}
             newSessionError={newSessionError}
             onNewSession={() => {
+              newSessionModelRequestRef.current += 1;
               setNewSessionOpen((open) => !open);
               setNewSessionProvider(null);
               setNewSessionModel(null);
               setNewSessionModels([]);
               setNewSessionModelEfforts({});
               setNewSessionEffort(null);
+              setNewSessionLoading(false);
               setNewSessionError("");
             }}
             onChooseHarness={(provider) => {
+              const requestId = ++newSessionModelRequestRef.current;
               setNewSessionProvider(provider);
               setNewSessionModel(null);
               setNewSessionEffort(null);
+              setNewSessionLoading(false);
               setNewSessionError("");
               if (provider === "claude-code") {
                 setNewSessionModels(CLAUDE_MODEL_OPTIONS);
@@ -377,6 +385,7 @@ export default function DesktopSessionList({
               const sessionKey = `codex:model-picker:${crypto.randomUUID()}`;
               void listCodexModels(sessionKey, "", "")
                 .then((models) => {
+                  if (newSessionModelRequestRef.current !== requestId) return;
                   const options = models.map((model): ModelOption => [
                     model.id || model.model || "",
                     model.description || model.displayName || (model.isDefault ? "Codex default" : "Codex model"),
@@ -391,13 +400,33 @@ export default function DesktopSessionList({
                   ])));
                 })
                 .catch((reason: unknown) => {
+                  if (newSessionModelRequestRef.current !== requestId) return;
                   setNewSessionError(actionError(reason));
                   setNewSessionModels([["", "Codex default"]]);
                 })
-                .finally(() => setNewSessionLoading(false));
+                .finally(() => {
+                  if (newSessionModelRequestRef.current === requestId) setNewSessionLoading(false);
+                });
             }}
             onChooseModel={(model) => setNewSessionModel(model)}
             onChooseEffort={(effort) => setNewSessionEffort(effort)}
+            onBack={() => {
+              const previous = previousNewSessionSelection({
+                provider: newSessionProvider,
+                model: newSessionModel,
+                effort: newSessionEffort,
+              });
+              if (previous.provider === null) {
+                newSessionModelRequestRef.current += 1;
+                setNewSessionModels([]);
+                setNewSessionModelEfforts({});
+                setNewSessionLoading(false);
+              }
+              setNewSessionProvider(previous.provider);
+              setNewSessionModel(previous.model);
+              setNewSessionEffort(previous.effort);
+              setNewSessionError("");
+            }}
             currentSessionCwd={currentSessionCwd}
             onUseCurrentDirectory={(cwd) => {
               if (!newSessionProvider || newSessionModel === null || newSessionEffort === null) return;
@@ -468,6 +497,7 @@ export default function DesktopSessionList({
               const children = childSessions.get(session.id) || [];
               const childCount = descendantSessions(session.id, childSessions).length;
               const childrenOpen = visibleExpandedSubagents.has(session.id);
+              const attentionCount = attentionCounts.get(sessionKey) || 0;
               return (
                 <div className="desktop-session-family" key={files}>
                 <div
@@ -492,6 +522,11 @@ export default function DesktopSessionList({
                   <span className={`session-id${alias ? " desktop-session-alias" : ""}`} title={alias || session.id}>
                     {alias || session.id.slice(0, 12)}
                   </span>
+                  {attentionCount > 0 && (
+                    <span className="desktop-session-attention" title={`${attentionCount} action${attentionCount === 1 ? "" : "s"} needed`}>
+                      !{attentionCount > 1 ? attentionCount : ""}
+                    </span>
+                  )}
                   {session.synced ? (
                     <span
                       className="desktop-session-json-only"
@@ -914,6 +949,7 @@ function SessionUtilityActions({
   onChooseHarness,
   onChooseModel,
   onChooseEffort,
+  onBack,
   currentSessionCwd,
   onUseCurrentDirectory,
   onChooseDirectory,
@@ -933,6 +969,7 @@ function SessionUtilityActions({
   onChooseHarness: (provider: LiveProvider) => void;
   onChooseModel: (model: string) => void;
   onChooseEffort: (effort: string) => void;
+  onBack: () => void;
   currentSessionCwd: string | null;
   onUseCurrentDirectory: (cwd: string) => void;
   onChooseDirectory: () => void;
@@ -971,7 +1008,7 @@ function SessionUtilityActions({
               </>
             ) : newSessionModel === null ? (
               <>
-                <header>Choose {newSessionProvider === "codex" ? "Codex" : "Claude"} model</header>
+                <NewSessionMenuHeader onBack={onBack}>Choose {newSessionProvider === "codex" ? "Codex" : "Claude"} model</NewSessionMenuHeader>
                 {newSessionLoading ? <span>Loading models...</span> : newSessionModels.map(([model, description]) => (
                   <button type="button" key={model || "default"} onClick={() => onChooseModel(model)}>
                     <code>{model || "default"}</code><small>{description}</small>
@@ -981,7 +1018,7 @@ function SessionUtilityActions({
               </>
             ) : newSessionEffort === null ? (
               <>
-                <header>Choose reasoning effort</header>
+                <NewSessionMenuHeader onBack={onBack}>Choose reasoning effort</NewSessionMenuHeader>
                 {(newSessionModelEfforts[newSessionModel] || [["default", "Use the provider default"]]).map(([effort, description]) => (
                   <button type="button" key={effort} onClick={() => onChooseEffort(effort)}>
                     <code>{effort}</code><small>{description}</small>
@@ -990,7 +1027,7 @@ function SessionUtilityActions({
               </>
             ) : (
               <>
-                <header>Choose workspace</header>
+                <NewSessionMenuHeader onBack={onBack}>Choose workspace</NewSessionMenuHeader>
                 {currentSessionCwd && (
                   <button type="button" onClick={() => onUseCurrentDirectory(currentSessionCwd)}>
                     <span>Current session directory</span><small title={currentSessionCwd}>{currentSessionCwd}</small>
@@ -1014,6 +1051,17 @@ function SessionUtilityActions({
         &#8249;
       </button>
     </>
+  );
+}
+
+function NewSessionMenuHeader({ children, onBack }: { children: React.ReactNode; onBack: () => void }) {
+  return (
+    <header className="desktop-new-session-menu-header">
+      <button type="button" onClick={onBack} title="Go back" aria-label="Go back">
+        ‹
+      </button>
+      <span>{children}</span>
+    </header>
   );
 }
 

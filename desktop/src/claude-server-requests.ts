@@ -130,7 +130,7 @@ export function isClaudeServerRequestResolved(
   message: Record<string, unknown>,
   request: InteractiveAgentRequest | null,
 ): boolean {
-  if (message.type === "control_cancel_request") {
+  if (message.type === "control_cancel_request" || message.type === "agent-vis/server-request-resolved") {
     return request !== null && message.request_id === request.requestId;
   }
   return claudeElicitationCompletionResponse(message, request) !== null;

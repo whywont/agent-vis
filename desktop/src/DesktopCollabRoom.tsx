@@ -316,7 +316,7 @@ export default function DesktopCollabRoom({
     const channels = pendingChannels.current.get(worker.sessionKey) || [];
     pendingChannels.current.set(worker.sessionKey, [...channels, channel]);
     try {
-      if (worker.provider === "codex") await sendCodexTurn(worker.sessionKey, worker.threadId, null, prompt, []);
+      if (worker.provider === "codex") await sendCodexTurn(worker.sessionKey, worker.threadId, null, worker.worktreePath, prompt, []);
       else await sendClaudeTurn(worker.sessionKey, prompt, []);
     } catch (nextError) {
       const pending = pendingChannels.current.get(worker.sessionKey) || [];

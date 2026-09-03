@@ -39,8 +39,10 @@ impl SemanticModel {
         let vocabulary_size = embeddings.shape()[0];
         let data = embeddings.data();
         let values = data
-            .chunks_exact(4)
-            .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|bytes| f32::from_le_bytes(*bytes))
             .collect::<Vec<_>>();
         if values.len() != vocabulary_size * EMBEDDING_DIMENSION {
             return Err("The bundled semantic model is incomplete".to_owned());

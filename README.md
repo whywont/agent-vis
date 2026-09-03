@@ -6,15 +6,11 @@
 
 <p align="center">A local viewer for Claude Code and Codex sessions. Watch agent activity in real time — patches, shell commands, reasoning, token usage — and interact with running sessions from your browser.</p>
 
-<p align="center">
-  <a href="https://youtu.be/MVc9ljH8y4A">
-    <img src="https://img.youtube.com/vi/MVc9ljH8y4A/maxresdefault.jpg" alt="agent-vis demo" width="600" />
-  </a>
-</p>
-
 <br />
 
 When you hand off work to an AI agent you're still accountable for everything it produces. agent-vis gives you ambient visibility into what your agent is doing without interrupting it — open it in a browser tab while the agent runs in a terminal, and stay oriented in real time without scrolling through output or waiting for a commit to review.
+
+> **Note:** The browser version is out of date compared with the desktop app and does not include the latest features or improvements.
 
 ## Features
 

@@ -1,3 +1,4 @@
+#app,
 .platform-macos #app {
   flex-direction: column;
 }
@@ -12,6 +13,57 @@
   padding: 2px 6px 6px;
   background: var(--bg);
 }
+
+.desktop-attention-bar {
+  display: flex;
+  height: 28px;
+  min-height: 28px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 9px;
+  border-top: 1px solid var(--border);
+  background: #151515;
+  color: var(--text-dim);
+  font: 9px var(--font-mono);
+}
+
+.desktop-attention-icon {
+  display: flex;
+  width: 13px;
+  color: var(--text-dim);
+}
+
+.desktop-attention-icon svg { width: 13px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
+
+.desktop-attention-bar.active .desktop-attention-icon {
+  color: #e0b85c;
+  filter: drop-shadow(0 0 4px rgba(224, 184, 92, 0.72));
+  animation: desktop-attention-pulse 1.4s ease-in-out infinite;
+}
+
+.desktop-attention-summary { margin-right: auto; }
+
+.desktop-attention-bar.active .desktop-attention-summary { color: #e0b85c; }
+
+.desktop-attention-bar button {
+  display: inline-flex;
+  max-width: 240px;
+  height: 20px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px;
+  overflow: hidden;
+  border: 1px solid rgba(224, 184, 92, 0.3);
+  border-radius: 10px;
+  background: rgba(224, 184, 92, 0.08);
+  color: #e0b85c;
+  cursor: pointer;
+  font: 9px var(--font-mono);
+}
+
+.desktop-attention-bar button:hover { background: rgba(224, 184, 92, 0.16); color: var(--text); }
+.desktop-attention-bar button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.desktop-attention-bar button b { font-size: 8px; }
 
 /* A terminal dropped on Sessions shares the left two columns with Sessions
    and Changed Files. The Timeline stays an independent full-height column. */
@@ -285,6 +337,23 @@ body.terminal-over-sessions #sidebar {
 }
 
 .desktop-session-family { min-width: 0; }
+
+.desktop-session-attention {
+  display: inline-flex;
+  min-width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  margin-left: 5px;
+  padding: 0 4px;
+  border: 1px solid rgba(224, 184, 92, 0.48);
+  border-radius: 8px;
+  background: rgba(224, 184, 92, 0.14);
+  box-shadow: 0 0 8px rgba(224, 184, 92, 0.13);
+  color: #e0b85c;
+  font: 700 8px var(--font-mono);
+  vertical-align: 1px;
+}
 
 .desktop-subagent-toggle {
   display: inline-flex;
@@ -1293,6 +1362,29 @@ body.resizing .desktop-collab-column-resize::after { background: rgba(224,184,92
 .desktop-new-session-menu header { color: var(--text); font-weight: 700; }
 .desktop-new-session-menu em { color: var(--red); font-style: normal; }
 
+.desktop-new-session-menu .desktop-new-session-menu-header {
+  display: flex;
+  min-height: 27px;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 3px;
+}
+
+.desktop-new-session-menu .desktop-new-session-menu-header button {
+  display: grid;
+  width: 25px;
+  min-height: 25px;
+  flex: 0 0 25px;
+  padding: 0;
+  place-items: center;
+  color: var(--text-muted);
+  font: 20px/1 var(--font-mono);
+}
+
+.desktop-new-session-menu .desktop-new-session-menu-header span {
+  padding: 0 4px;
+}
+
 .desktop-new-session-menu button {
   display: flex;
   width: 100%;
@@ -1346,8 +1438,17 @@ body.resizing .desktop-collab-column-resize::after { background: rgba(224,184,92
   border-left-color: var(--accent);
 }
 
+.entry-actions {
+  display: flex;
+  flex: 0 0 76px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+}
+
 .entry-copy-message-btn {
   flex-shrink: 0;
+  width: 42px;
   padding: 2px 5px;
   border: 1px solid transparent;
   border-radius: 3px;
@@ -1578,6 +1679,18 @@ body.resizing .desktop-collab-column-resize::after { background: rgba(224,184,92
   clip-path: polygon(8% 0, 100% 50%, 8% 100%);
 }
 .desktop-codex-live-interrupt:hover span { background: var(--text); }
+.desktop-codex-live-interrupt.quiet span {
+  background: var(--gold);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--gold) 55%, transparent);
+}
+.desktop-codex-quiet {
+  min-width: auto !important;
+  padding-inline: 8px !important;
+  border-color: color-mix(in srgb, var(--gold) 58%, transparent) !important;
+  background: color-mix(in srgb, var(--gold) 11%, transparent) !important;
+  color: var(--gold) !important;
+  white-space: nowrap;
+}
 .desktop-codex-live-bar textarea {
   display: block;
   height: 30px;
@@ -2492,6 +2605,10 @@ body.resizing .desktop-collab-column-resize::after { background: rgba(224,184,92
   50% { opacity: 0.35; }
 }
 
+@keyframes desktop-attention-pulse {
+  50% { opacity: 0.38; transform: scale(0.82); }
+}
+
 @keyframes desktop-approval-glow {
   50% { box-shadow: 0 0 0 1px rgba(var(--accent-rgb), 0.18), 0 0 28px rgba(var(--accent-rgb), 0.31); }
 }
@@ -3318,6 +3435,15 @@ body.resizing .desktop-collab-column-resize::after { background: rgba(224,184,92
   margin: 0;
 }
 
+.desktop-terminal-panel.desktop-terminal-minimized {
+  min-height: 29px;
+}
+
+.desktop-terminal-minimized .desktop-terminal-resize-handle,
+.desktop-terminal-minimized .desktop-terminal-pane-grid {
+  display: none;
+}
+
 /* Keep inactive session terminals alive without leaving an empty dock onscreen.
    Returning to their session reuses the same PTY and xterm instance. */
 .desktop-terminal-parked { display: none; }
@@ -3415,11 +3541,10 @@ body.resizing .desktop-collab-column-resize::after { background: rgba(224,184,92
   opacity: 0.8;
 }
 
+.desktop-terminal-minimize,
 .desktop-terminal-close {
   width: 24px;
   height: 24px;
-  margin-left: auto;
-  margin-right: 4px;
   border: 0;
   border-radius: 4px;
   background: transparent;
@@ -3428,6 +3553,10 @@ body.resizing .desktop-collab-column-resize::after { background: rgba(224,184,92
   font: 18px/1 var(--font-mono);
 }
 
+.desktop-terminal-minimize { margin-left: auto; }
+.desktop-terminal-close { margin-right: 4px; }
+
+.desktop-terminal-minimize:hover,
 .desktop-terminal-close:hover {
   background: #333333;
   color: #ffffff;

@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import type { AppEvent, SessionMeta, TranscriptSessionMeta } from "@/lib/types";
 import { formatTime } from "@/utils/format";
 import {
@@ -17,11 +18,13 @@ import {
   startCodexSession,
   syncAllMeshPeers,
   updateSessionShare,
+  type AgentProviderRuntimeEvent,
   type SessionSharingMode,
   type SessionSharingSettings,
 } from "./desktop-api";
-import type { LiveProvider } from "./harness-adapters";
+import { getHarnessAdapter, type LiveProvider } from "./harness-adapters";
 import DesktopSessionList from "./DesktopSessionList";
+import DesktopAttentionBar, { type AttentionSession } from "./DesktopAttentionBar";
 import DesktopSettingsPage from "./DesktopSettingsPage";
 import DesktopSessionWorkspace from "./DesktopSessionWorkspace";
 import DesktopCollabWorkspace from "./DesktopCollabWorkspace";
@@ -42,6 +45,12 @@ import {
   saveMeshSyncReceipts,
 } from "./mesh-sync-receipts";
 import { buildSessionHandoff, continuationModel } from "./session-handoff";
+import {
+  listenForNotificationApprovalActions,
+  notifyAgentNeedsAttention,
+} from "./desktop-notifications";
+import { applyRuntimeAttentionEvent, attentionDetail, type SessionAttention } from "./session-attention";
+import { notificationApprovalDecision } from "./notification-approval";
 
 const SESSION_POLL_INTERVAL_MS = 5000;
 const LIVE_SESSION_REFRESH_DEBOUNCE_MS = 2_000;
@@ -81,12 +90,15 @@ export default function App() {
   const [meshSyncReceipts, setMeshSyncReceipts] = useState(() => loadMeshSyncReceipts());
   const [continuationDrafts, setContinuationDrafts] = useState<Record<string, string>>({});
   const [continuationEvents, setContinuationEvents] = useState<Record<string, AppEvent[]>>({});
+  const [attentions, setAttentions] = useState<SessionAttention[]>([]);
   const sidebarRef = useRef<HTMLElement>(null);
   const mainRef = useRef<HTMLElement>(null);
   const sessionsRef = useRef<SessionMeta[]>([]);
   const selectedRef = useRef<SessionMeta | null>(null);
   const liveRefreshTimer = useRef<number | null>(null);
   const liveRefreshInFlight = useRef(false);
+  const liveSessionKeysRef = useRef(liveSessionKeys);
+  const attentionsRef = useRef(attentions);
 
   useEffect(() => {
     sessionsRef.current = sessions;
@@ -95,6 +107,77 @@ export default function App() {
   useEffect(() => {
     selectedRef.current = selected;
   }, [selected]);
+
+  useEffect(() => {
+    liveSessionKeysRef.current = liveSessionKeys;
+  }, [liveSessionKeys]);
+
+  useEffect(() => {
+    attentionsRef.current = attentions;
+  }, [attentions]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let unlistenNotificationActions: (() => void) | undefined;
+    let cancelled = false;
+    void listenForNotificationApprovalActions(async (attention, action) => {
+      const active = attentionsRef.current.find((candidate) => candidate.key === attention.key);
+      if (!active || active.request.type !== "approval") return;
+      const decision = notificationApprovalDecision(active.request, action);
+      if (!decision) {
+        setError(`Codex did not offer a compatible ${action} decision for this request.`);
+        return;
+      }
+      const interactive = getHarnessAdapter(active.provider).interactiveRequests;
+      if (!interactive) return;
+      try {
+        await interactive.respond(
+          {
+            sessionKey: active.sessionKey,
+            threadId: "",
+            cwd: "",
+            activeTurnId: null,
+          },
+          active.request,
+          { type: "approval", decision },
+        );
+        const remaining = attentionsRef.current.filter((candidate) => candidate.key !== active.key);
+        attentionsRef.current = remaining;
+        setAttentions(remaining);
+      } catch (reason) {
+        setError(`Could not respond from the notification: ${reason instanceof Error ? reason.message : String(reason)}`);
+      }
+    }).then((stop) => {
+      if (cancelled) stop();
+      else unlistenNotificationActions = stop;
+    }).catch((reason: unknown) => {
+      setError(`Could not enable notification actions: ${reason instanceof Error ? reason.message : String(reason)}`);
+    });
+    void listen<AgentProviderRuntimeEvent>("agent-provider-runtime-event", (event) => {
+      const result = applyRuntimeAttentionEvent(attentionsRef.current, event.payload);
+      if (!sameAttentionList(attentionsRef.current, result.attentions)) {
+        attentionsRef.current = result.attentions;
+        setAttentions(result.attentions);
+      }
+      if (!result.added) return;
+      const session = sessionForRuntimeKey(
+        sessionsRef.current,
+        liveSessionKeysRef.current,
+        result.added.provider,
+        result.added.sessionKey,
+      );
+      const label = session ? attentionSessionLabel(loadSessionAliases(), session) : result.added.sessionKey;
+      notifyAgentNeedsAttention(label, attentionDetail(result.added), result.added);
+    }).then((stop) => {
+      if (cancelled) stop();
+      else unlisten = stop;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+      unlistenNotificationActions?.();
+    };
+  }, []);
 
   const refreshActiveLiveSession = useCallback(() => {
     // Bridge events can arrive token-by-token. Coalesce them into a small,
@@ -261,6 +344,15 @@ export default function App() {
 
   const selectedFiles = selected ? sessionFiles(selected) : null;
   const splitActive = Boolean(selected && splitSession);
+  const attentionSessions = useMemo(() => groupAttentionSessions(
+    attentions,
+    sessions,
+    liveSessionKeys,
+    sessionAliases,
+  ), [attentions, liveSessionKeys, sessionAliases, sessions]);
+  const attentionCounts = useMemo(() => new Map(attentionSessions
+    .filter((attention) => attention.sessionIdentity)
+    .map((attention) => [attention.sessionIdentity!, attention.count])), [attentionSessions]);
 
   function selectSession(files: string, target: SessionMatchTarget | null) {
     setShowSettings(false);
@@ -455,6 +547,7 @@ export default function App() {
                 sessionSharingMode={sessionSharingMode}
                 sharedSessionKeys={sharedSessionKeys}
                 meshSyncReceipts={meshSyncReceipts}
+                attentionCounts={attentionCounts}
                 hasConfiguredSharingDevice={hasConfiguredSharingDevice}
                 onOpenSettings={() => { setShowSettings(true); setMatchTarget(null); setSelected(null); }}
                 onStartSession={startSession}
@@ -593,8 +686,64 @@ export default function App() {
           ) : null}
         </main>
       </div>
+      <DesktopAttentionBar
+        sessions={attentionSessions}
+        onOpen={(key) => {
+          const attention = attentionSessions.find((candidate) => candidate.key === key);
+          const session = attention?.sessionIdentity
+            ? sessions.find((candidate) => sessionIdentity(candidate) === attention.sessionIdentity)
+            : null;
+          if (session) selectSession(sessionFiles(session), null);
+        }}
+      />
     </div>
   );
+}
+
+type ResolvedAttentionSession = AttentionSession & { sessionIdentity: string | null };
+
+function groupAttentionSessions(
+  attentions: readonly SessionAttention[],
+  sessions: readonly SessionMeta[],
+  liveSessionKeys: Record<string, string>,
+  aliases: ReturnType<typeof loadSessionAliases>,
+): ResolvedAttentionSession[] {
+  const grouped = new Map<string, ResolvedAttentionSession>();
+  for (const attention of attentions) {
+    const session = sessionForRuntimeKey(sessions, liveSessionKeys, attention.provider, attention.sessionKey);
+    const identity = session ? sessionIdentity(session) : null;
+    const key = identity || `${attention.provider}:${attention.sessionKey}`;
+    const current = grouped.get(key);
+    grouped.set(key, {
+      key,
+      sessionIdentity: identity,
+      label: session ? attentionSessionLabel(aliases, session) : attention.sessionKey,
+      count: (current?.count || 0) + 1,
+      detail: current?.detail || attentionDetail(attention),
+    });
+  }
+  return [...grouped.values()];
+}
+
+function sessionForRuntimeKey(
+  sessions: readonly SessionMeta[],
+  liveSessionKeys: Record<string, string>,
+  provider: LiveProvider,
+  runtimeSessionKey: string,
+): SessionMeta | null {
+  return sessions.find((session) => {
+    if (session.source !== provider) return false;
+    const identity = sessionIdentity(session);
+    return identity === runtimeSessionKey || liveSessionKeys[identity] === runtimeSessionKey;
+  }) || null;
+}
+
+function sameAttentionList(left: readonly SessionAttention[], right: readonly SessionAttention[]): boolean {
+  return left.length === right.length && left.every((attention, index) => attention.key === right[index]?.key);
+}
+
+function attentionSessionLabel(aliases: ReturnType<typeof loadSessionAliases>, session: SessionMeta): string {
+  return sessionAlias(aliases, session) || session.id.slice(0, 12) || session.cwd.split("/").filter(Boolean).at(-1) || "Session";
 }
 
 function continueTimeline(events: AppEvent[], session: SessionMeta): AppEvent[] {
