@@ -1123,9 +1123,8 @@ fn extract_claude_chunks(value: &Value, chunks: &mut Vec<SearchChunk>) {
             if value.get("toolUseResult").is_some() || string(value, "userType") == "tool_result" {
                 return;
             }
-            let content = value.pointer("/message/content");
-            let text = message_text(content, "text");
-            if !text.contains("<system-reminder>") && !text.contains("<task-notification>") {
+            let text = claude_user_text(value.pointer("/message/content"));
+            if !text.is_empty() {
                 push(chunks, &timestamp, "user_message", text);
             }
         }
@@ -1157,6 +1156,32 @@ fn searchable_patch_call(name: &str, raw: &str) -> Option<String> {
     match name {
         "apply_patch" | "Edit" | "Write" => Some(raw.to_owned()),
         _ => None,
+    }
+}
+
+fn is_injected_claude_text(text: &str) -> bool {
+    text.contains("<system-reminder>") || text.contains("<task-notification>")
+}
+
+// Newer Claude builds prepend injected context as its own text block in the
+// same message as the typed prompt, so filter per block.
+fn claude_user_text(value: Option<&Value>) -> String {
+    match value {
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter(|item| string(item, "type") == "text")
+            .map(|item| string(item, "text"))
+            .filter(|text| !is_injected_claude_text(text))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => {
+            let text = message_text(value, "text");
+            if is_injected_claude_text(&text) {
+                String::new()
+            } else {
+                text
+            }
+        }
     }
 }
 
@@ -1486,6 +1511,19 @@ fn make_snippet(value: &str, terms: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn claude_user_text_keeps_prompt_after_reminder_block() {
+        let content = serde_json::json!([
+            { "type": "text", "text": "<system-reminder>\nNo project folder.\n</system-reminder>\n\n" },
+            { "type": "text", "text": "fix the name" }
+        ]);
+        assert_eq!(claude_user_text(Some(&content)), "fix the name");
+
+        let injected = serde_json::json!("<task-notification>done</task-notification>");
+        assert_eq!(claude_user_text(Some(&injected)), "");
+        assert_eq!(claude_user_text(Some(&serde_json::json!("hello"))), "hello");
+    }
     use std::fs;
     use std::io::Write;
 
