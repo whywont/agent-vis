@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { getRuntimeSettings } from "@/lib/runtime-settings";
+import { explainRequestParams } from "@/lib/anthropic-explain";
 
 export async function POST(req: NextRequest) {
   const settings = await getRuntimeSettings();
@@ -68,7 +69,7 @@ export async function POST(req: NextRequest) {
   const anthropic = new Anthropic({ apiKey: settings.anthropicApiKey });
   const stream = anthropic.messages.stream({
     model: settings.model,
-    max_tokens: 512,
+    ...explainRequestParams(settings.model, 512),
     system,
     messages: [
       {
@@ -88,6 +89,9 @@ export async function POST(req: NextRequest) {
           ) {
             controller.enqueue(new TextEncoder().encode(event.delta.text));
           }
+        }
+        if ((await stream.finalMessage()).stop_reason === "refusal") {
+          controller.enqueue(new TextEncoder().encode("\n\nClaude declined to explain this patch."));
         }
       } finally {
         controller.close();

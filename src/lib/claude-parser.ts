@@ -81,19 +81,18 @@ export function parseClaudeEvent(
       if (hasToolResult) {
         return parseToolResults(content, ts);
       }
+      // Newer Claude builds prepend injected context as its own text block in
+      // the same message as the typed prompt, so filter per block.
       const textParts = content
         .filter((b) => b.type === "text")
-        .map((b) => b.text as string);
+        .map((b) => b.text as string)
+        .filter((text) =>
+          !text.includes("<task-notification>") &&
+          !text.includes("<system-reminder>") &&
+          !text.includes("<local-command-caveat>")
+        );
       if (textParts.length > 0) {
-        const text = textParts.join("\n");
-        if (
-          text.includes("<task-notification>") ||
-          text.includes("<system-reminder>") ||
-          text.includes("<local-command-caveat>")
-        ) {
-          return [];
-        }
-        return [{ kind: "user_message", ts, text, images: extractImages(obj) }];
+        return [{ kind: "user_message", ts, text: textParts.join("\n"), images: extractImages(obj) }];
       }
       return [];
     }

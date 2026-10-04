@@ -57,6 +57,31 @@ describe("parseClaudeEvent — user string content", () => {
     expect(parseClaudeEvent(obj, makeAccum())).toHaveLength(0);
   });
 
+  it("keeps the typed prompt when a reminder block precedes it", () => {
+    const obj = {
+      timestamp: TS,
+      type: "user",
+      message: {
+        content: [
+          { type: "text", text: "<system-reminder>\nNo project folder.\n</system-reminder>\n\n" },
+          { type: "text", text: "fix the name" },
+        ],
+      },
+    };
+    const events = parseClaudeEvent(obj, makeAccum());
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ kind: "user_message", text: "fix the name" });
+  });
+
+  it("drops block messages that are entirely injected", () => {
+    const obj = {
+      timestamp: TS,
+      type: "user",
+      message: { content: [{ type: "text", text: "<task-notification>done</task-notification>" }] },
+    };
+    expect(parseClaudeEvent(obj, makeAccum())).toHaveLength(0);
+  });
+
   it("filters out task-notification messages", () => {
     const obj = {
       timestamp: TS,
