@@ -14,6 +14,8 @@ const MAX_EXPLAIN_FILE_BYTES: usize = MAX_EDIT_FILE_BYTES as usize;
 const MAX_EXPLAIN_RESPONSE_BYTES: usize = 1024 * 1024;
 const STANDARD_EXPLAIN_TOKENS: usize = 512;
 const DETAILED_EXPLAIN_TOKENS: usize = 1536;
+// Thinking tokens count against max_tokens on models that think by default.
+const THINKING_HEADROOM_TOKENS: usize = 4096;
 const DETAILED_EXPLAIN_INSTRUCTION: &str = "Provide a much more detailed explanation. Highlight important syntax, language idioms, architectural and design choices, control and data flow, subtle behavior, tradeoffs, and likely implications. Use clear sections where useful and connect the patch to the surrounding file context.";
 const MISSING_EXPLAIN_API_KEY: &str =
     "Add an API key in Settings for the selected explanation provider.";
@@ -52,6 +54,7 @@ struct OpenAiMessage {
 #[derive(Deserialize)]
 struct AnthropicResponse {
     content: Vec<AnthropicContent>,
+    stop_reason: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -128,6 +131,40 @@ fn explain_token_limit(request: &ExplainDiffRequest) -> usize {
     } else {
         STANDARD_EXPLAIN_TOKENS
     }
+}
+
+// Fable/Mythos and Opus/Sonnet 5+ think by default, and some reject disabling
+// it, so keep thinking on at low effort and leave room for the answer.
+fn thinks_by_default(model: &str) -> bool {
+    if model.starts_with("claude-fable-") || model.starts_with("claude-mythos-") {
+        return true;
+    }
+    let mut parts = model.split('-');
+    parts.next() == Some("claude")
+        && parts.next().is_some()
+        && parts
+            .next()
+            .and_then(|major| major.parse::<u32>().ok())
+            .is_some_and(|major| major >= 5)
+}
+
+fn anthropic_request_body(
+    model: &str,
+    system: &str,
+    prompt: &str,
+    max_tokens: usize,
+) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "model": model,
+        "max_tokens": max_tokens,
+        "system": system,
+        "messages": [{ "role": "user", "content": prompt }]
+    });
+    if thinks_by_default(model) {
+        body["max_tokens"] = (max_tokens + THINKING_HEADROOM_TOKENS).into();
+        body["output_config"] = serde_json::json!({ "effort": "low" });
+    }
+    body
 }
 
 fn explain_http_client() -> Result<reqwest::Client, String> {
@@ -243,12 +280,12 @@ async fn explain_anthropic(
         .post("https://api.anthropic.com/v1/messages")
         .header("x-api-key", api_key)
         .header("anthropic-version", "2023-06-01")
-        .json(&serde_json::json!({
-            "model": settings.model,
-            "max_tokens": max_tokens,
-            "system": settings.explain_instructions,
-            "messages": [{ "role": "user", "content": user_prompt }]
-        }))
+        .json(&anthropic_request_body(
+            &settings.model,
+            &settings.explain_instructions,
+            user_prompt,
+            max_tokens,
+        ))
         .send()
         .await
         .map_err(|error| format!("Could not reach Anthropic: {error}"))?;
@@ -262,6 +299,9 @@ async fn explain_anthropic(
     }
     let payload: AnthropicResponse = serde_json::from_slice(&bytes)
         .map_err(|_| "Anthropic returned an invalid response.".to_owned())?;
+    if payload.stop_reason.as_deref() == Some("refusal") {
+        return Err("Claude declined to explain this patch.".to_owned());
+    }
     let explanation = payload
         .content
         .into_iter()
@@ -371,6 +411,37 @@ mod tests {
             anthropic.content[0].text.as_deref(),
             Some("Anthropic explanation")
         );
+    }
+
+    #[test]
+    fn thinking_models_get_low_effort_and_headroom() {
+        for model in [
+            "claude-opus-5-5",
+            "claude-opus-5",
+            "claude-sonnet-5",
+            "claude-fable-5-1",
+            "claude-mythos-5-1",
+        ] {
+            assert!(thinks_by_default(model), "{model}");
+        }
+        for model in [
+            "claude-haiku-4-5",
+            "claude-opus-4-8",
+            "claude-sonnet-4-6",
+            "claude-opus-4-20250514",
+            "qwen3:8b",
+        ] {
+            assert!(!thinks_by_default(model), "{model}");
+        }
+
+        let body = anthropic_request_body("claude-opus-5-5", "system", "prompt", 512);
+        assert_eq!(body["max_tokens"], 512 + THINKING_HEADROOM_TOKENS);
+        assert_eq!(body["output_config"]["effort"], "low");
+        assert!(body.get("thinking").is_none());
+
+        let body = anthropic_request_body("claude-haiku-4-5", "system", "prompt", 512);
+        assert_eq!(body["max_tokens"], 512);
+        assert!(body.get("output_config").is_none());
     }
 
     #[test]
