@@ -1,33 +1,74 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import DesktopDiffView from "./DesktopDiffView";
-import { readBranchDiff, type BranchDiff } from "./desktop-api";
-import { parseGitDiff, toViewerPatch, type GitFileStatus } from "./branch-diff";
+import type { AppEvent } from "@/lib/types";
+import { findSessionRepos, readBranchDiff, type BranchDiff, type SessionRepo } from "./desktop-api";
+import { parseGitDiff, sessionRepoPaths, toViewerPatch, type GitFileStatus } from "./branch-diff";
 
 const INCLUDE_UNCOMMITTED_KEY = "agent-vis:changes:include-uncommitted";
 const STATUS_LETTERS: Record<GitFileStatus, string> = { added: "A", deleted: "D", modified: "M", renamed: "R" };
 
 export default function DesktopChangesView({
   cwd,
+  events,
   onOpenFile,
 }: {
   cwd: string;
+  events: AppEvent[];
   onOpenFile: (filepath: string) => void;
 }) {
+  const [repos, setRepos] = useState<SessionRepo[] | null>(null);
+  const [cwdRepo, setCwdRepo] = useState<string | null>(null);
+  const [chosenRepo, setChosenRepo] = useState<string | null>(null);
   const [includeUncommitted, setIncludeUncommitted] = useState(() => readFlag());
-  const [result, setResult] = useState<BranchDiff | null>(null);
+  const [loaded, setLoaded] = useState<{ root: string; diff: BranchDiff } | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [showCommits, setShowCommits] = useState(false);
   const requestId = useRef(0);
   const diffsRef = useRef<HTMLDivElement>(null);
+  // Live sessions emit events constantly; only re-scan when the paths change.
+  const pathsKey = useMemo(() => sessionRepoPaths(events).join("\n"), [events]);
+
+  // A session started outside a repository (say `~`) can still work in one
+  // through `cd`, so look at every path it touched, not just its folder.
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      findSessionRepos(cwd, [cwd]),
+      findSessionRepos(cwd, pathsKey ? pathsKey.split("\n") : []),
+    ])
+      .then(([own, touched]) => {
+        if (cancelled) return;
+        const ownRoot = own[0]?.root ?? null;
+        setCwdRepo(ownRoot);
+        setRepos(ownRoot && !touched.some((repo) => repo.root === ownRoot)
+          ? [{ root: ownRoot, references: 0 }, ...touched]
+          : touched);
+      })
+      .catch((reason: unknown) => {
+        if (cancelled) return;
+        setRepos([]);
+        setError(reason instanceof Error ? reason.message : String(reason));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [cwd, pathsKey]);
+
+  const repoRoot = chosenRepo && repos?.some((repo) => repo.root === chosenRepo)
+    ? chosenRepo
+    : cwdRepo ?? repos?.[0]?.root ?? null;
+  // Keyed by the requested root: Git may report it through a different path.
+  const result = loaded?.root === repoRoot ? loaded.diff : null;
 
   // Loads without touching `loading`, so effects and focus refreshes stay quiet.
   const load = useCallback(() => {
+    if (!repoRoot) return;
     const id = ++requestId.current;
-    readBranchDiff(cwd, includeUncommitted)
+    readBranchDiff(repoRoot, includeUncommitted)
       .then((next) => {
         if (id !== requestId.current) return;
-        setResult(next);
+        setLoaded({ root: repoRoot, diff: next });
         setError("");
       })
       .catch((reason: unknown) => {
@@ -36,7 +77,7 @@ export default function DesktopChangesView({
       .finally(() => {
         if (id === requestId.current) setLoading(false);
       });
-  }, [cwd, includeUncommitted]);
+  }, [repoRoot, includeUncommitted]);
 
   useEffect(() => {
     load();
@@ -72,6 +113,13 @@ export default function DesktopChangesView({
     diffsRef.current?.querySelector(`[data-change-index="${index}"]`)?.scrollIntoView({ block: "start" });
   }
 
+  if (repos && !repoRoot) {
+    return (
+      <div className="desktop-detail-state">
+        {error || `No Git repository found for this session. It started in ${shortPath(cwd)} and hasn't worked inside a repository.`}
+      </div>
+    );
+  }
   if (!result) {
     return <div className={`desktop-detail-state${error ? " error" : ""}`}>{error || "Loading changes..."}</div>;
   }
@@ -96,6 +144,18 @@ export default function DesktopChangesView({
           </span>
         </div>
         <div className="desktop-changes-controls">
+          {repos && repos.length > 1 && (
+            <select
+              value={repoRoot ?? ""}
+              onChange={(event) => {
+                setLoading(true);
+                setChosenRepo(event.target.value);
+              }}
+              aria-label="Repository"
+            >
+              {repos.map((repo) => <option value={repo.root} key={repo.root}>{shortPath(repo.root)}</option>)}
+            </select>
+          )}
           <label>
             <input type="checkbox" checked={includeUncommitted} onChange={toggleUncommitted} />
             include uncommitted
@@ -161,6 +221,10 @@ export default function DesktopChangesView({
       )}
     </div>
   );
+}
+
+function shortPath(path: string): string {
+  return path.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, "~");
 }
 
 function readFlag(): boolean {

@@ -416,6 +416,17 @@ export interface BranchDiff {
   untracked: string[];
 }
 
+export interface SessionRepo {
+  root: string;
+  /** How many of the session's paths fall inside this repository. */
+  references: number;
+}
+
+/** Find (and authorize) the Git repositories containing paths a session touched. */
+export function findSessionRepos(workspaceRoot: string, paths: string[]): Promise<SessionRepo[]> {
+  return invoke<SessionRepo[]>("find_session_repos", { request: { workspaceRoot, paths } });
+}
+
 export function readBranchDiff(workspaceRoot: string, includeUncommitted: boolean): Promise<BranchDiff> {
   return invoke<BranchDiff>("read_branch_diff", { request: { workspaceRoot, includeUncommitted } });
 }

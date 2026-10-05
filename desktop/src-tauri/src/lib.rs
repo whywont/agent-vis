@@ -17,7 +17,7 @@ mod sleep_inhibitor;
 mod terminal;
 mod workspace;
 
-use branch_diff::read_branch_diff;
+use branch_diff::{find_session_repos, read_branch_diff};
 use claude_stream::{
     connect_claude_thread, respond_to_claude_server_request, send_claude_turn,
     start_claude_session, ClaudeStreamState,
@@ -127,6 +127,7 @@ pub fn run() {
             explain_diff,
             get_git_branch,
             read_branch_diff,
+            find_session_repos,
             choose_workspace_directory,
             authorize_workspace_for_file,
             list_workspace_files,

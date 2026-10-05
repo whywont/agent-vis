@@ -3737,3 +3737,4 @@ body.terminal-dragging * { cursor: grabbing !important; }
 .desktop-changes-file { scroll-margin-top: 8px; margin-bottom: 12px; }
 .desktop-changes-placeholder { display: flex; align-items: baseline; gap: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 3px; color: var(--text); font-size: 11px; }
 .desktop-changes-placeholder small { margin-left: auto; color: var(--text-dim); }
+.desktop-changes-controls select { max-width: 220px; padding: 2px 4px; border: 1px solid var(--border); border-radius: 3px; background: var(--bg); color: var(--text); font: inherit; }

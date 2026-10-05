@@ -2,18 +2,35 @@ use crate::workspace::{
     authorized_workspace_roots, validate_workspace_root, WorkspaceAuthorizationState,
 };
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 // Large enough for a big feature branch, small enough to render.
 const MAX_DIFF_BYTES: usize = 8 * 1024 * 1024;
 const MAX_COMMITS: usize = 250;
+const MAX_REPO_CANDIDATES: usize = 500;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct BranchDiffRequest {
     workspace_root: String,
     include_uncommitted: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SessionReposRequest {
+    workspace_root: String,
+    paths: Vec<String>,
+}
+
+#[derive(Serialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SessionRepo {
+    root: String,
+    /// How many of the session's paths fall inside this repository.
+    references: usize,
 }
 
 #[derive(Serialize, Debug, PartialEq)]
@@ -198,6 +215,73 @@ fn read_branch_diff_in(repo: &Path, include_uncommitted: bool) -> Result<BranchD
     })
 }
 
+fn git_root_for(path: &Path) -> Option<PathBuf> {
+    let mut directory = if path.is_dir() { path } else { path.parent()? };
+    loop {
+        // `.git` is a file in worktrees and submodules, so check existence only.
+        if directory.join(".git").exists() {
+            return directory.canonicalize().ok();
+        }
+        directory = directory.parent()?;
+    }
+}
+
+/// Map paths a session touched to the Git repositories containing them,
+/// most referenced first. Relative paths resolve against the workspace.
+fn find_session_repos_in(workspace: &Path, paths: &[String]) -> Vec<SessionRepo> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let mut counts = HashMap::<PathBuf, usize>::new();
+    for raw in paths.iter().take(MAX_REPO_CANDIDATES) {
+        let raw = raw.trim();
+        if raw.is_empty() || raw.contains('\0') {
+            continue;
+        }
+        let path = match (raw.strip_prefix('~'), &home) {
+            (Some(rest), Some(home)) if rest.is_empty() || rest.starts_with('/') => {
+                home.join(rest.trim_start_matches('/'))
+            }
+            _ if Path::new(raw).is_absolute() => PathBuf::from(raw),
+            _ => workspace.join(raw),
+        };
+        // Deleted files still identify their repository through a parent.
+        let existing = path.ancestors().find(|candidate| candidate.exists());
+        if let Some(root) = existing.and_then(git_root_for) {
+            *counts.entry(root).or_default() += 1;
+        }
+    }
+    let mut repos = counts
+        .into_iter()
+        .map(|(root, references)| SessionRepo {
+            root: root.to_string_lossy().into_owned(),
+            references,
+        })
+        .collect::<Vec<_>>();
+    repos.sort_by(|left, right| {
+        right
+            .references
+            .cmp(&left.references)
+            .then_with(|| left.root.cmp(&right.root))
+    });
+    repos
+}
+
+#[tauri::command]
+pub(crate) fn find_session_repos(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, WorkspaceAuthorizationState>,
+    request: SessionReposRequest,
+) -> Result<Vec<SessionRepo>, String> {
+    let roots = authorized_workspace_roots(&app)?;
+    let workspace = validate_workspace_root(&request.workspace_root, &roots)?;
+    let repos = find_session_repos_in(&workspace, &request.paths);
+    // Same policy as opening a transcript file outside the workspace: the
+    // repository containing a path the session worked on becomes readable.
+    for repo in &repos {
+        state.authorize(PathBuf::from(&repo.root));
+    }
+    Ok(repos)
+}
+
 #[tauri::command]
 pub(crate) async fn read_branch_diff(
     app: tauri::AppHandle,
@@ -223,6 +307,7 @@ pub(crate) async fn read_branch_diff(
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn run(repo: &Path, args: &[&str]) {
@@ -239,11 +324,17 @@ mod tests {
     }
 
     fn temp_repo() -> std::path::PathBuf {
+        // Tests run in parallel, so a timestamp alone can collide.
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let repo = std::env::temp_dir().join(format!("agent-vis-branch-diff-{nonce}"));
+        let count = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let repo = std::env::temp_dir().join(format!(
+            "agent-vis-branch-diff-{}-{nonce}-{count}",
+            std::process::id()
+        ));
         fs::create_dir_all(&repo).unwrap();
         run(&repo, &["init", "-q", "-b", "main"]);
         run(&repo, &["config", "commit.gpgsign", "false"]);
@@ -291,6 +382,33 @@ mod tests {
         let working = read_branch_diff_in(&repo, true).unwrap();
         assert!(working.diff.contains("+four"));
         assert_eq!(working.untracked, vec!["scratch.txt".to_owned()]);
+        fs::remove_dir_all(repo).unwrap();
+    }
+
+    #[test]
+    fn finds_the_repositories_a_session_touched() {
+        let repo = temp_repo();
+        let parent = repo.parent().unwrap().to_path_buf();
+        fs::create_dir_all(repo.join("src")).unwrap();
+        let root = repo.canonicalize().unwrap().to_string_lossy().into_owned();
+        let name = repo.file_name().unwrap().to_string_lossy().into_owned();
+        let found = find_session_repos_in(
+            &parent,
+            &[
+                format!("{name}/keep.txt"),
+                repo.join("src").to_string_lossy().into_owned(),
+                repo.join("src/deleted.rs").to_string_lossy().into_owned(),
+                "/definitely/not/a/repo".to_owned(),
+                String::new(),
+            ],
+        );
+        assert_eq!(
+            found,
+            vec![SessionRepo {
+                root,
+                references: 3
+            }]
+        );
         fs::remove_dir_all(repo).unwrap();
     }
 

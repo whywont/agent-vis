@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseGitDiff, toViewerPatch } from "./branch-diff";
+import { parseGitDiff, sessionRepoPaths, toViewerPatch } from "./branch-diff";
 
 const DIFF = [
   "diff --git a/src/app.ts b/src/app.ts",
@@ -64,5 +64,17 @@ describe("toViewerPatch", () => {
     expect(toViewerPatch(modified).split("\n")[0]).toBe("*** Update File: src/app.ts");
     expect(toViewerPatch(added).split("\n")[0]).toBe("*** Add File: new file.md");
     expect(toViewerPatch(deleted)).toBe("*** Delete File: gone.txt\n@@ -1 +0,0 @@\n-bye");
+  });
+});
+
+describe("sessionRepoPaths", () => {
+  it("collects changed files, command folders, and cd targets", () => {
+    expect(sessionRepoPaths([
+      { kind: "file_change", ts: "", patch: "", files: [{ action: "update", path: "/Users/me/manticore/README.md" }] },
+      { kind: "shell_command", ts: "", cmd: "cd ~/manticore && git status", workdir: "" },
+      { kind: "shell_command", ts: "", cmd: "git -C '/Users/me/other repo' log; cd src", workdir: "/Users/me" },
+      { kind: "shell_command", ts: "", cmd: "echo cd-not-a-command", workdir: "" },
+      { kind: "agent_message", ts: "", text: "cd /ignored" },
+    ])).toEqual(["/Users/me/manticore/README.md", "~/manticore", "/Users/me", "src", "/Users/me/other repo"]);
   });
 });

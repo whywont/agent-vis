@@ -560,7 +560,7 @@ export default function DesktopSessionDetail({
       ) : activeTab === "testing" && !splitView && !transcriptOnly ? (
         <DesktopTestingCanvas events={events} sessionCwd={cwd} onOpenFile={(path) => void openTimelineFileInEditor(path)} />
       ) : activeTab === "changes" && !splitView && !transcriptOnly ? (
-        <DesktopChangesView cwd={cwd} onOpenFile={(path) => void openTimelineFileInEditor(path)} />
+        <DesktopChangesView cwd={cwd} events={events} onOpenFile={(path) => void openTimelineFileInEditor(path)} />
       ) : activeTab === "editor" && !splitView && !transcriptOnly ? (
         <Suspense fallback={<div className="desktop-detail-state">Loading editor...</div>}>
           <DesktopEditor workspaceRoot={editorNavigation?.workspaceRoot || cwd} navigation={editorNavigation} threadId={id} events={events} />
