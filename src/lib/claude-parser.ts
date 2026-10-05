@@ -28,10 +28,12 @@ export function parseClaudeEvent(
     }] : [];
   }
 
-  // Claude records its condensed handoff as a system away_summary rather than
-  // a normal assistant message. It is the equivalent of Codex's compaction.
-  if (type === "system" && obj.subtype === "away_summary") {
-    const text = typeof obj.content === "string" ? obj.content.trim() : "";
+  // A compaction writes a compact_boundary marker followed by a user message
+  // flagged isCompactSummary that carries the handoff summary; surface the
+  // summary as the compaction. away_summary is only an idle recap, not a
+  // compaction, so it falls through to the unhandled case.
+  if (type === "user" && obj.isCompactSummary) {
+    const text = messageText(obj.message).trim();
     return [{
       kind: "context_compaction",
       ts,
@@ -130,6 +132,16 @@ export function parseClaudeEvent(
   }
 
   return [];
+}
+
+function messageText(message: unknown): string {
+  const content = (message as Record<string, unknown> | undefined)?.content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((b) => b?.type === "text" && typeof b.text === "string")
+    .map((b) => b.text as string)
+    .join("\n");
 }
 
 /**

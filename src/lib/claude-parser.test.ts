@@ -280,18 +280,29 @@ describe("parseClaudeEvent - assistant thinking block", () => {
 });
 
 describe("parseClaudeEvent - context compaction", () => {
-  it("surfaces Claude's away summary as a context compaction event", () => {
+  it("surfaces the compact summary message as the compaction", () => {
     const events = parseClaudeEvent({
       timestamp: TS,
-      type: "system",
-      subtype: "away_summary",
-      content: "The session is ready to continue from the test results.",
+      type: "user",
+      isCompactSummary: true,
+      message: { role: "user", content: [{ type: "text", text: "This session is being continued from a previous conversation." }] },
     }, makeAccum());
     expect(events).toEqual([{
       kind: "context_compaction",
       ts: TS,
-      text: "The session is ready to continue from the test results.",
+      text: "This session is being continued from a previous conversation.",
     }]);
+  });
+
+  it("does not treat idle recaps or the boundary marker as extra compactions", () => {
+    for (const subtype of ["away_summary", "compact_boundary"]) {
+      expect(parseClaudeEvent({
+        timestamp: TS,
+        type: "system",
+        subtype,
+        content: "While you were away: tests passed.",
+      }, makeAccum())).toEqual([]);
+    }
   });
 });
 

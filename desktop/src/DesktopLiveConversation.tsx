@@ -1051,9 +1051,9 @@ function isCodexCompaction(item: unknown): boolean {
 }
 
 function isClaudeCompaction(message: Record<string, unknown>): boolean {
-  // Claude's stream schema has varied across versions. Its persisted
-  // away_summary remains the fallback; recognize the live boundary when sent.
-  return message.type === "system" && ["away_summary", "compact_boundary", "compaction"].includes(
+  // Claude's stream schema has varied across versions. away_summary is an idle
+  // recap, not a compaction, so only the boundary markers count.
+  return message.type === "system" && ["compact_boundary", "compaction"].includes(
     typeof message.subtype === "string" ? message.subtype : "",
   );
 }
