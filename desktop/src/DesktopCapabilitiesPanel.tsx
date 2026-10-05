@@ -66,7 +66,7 @@ export default function DesktopCapabilitiesPanel({
                 </summary>
                 <ul>{server.visibleTools.map((tool) => <li key={tool}>{tool}</li>)}</ul>
               </details>
-            )) : <Empty />}
+            )) : <Empty filtered={Boolean(needle)} />}
           </Section>
           <Section title="Built-in tools" count={String(capabilities.builtinTools.length)}>
             {builtin.length ? (
@@ -75,11 +75,11 @@ export default function DesktopCapabilitiesPanel({
                   <li key={tool.name}>{tool.name}{tool.onDemand && <small> on demand</small>}</li>
                 ))}
               </ul>
-            ) : <Empty />}
+            ) : <Empty filtered={Boolean(needle)} />}
           </Section>
-          <NameSection title="Skills" names={skills} total={capabilities.skills.length} />
-          <NameSection title="Subagents" names={agents} total={capabilities.agents.length} />
-          <NameSection title="Plugins" names={plugins} total={capabilities.plugins.length} />
+          <NameSection title="Skills" names={skills} total={capabilities.skills.length} filtered={Boolean(needle)} />
+          <NameSection title="Subagents" names={agents} total={capabilities.agents.length} filtered={Boolean(needle)} />
+          <NameSection title="Plugins" names={plugins} total={capabilities.plugins.length} filtered={Boolean(needle)} />
         </>
       )}
       <Section title="Tools used" count={String(capabilities.toolsUsed.length)} open={!capabilities.hasInventory}>
@@ -89,7 +89,7 @@ export default function DesktopCapabilitiesPanel({
               <li key={tool.name}>{displayToolName(tool.name)}<small> ×{tool.count}</small></li>
             ))}
           </ul>
-        ) : <Empty />}
+        ) : <Empty filtered={Boolean(needle)} />}
       </Section>
     </div>
   );
@@ -104,16 +104,16 @@ function Section({ title, count, open = false, children }: { title: string; coun
   );
 }
 
-function NameSection({ title, names, total }: { title: string; names: string[]; total: number }) {
+function NameSection({ title, names, total, filtered }: { title: string; names: string[]; total: number; filtered: boolean }) {
   return (
     <Section title={title} count={String(total)}>
-      {names.length ? <ul>{names.map((name) => <li key={name}>{name}</li>)}</ul> : <Empty />}
+      {names.length ? <ul>{names.map((name) => <li key={name}>{name}</li>)}</ul> : <Empty filtered={filtered} />}
     </Section>
   );
 }
 
-function Empty() {
-  return <p className="desktop-capabilities-empty">None</p>;
+function Empty({ filtered }: { filtered: boolean }) {
+  return <p className="desktop-capabilities-empty">{filtered ? "No matches" : "None"}</p>;
 }
 
 function displayToolName(name: string): string {
