@@ -1,3 +1,4 @@
+mod branch_diff;
 mod claude_stream;
 mod codex_app_server;
 mod collab;
@@ -16,6 +17,7 @@ mod sleep_inhibitor;
 mod terminal;
 mod workspace;
 
+use branch_diff::read_branch_diff;
 use claude_stream::{
     connect_claude_thread, respond_to_claude_server_request, send_claude_turn,
     start_claude_session, ClaudeStreamState,
@@ -124,6 +126,7 @@ pub fn run() {
             sync_all_mesh_peers,
             explain_diff,
             get_git_branch,
+            read_branch_diff,
             choose_workspace_directory,
             authorize_workspace_for_file,
             list_workspace_files,

@@ -27,10 +27,10 @@ export default function DesktopSessionWorkspace({
   secondary: TranscriptSessionMeta | null;
   primaryName: string | null;
   secondaryName: string | null;
-  activeTab: "session" | "files" | "testing" | "editor";
+  activeTab: "session" | "files" | "testing" | "editor" | "changes";
   terminalOpen: boolean;
   matchTarget: SessionMatchTarget | null;
-  onActiveTabChange: (tab: "session" | "files" | "testing" | "editor") => void;
+  onActiveTabChange: (tab: "session" | "files" | "testing" | "editor" | "changes") => void;
   onTerminalOpen: (session: TranscriptSessionMeta) => void;
   onOpenCollab: () => void;
   onTerminalClose: () => void;

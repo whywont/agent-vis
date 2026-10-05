@@ -404,6 +404,22 @@ export function getGitBranch(workspaceRoot: string): Promise<string | null> {
   return invoke<string | null>("get_git_branch", { workspaceRoot });
 }
 
+export interface BranchDiff {
+  repoRoot: string;
+  branch: string | null;
+  /** The branch a pull request would target; null on that branch itself. */
+  base: string | null;
+  commits: Array<{ sha: string; subject: string }>;
+  files: Array<{ path: string; additions: number | null; deletions: number | null }>;
+  diff: string;
+  truncated: boolean;
+  untracked: string[];
+}
+
+export function readBranchDiff(workspaceRoot: string, includeUncommitted: boolean): Promise<BranchDiff> {
+  return invoke<BranchDiff>("read_branch_diff", { request: { workspaceRoot, includeUncommitted } });
+}
+
 export function chooseWorkspaceDirectory(): Promise<string | null> {
   return invoke<string | null>("choose_workspace_directory");
 }
