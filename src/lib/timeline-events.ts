@@ -1,6 +1,6 @@
 import type { AppEvent } from "./types";
 
-export type TimelineEvent = Exclude<AppEvent, { kind: "session_start" }>;
+export type TimelineEvent = Exclude<AppEvent, { kind: "session_start" | "capabilities" }>;
 
 export function deduplicateTimelineEvents(
   events: AppEvent[],
@@ -8,7 +8,7 @@ export function deduplicateTimelineEvents(
 ): TimelineEvent[] {
   const seen = new Set<string>();
   return events.filter((event): event is TimelineEvent => {
-    if (event.kind === "session_start") return false;
+    if (event.kind === "session_start" || event.kind === "capabilities") return false;
     const key = timelineEventIdentity(event);
     if (seen.has(key) && !preserve?.(event)) return false;
     seen.add(key);

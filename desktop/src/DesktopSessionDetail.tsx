@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRe
 import type { CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import type { AppEvent, FileChangeEvent, SessionMeta, TranscriptSessionMeta } from "@/lib/types";
-import { timelineEventIdentity } from "@/lib/timeline-events";
+import { timelineEventIdentity, type TimelineEvent } from "@/lib/timeline-events";
 import type { SessionMatchTarget } from "./App";
 import { formatTime } from "@/utils/format";
 import DesktopFileTree from "./DesktopFileTree";
@@ -12,6 +12,7 @@ import DesktopTimeline from "./DesktopTimeline";
 import DesktopTerminal from "./DesktopTerminal";
 import DesktopLiveConversation from "./DesktopLiveConversation";
 import DesktopLiveStream, { type LiveStreamEntry } from "./DesktopLiveStream";
+import DesktopCapabilitiesPanel from "./DesktopCapabilitiesPanel";
 import { authorizeWorkspaceForFile, captureSessionHistory, ensureSessionHistory, getGitBranch, readSession, resolveWorkspaceFilepaths, stopTerminal } from "./desktop-api";
 import { startWindowDrag } from "./window-drag";
 import { workspaceRelativePath } from "./workspace-path";
@@ -66,7 +67,7 @@ export default function DesktopSessionDetail({
   const [branch, setBranch] = useState<string | null>(null);
   const [branchCopied, setBranchCopied] = useState(false);
   const [filePanelOpen, setFilePanelOpen] = useState(true);
-  const [filePanelView, setFilePanelView] = useState<"patches" | "stream">("patches");
+  const [filePanelView, setFilePanelView] = useState<"patches" | "stream" | "tools">("patches");
   const [editorNavigation, setEditorNavigation] = useState<{ workspaceRoot: string; path: string; requestId: number } | null>(null);
   const [liveStream, setLiveStream] = useState<{ scope: string; entries: LiveStreamEntry[] }>({ scope: "", entries: [] });
   // Match the resize floor so opening a terminal never takes more room than
@@ -579,6 +580,15 @@ export default function DesktopSessionDetail({
                     >
                       stream
                     </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={filePanelView === "tools"}
+                      className={filePanelView === "tools" ? "active" : ""}
+                      onClick={() => setFilePanelView("tools")}
+                    >
+                      tools
+                    </button>
                   </div>
                   <button
                     className="desktop-panel-toggle desktop-file-panel-toggle"
@@ -611,6 +621,8 @@ export default function DesktopSessionDetail({
                     onJumpToPatch={jumpToPatch}
                     onOpenFile={(path) => void openTimelineFileInEditor(path)}
                   />
+                ) : filePanelView === "tools" ? (
+                  <DesktopCapabilitiesPanel events={events} source={session.source} />
                 ) : (
                 <DesktopLiveStream
                     entries={liveStream.scope === liveStreamScope ? liveStream.entries : []}
@@ -788,11 +800,14 @@ function sessionStartEvent(session: TranscriptSessionMeta): AppEvent {
 }
 
 function mergeContinuationEvents(imported: AppEvent[], local: AppEvent[]): AppEvent[] {
-  const identities = new Set(imported
-    .filter((event) => event.kind !== "session_start")
-    .map(timelineEventIdentity));
-  const additions = local.filter((event) => event.kind !== "session_start" && !identities.has(timelineEventIdentity(event)));
-  return [...imported, ...additions].sort((left, right) => Date.parse(left.ts) - Date.parse(right.ts));
+  const isTimelineEvent = (event: AppEvent): event is TimelineEvent =>
+    event.kind !== "session_start" && event.kind !== "capabilities";
+  const identities = new Set(imported.filter(isTimelineEvent).map(timelineEventIdentity));
+  // Capabilities describe the running session, so only the local ones apply.
+  const additions = local.filter((event) => event.kind === "capabilities"
+    || (isTimelineEvent(event) && !identities.has(timelineEventIdentity(event))));
+  return [...imported.filter((event) => event.kind !== "capabilities"), ...additions]
+    .sort((left, right) => Date.parse(left.ts) - Date.parse(right.ts));
 }
 
 function mergeLiveStreamEntries(current: LiveStreamEntry[], incoming: LiveStreamEntry[]): LiveStreamEntry[] {
