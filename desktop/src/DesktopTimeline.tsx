@@ -560,7 +560,7 @@ function entryStyle(event: Exclude<TimelineEvent, { kind: "token_usage" }>) {
       ? { className: "file-write", badge: "badge-write", label: "write" }
       : action === "delete"
         ? { className: "file-delete", badge: "badge-delete", label: "delete" }
-        : { className: "file-change", badge: "badge-file", label: "patch" };
+        : { className: "file-change", badge: "badge-file", label: event.toolName === "Bash" ? "bash" : "patch" };
   }
   if (event.kind === "context_compaction") {
     return { className: "context-compaction", badge: "badge-context-compaction", label: "context" };

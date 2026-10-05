@@ -473,3 +473,98 @@ describe("parseClaudeEvent — token accumulation", () => {
     expect(events.some((e) => e.kind === "agent_message")).toBe(true);
   });
 });
+
+describe("parseClaudeEvent - Bash edit diffs", () => {
+  it("turns bashEditDiff into a file_change attached to the command", () => {
+    const events = parseClaudeEvent({
+      timestamp: TS,
+      type: "user",
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "ok" }] },
+      toolUseResult: {
+        stdout: "ok",
+        bashEditDiff: {
+          files: [
+            {
+              filePath: "/repo/tasks/main.yml",
+              hunks: [{ oldStart: 10, oldLines: 1, newStart: 10, newLines: 2, lines: ["-  - old", "+  # why", "+  - new"] }],
+            },
+            { filePath: "/repo/new.txt", hunks: [{ oldStart: 0, oldLines: 0, newStart: 1, newLines: 1, lines: ["+hello"] }] },
+            { filePath: "/repo/skipped.txt", hunks: [] },
+          ],
+          moreFiles: 0,
+          changedFiles: ["/repo/tasks/main.yml", "/repo/new.txt", "/repo/skipped.txt"],
+        },
+      },
+    }, makeAccum());
+    expect(events.map((event) => event.kind)).toEqual(["tool_output", "file_change"]);
+    expect(events[1]).toEqual({
+      kind: "file_change",
+      ts: TS,
+      callId: "toolu_1",
+      toolName: "Bash",
+      attribution: "tool_completed",
+      files: [{ action: "update", path: "/repo/tasks/main.yml" }, { action: "add", path: "/repo/new.txt" }],
+      patch: [
+        "*** Update File: /repo/tasks/main.yml",
+        "@@ -10,1 +10,2 @@",
+        "-  - old",
+        "+  # why",
+        "+  - new",
+        "*** Add File: /repo/new.txt",
+        "@@ -0,0 +1,1 @@",
+        "+hello",
+      ].join("\n"),
+    });
+  });
+
+  it("ignores tool results without an edit diff", () => {
+    const events = parseClaudeEvent({
+      timestamp: TS,
+      type: "user",
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_2", content: "done" }] },
+      toolUseResult: { stdout: "done" },
+    }, makeAccum());
+    expect(events.map((event) => event.kind)).toEqual(["tool_output"]);
+  });
+});
+
+describe("parseClaudeEvent - Bash edit diffs from git", () => {
+  function bashRun(id: string, command: string) {
+    const accum = makeAccum();
+    parseClaudeEvent({
+      timestamp: TS,
+      type: "assistant",
+      message: { content: [{ type: "tool_use", id, name: "Bash", input: { command } }] },
+    }, accum);
+    return parseClaudeEvent({
+      timestamp: TS,
+      type: "user",
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] },
+      toolUseResult: {
+        bashEditDiff: {
+          files: [{ filePath: "/repo/a.txt", hunks: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: ["-a", "+b"] }] }],
+          moreFiles: 0,
+          changedFiles: ["/repo/a.txt"],
+        },
+      },
+    }, accum).map((event) => event.kind);
+  }
+
+  it("leaves files swapped by git as a plain shell command", () => {
+    expect(bashRun("toolu_git", "cd ~/repo && git checkout -q main && git log -1")).toEqual(["tool_output"]);
+    expect(bashRun("toolu_rebase", "git -C ~/repo fetch && git -C ~/repo rebase origin/main")).toEqual(["tool_output"]);
+  });
+
+  it("keeps conflict fixes made while a rebase continues", () => {
+    expect(bashRun("toolu_fix", "sed -i 's/<<<//' a.txt && git add a.txt && GIT_EDITOR=true git rebase --continue")).toEqual(["tool_output", "file_change"]);
+    expect(bashRun("toolu_pick", "git show origin/main:a.txt > a.txt && git add a.txt && git rebase --continue 2>/dev/null")).toEqual(["tool_output", "file_change"]);
+  });
+
+  it("does not count discarded output as a file write", () => {
+    expect(bashRun("toolu_quiet", "git checkout main 2>/dev/null >/dev/null && git pull 2>&1")).toEqual(["tool_output"]);
+  });
+
+  it("keeps edits made with sed or python", () => {
+    expect(bashRun("toolu_sed", "cd ~/repo && sed -i 's/a/b/' a.txt && git add a.txt && git commit -qm x")).toEqual(["tool_output", "file_change"]);
+  });
+});

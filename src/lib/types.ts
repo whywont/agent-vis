@@ -171,4 +171,6 @@ export interface TokenAccumulator {
   output: number;
   cacheRead: number;
   cacheCreate: number;
+  /** Bash commands by tool_use id, to classify the files a command changed. */
+  bashCommands?: Map<string, string>;
 }

@@ -5,7 +5,7 @@ import { toDisplayString } from "@/utils/format";
  * Create a token accumulator for tracking running totals across a session.
  */
 export function createTokenAccumulator(): TokenAccumulator {
-  return { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 };
+  return { input: 0, output: 0, cacheRead: 0, cacheCreate: 0, bashCommands: new Map() };
 }
 
 /**
@@ -86,7 +86,7 @@ export function parseClaudeEvent(
       const content = message.content as Record<string, unknown>[];
       const hasToolResult = content.some((b) => b.type === "tool_result");
       if (hasToolResult) {
-        return parseToolResults(content, ts);
+        return [...parseToolResults(content, ts), ...parseBashEditDiff(obj, content, ts, tokenAccum)];
       }
       // Newer Claude builds prepend injected context as its own text block in
       // the same message as the typed prompt, so filter per block.
@@ -106,6 +106,7 @@ export function parseClaudeEvent(
   }
 
   if (type === "assistant") {
+    rememberBashCommands(obj, tokenAccum);
     const events = parseAssistantMessage(obj, ts);
     const message = obj.message as Record<string, unknown> | undefined;
     const usage = message?.usage as Record<string, number> | undefined;
@@ -289,6 +290,80 @@ function parseToolResults(
     }
   }
   return events;
+}
+
+const GIT_WORKTREE_COMMAND =
+  /\bgit\s+(?:-C\s+\S+\s+)?(?:checkout|switch|pull|merge|rebase|reset|stash|restore|cherry-pick|revert|am)\b/;
+// The agent also writing files (resolving a rebase conflict, say) makes those
+// edits its own even when the same command runs git.
+const FILE_WRITING_COMMAND = /\b(?:sed|perl)\s+-\w*i|\bpython3?\b|\bnode\s+-e\b|\btee\b|(?<![\d&])>>?\s*(?!\/dev\/null\b)[^\s&|>]/;
+
+function rememberBashCommands(obj: Record<string, unknown>, tokenAccum: TokenAccumulator) {
+  const content = (obj.message as Record<string, unknown> | undefined)?.content;
+  if (!Array.isArray(content) || !tokenAccum.bashCommands) return;
+  for (const block of content as Record<string, unknown>[]) {
+    const input = block.input as Record<string, unknown> | undefined;
+    if (block.type === "tool_use" && block.name === "Bash" && typeof block.id === "string" && typeof input?.command === "string") {
+      tokenAccum.bashCommands.set(block.id, input.command);
+    }
+  }
+}
+
+interface BashEditHunk {
+  oldStart?: number;
+  oldLines?: number;
+  newStart?: number;
+  newLines?: number;
+  lines?: unknown[];
+}
+
+/**
+ * Claude Code diffs the files a Bash command changed on disk and stores it as
+ * `toolUseResult.bashEditDiff`; the CLI shows these as "Updated <file>".
+ */
+function parseBashEditDiff(
+  obj: Record<string, unknown>,
+  content: Record<string, unknown>[],
+  ts: string,
+  tokenAccum: TokenAccumulator,
+): AppEvent[] {
+  const result = obj.toolUseResult as Record<string, unknown> | undefined;
+  const diff = result?.bashEditDiff as { files?: unknown[] } | undefined;
+  if (!Array.isArray(diff?.files)) return [];
+  const toolResult = content.find((block) => block.type === "tool_result");
+  const callId = typeof toolResult?.tool_use_id === "string" ? toolResult.tool_use_id : undefined;
+  // Files swapped by checkout, pull, rebase... weren't written by the agent;
+  // the command's shell row already records them.
+  const command = callId ? tokenAccum.bashCommands?.get(callId) : undefined;
+  if (command && GIT_WORKTREE_COMMAND.test(command) && !FILE_WRITING_COMMAND.test(command)) return [];
+  const files: FileInfo[] = [];
+  const blocks: string[] = [];
+  for (const entry of diff.files) {
+    const file = entry as { filePath?: unknown; hunks?: unknown[] } | null;
+    if (typeof file?.filePath !== "string" || !Array.isArray(file.hunks) || !file.hunks.length) continue;
+    const hunks = file.hunks as BashEditHunk[];
+    const action: FileInfo["action"] = hunks.every((hunk) => !hunk.oldStart && !hunk.oldLines)
+      ? "add"
+      : hunks.every((hunk) => !hunk.newStart && !hunk.newLines) ? "delete" : "update";
+    files.push({ action, path: file.filePath });
+    blocks.push([
+      `*** ${action === "add" ? "Add" : action === "delete" ? "Delete" : "Update"} File: ${file.filePath}`,
+      ...hunks.flatMap((hunk) => [
+        `@@ -${hunk.oldStart ?? 0},${hunk.oldLines ?? 0} +${hunk.newStart ?? 0},${hunk.newLines ?? 0} @@`,
+        ...(hunk.lines || []).filter((line): line is string => typeof line === "string"),
+      ]),
+    ].join("\n"));
+  }
+  if (!files.length) return [];
+  return [{
+    kind: "file_change",
+    ts,
+    patch: blocks.join("\n"),
+    files,
+    callId,
+    toolName: "Bash",
+    attribution: "tool_completed",
+  }];
 }
 
 /**
