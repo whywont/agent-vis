@@ -1,6 +1,6 @@
 import type { AppEvent } from "@/lib/types";
 
-export type TimelineEvent = Exclude<AppEvent, { kind: "session_start" }>;
+export type TimelineEvent = Exclude<AppEvent, { kind: "session_start" | "capabilities" }>;
 
 export interface TimelinePage {
   rendered: TimelineEvent[];
