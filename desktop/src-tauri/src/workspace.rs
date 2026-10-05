@@ -25,7 +25,7 @@ impl WorkspaceAuthorizationState {
             .clone()
     }
 
-    fn authorize(&self, root: PathBuf) {
+    pub(crate) fn authorize(&self, root: PathBuf) {
         self.roots
             .lock()
             .unwrap_or_else(|value| value.into_inner())
@@ -37,7 +37,9 @@ pub(crate) const MAX_EDIT_FILE_BYTES: u64 = 8 * 1024 * 1024;
 pub(crate) const MAX_WORKSPACE_FILES: usize = 10_000;
 pub(crate) const MAX_WORKSPACE_DEPTH: usize = 32;
 
-fn authorized_workspace_roots(app: &tauri::AppHandle) -> Result<HashSet<PathBuf>, String> {
+pub(crate) fn authorized_workspace_roots(
+    app: &tauri::AppHandle,
+) -> Result<HashSet<PathBuf>, String> {
     let mut roots = trusted_workspace_roots()?;
     roots.extend(crate::collab::collab_workspace_roots(app)?);
     if let Some(authorizations) = app.try_state::<WorkspaceAuthorizationState>() {

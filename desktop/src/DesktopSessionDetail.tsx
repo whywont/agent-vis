@@ -8,6 +8,7 @@ import { formatTime } from "@/utils/format";
 import DesktopFileTree from "./DesktopFileTree";
 import DesktopFilesCanvas from "./DesktopFilesCanvas";
 import DesktopTestingCanvas from "./DesktopTestingCanvas";
+import DesktopChangesView from "./DesktopChangesView";
 import DesktopTimeline from "./DesktopTimeline";
 import DesktopTerminal from "./DesktopTerminal";
 import DesktopLiveConversation from "./DesktopLiveConversation";
@@ -42,10 +43,10 @@ export default function DesktopSessionDetail({
 }: {
   session: TranscriptSessionMeta;
   sessionName: string | null;
-  activeTab: "session" | "files" | "testing" | "editor";
+  activeTab: "session" | "files" | "testing" | "editor" | "changes";
   terminalOpen: boolean;
   splitView?: boolean;
-  onActiveTabChange: (tab: "session" | "files" | "testing" | "editor") => void;
+  onActiveTabChange: (tab: "session" | "files" | "testing" | "editor" | "changes") => void;
   onTerminalOpen: () => void;
   onOpenCollab?: () => void;
   onTerminalClose: () => void;
@@ -534,6 +535,14 @@ export default function DesktopSessionDetail({
             Testing
           </button>
           <button
+            className={`session-tab-btn${activeTab === "changes" ? " active" : ""}`}
+            onClick={() => onActiveTabChange("changes")}
+            disabled={splitView || transcriptOnly}
+            title={transcriptOnly ? "Changes are unavailable for synced transcripts" : splitView ? "Changes is unavailable while sessions are split" : "Every change on this branch, like a pull request"}
+          >
+            Changes
+          </button>
+          <button
             className="session-tab-btn desktop-collab-tab"
             onClick={onOpenCollab}
             disabled={!onOpenCollab}
@@ -551,6 +560,8 @@ export default function DesktopSessionDetail({
         <DesktopFilesCanvas events={events} sessionCwd={cwd} threadId={id} />
       ) : activeTab === "testing" && !splitView && !transcriptOnly ? (
         <DesktopTestingCanvas events={events} sessionCwd={cwd} onOpenFile={(path) => void openTimelineFileInEditor(path)} />
+      ) : activeTab === "changes" && !splitView && !transcriptOnly ? (
+        <DesktopChangesView cwd={cwd} events={events} onOpenFile={(path) => void openTimelineFileInEditor(path)} />
       ) : activeTab === "editor" && !splitView && !transcriptOnly ? (
         <Suspense fallback={<div className="desktop-detail-state">Loading editor...</div>}>
           <DesktopEditor workspaceRoot={editorNavigation?.workspaceRoot || cwd} navigation={editorNavigation} threadId={id} events={events} />

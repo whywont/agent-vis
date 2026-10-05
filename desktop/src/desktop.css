@@ -3706,6 +3706,39 @@ body.terminal-dragging * { cursor: grabbing !important; }
   }
 }
 
+.desktop-changes { display: flex; min-height: 0; flex: 1; flex-direction: column; font-family: var(--font-mono); }
+.desktop-changes-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: 11px; color: var(--text-muted); }
+.desktop-changes-title { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 2px; }
+.desktop-changes-title strong { overflow: hidden; color: var(--text); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.desktop-changes-link { padding: 0; border: 0; background: none; color: var(--accent); cursor: pointer; font: inherit; }
+.desktop-changes-add { color: var(--green); }
+.desktop-changes-del { color: var(--red); }
+.desktop-changes-controls { display: flex; align-items: center; gap: 12px; font-size: 10px; }
+.desktop-changes-controls label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+.desktop-changes-controls button { padding: 3px 8px; border: 1px solid var(--border); border-radius: 3px; background: transparent; color: var(--text-muted); cursor: pointer; font: inherit; }
+.desktop-changes-controls button:disabled { cursor: default; opacity: 0.6; }
+.desktop-changes-commits { flex-basis: 100%; max-height: 160px; margin: 0; padding: 4px 0 0 18px; overflow: auto; font-size: 10px; }
+.desktop-changes-commits code { color: var(--accent); }
+.desktop-changes-warning, .desktop-changes-note { flex-basis: 100%; margin: 0; font-size: 10px; }
+.desktop-changes-warning { color: var(--red); }
+.desktop-changes-note { color: var(--text-dim); }
+.desktop-changes-body { display: flex; min-height: 0; flex: 1; }
+.desktop-changes-files { display: flex; width: 260px; flex: none; flex-direction: column; overflow: auto; padding: 6px 0; border-right: 1px solid var(--border); }
+.desktop-changes-files button { display: flex; align-items: baseline; gap: 6px; padding: 3px 10px; border: 0; background: transparent; color: var(--text-muted); cursor: pointer; font: 10px/1.5 var(--font-mono); text-align: left; }
+.desktop-changes-files button:hover { background: rgba(var(--accent-rgb), 0.08); color: var(--text); }
+.desktop-changes-files button span { min-width: 0; flex: 1; overflow: hidden; direction: rtl; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.desktop-changes-files small { flex: none; font-size: 9px; }
+.desktop-changes i { flex: none; width: 10px; font-size: 9px; font-style: normal; font-weight: 700; text-align: center; }
+.desktop-changes i.status-added { color: var(--green); }
+.desktop-changes i.status-deleted { color: var(--red); }
+.desktop-changes i.status-modified { color: var(--accent); }
+.desktop-changes i.status-renamed { color: var(--blue); }
+.desktop-changes-diffs { min-width: 0; flex: 1; overflow: auto; padding: 12px 14px 40px; }
+.desktop-changes-file { scroll-margin-top: 8px; margin-bottom: 12px; }
+.desktop-changes-placeholder { display: flex; align-items: baseline; gap: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 3px; color: var(--text); font-size: 11px; }
+.desktop-changes-placeholder small { margin-left: auto; color: var(--text-dim); }
+.desktop-changes-controls select { max-width: 220px; padding: 2px 4px; border: 1px solid var(--border); border-radius: 3px; background: var(--bg); color: var(--text); font: inherit; }
+
 .desktop-capabilities {
   min-height: 0;
   flex: 1;

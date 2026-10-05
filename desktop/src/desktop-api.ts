@@ -404,6 +404,33 @@ export function getGitBranch(workspaceRoot: string): Promise<string | null> {
   return invoke<string | null>("get_git_branch", { workspaceRoot });
 }
 
+export interface BranchDiff {
+  repoRoot: string;
+  branch: string | null;
+  /** The branch a pull request would target; null on that branch itself. */
+  base: string | null;
+  commits: Array<{ sha: string; subject: string }>;
+  files: Array<{ path: string; additions: number | null; deletions: number | null }>;
+  diff: string;
+  truncated: boolean;
+  untracked: string[];
+}
+
+export interface SessionRepo {
+  root: string;
+  /** How many of the session's paths fall inside this repository. */
+  references: number;
+}
+
+/** Find (and authorize) the Git repositories containing paths a session touched. */
+export function findSessionRepos(workspaceRoot: string, paths: string[]): Promise<SessionRepo[]> {
+  return invoke<SessionRepo[]>("find_session_repos", { request: { workspaceRoot, paths } });
+}
+
+export function readBranchDiff(workspaceRoot: string, includeUncommitted: boolean): Promise<BranchDiff> {
+  return invoke<BranchDiff>("read_branch_diff", { request: { workspaceRoot, includeUncommitted } });
+}
+
 export function chooseWorkspaceDirectory(): Promise<string | null> {
   return invoke<string | null>("choose_workspace_directory");
 }
