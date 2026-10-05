@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { createTokenAccumulator, parseClaudeEvent } from "@/lib/claude-parser";
+import { claudeInitCapabilities, createTokenAccumulator, parseClaudeEvent } from "@/lib/claude-parser";
 import { codexToolCallFromItem } from "@/lib/codex-parser";
 import type { AppEvent } from "@/lib/types";
 import {
@@ -269,6 +269,8 @@ export default function DesktopLiveConversation({
             ? message.slash_commands.filter((value): value is string => typeof value === "string")
             : [];
           if (commands.length) setSlashCommands(commands);
+          const capabilities = claudeInitCapabilities(message, new Date().toISOString());
+          if (capabilities) onTimelineEvent?.(capabilities);
         }
         if (message.type === "system" && message.subtype === "local_command") {
           const output = localCommandOutput(message.content);

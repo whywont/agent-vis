@@ -1,4 +1,4 @@
-import type { AppEvent, TokenAccumulator, FileInfo } from "./types";
+import type { AppEvent, CapabilitiesEvent, TokenAccumulator, FileInfo } from "./types";
 import { toDisplayString } from "@/utils/format";
 
 /**
@@ -32,6 +32,11 @@ export function parseClaudeEvent(
   // flagged isCompactSummary that carries the handoff summary; surface the
   // summary as the compaction. away_summary is only an idle recap, not a
   // compaction, so it falls through to the unhandled case.
+  if (type === "attachment") {
+    const capabilities = attachmentCapabilities(obj.attachment, ts);
+    return capabilities ? [capabilities] : [];
+  }
+
   if (type === "user" && obj.isCompactSummary) {
     const text = messageText(obj.message).trim();
     return [{
@@ -133,6 +138,81 @@ export function parseClaudeEvent(
   }
 
   return [];
+}
+
+function stringList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.flatMap((entry) => {
+    if (typeof entry === "string") return [entry];
+    const name = (entry as Record<string, unknown> | null)?.name;
+    return typeof name === "string" ? [name] : [];
+  });
+}
+
+// Claude's transcript attachments are internal and have changed between
+// versions, so every field is optional and unknown shapes are ignored.
+function attachmentCapabilities(value: unknown, ts: string): CapabilitiesEvent | null {
+  if (typeof value !== "object" || value === null) return null;
+  const attachment = value as Record<string, unknown>;
+  switch (attachment.type) {
+    case "prompt_snapshot": {
+      const tools = stringList(attachment.tools);
+      return tools?.length ? { kind: "capabilities", ts, tools } : null;
+    }
+    case "deferred_tools_delta":
+      return {
+        kind: "capabilities",
+        ts,
+        toolsAdded: [...stringList(attachment.addedNames) || [], ...stringList(attachment.readdedNames) || []],
+        toolsRemoved: stringList(attachment.removedNames),
+        failedMcpServers: stringList(attachment.failedMcpServers),
+        pendingMcpServers: stringList(attachment.pendingMcpServers),
+        needsAuthMcpServers: stringList(attachment.needsAuthMcpServers),
+      };
+    case "skill_listing": {
+      const names = stringList(attachment.names);
+      if (!names) return null;
+      return attachment.isInitial === false
+        ? { kind: "capabilities", ts, skillsAdded: names }
+        : { kind: "capabilities", ts, skills: names };
+    }
+    case "agent_listing_delta":
+      return {
+        kind: "capabilities",
+        ts,
+        agentsAdded: stringList(attachment.addedTypes),
+        agentsRemoved: stringList(attachment.removedTypes),
+      };
+    default:
+      return null;
+  }
+}
+
+/**
+ * Read what a live Claude session has available from its stream-json init
+ * frame. Every list replaces the transcript's running set.
+ */
+export function claudeInitCapabilities(message: Record<string, unknown>, ts: string): CapabilitiesEvent | null {
+  if (message.type !== "system" || message.subtype !== "init") return null;
+  const tools = stringList(message.tools);
+  if (!tools) return null;
+  const mcpServers = Array.isArray(message.mcp_servers)
+    ? message.mcp_servers.flatMap((server) => {
+      const entry = server as Record<string, unknown> | null;
+      return typeof entry?.name === "string"
+        ? [{ name: entry.name, status: typeof entry.status === "string" ? entry.status : "unknown" }]
+        : [];
+    })
+    : undefined;
+  return {
+    kind: "capabilities",
+    ts,
+    tools,
+    mcpServers,
+    skills: stringList(message.skills),
+    agentsAdded: stringList(message.agents),
+    plugins: stringList(message.plugins),
+  };
 }
 
 function messageText(message: unknown): string {
@@ -370,6 +450,7 @@ function parseToolUse(
       cmd: input.command || "",
       workdir: input.cwd || "",
       callId,
+      toolName: name,
       description: input.description || "",
     };
   }

@@ -3705,3 +3705,45 @@ body.terminal-dragging * { cursor: grabbing !important; }
     height: 88px;
   }
 }
+
+.desktop-capabilities {
+  min-height: 0;
+  flex: 1;
+  margin-top: 6px;
+  overflow: auto;
+  padding: 7px 8px 12px;
+  color: var(--text-muted);
+  font: 10px/1.5 var(--font-mono);
+}
+.desktop-capabilities-filter {
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+.desktop-capabilities-note,
+.desktop-capabilities-empty { margin: 4px 2px 8px; color: var(--text-dim); }
+.desktop-capabilities summary { display: flex; align-items: baseline; gap: 6px; cursor: pointer; list-style: none; }
+.desktop-capabilities summary::-webkit-details-marker { display: none; }
+.desktop-capabilities summary small { margin-left: auto; color: var(--text-dim); font-size: 9px; white-space: nowrap; }
+.desktop-capabilities-section { padding: 6px 0; border-bottom: 1px solid var(--border); }
+.desktop-capabilities-section > summary { color: var(--text-dim); font-size: 9px; letter-spacing: 0.09em; text-transform: uppercase; }
+.desktop-capabilities-section > summary::before { content: "\203A"; display: inline-block; width: 8px; transition: transform 0.1s; }
+.desktop-capabilities-section[open] > summary::before { transform: rotate(90deg); }
+.desktop-capabilities-section[open] > summary { margin-bottom: 4px; }
+.desktop-capabilities ul { margin: 0; padding: 0 0 0 14px; list-style: none; }
+.desktop-capabilities li { overflow-wrap: anywhere; color: var(--text-muted); }
+.desktop-capabilities li small { color: var(--text-dim); }
+.desktop-capabilities-server { padding: 2px 0 2px 8px; }
+.desktop-capabilities-server summary span { min-width: 0; overflow: hidden; color: var(--text); text-overflow: ellipsis; white-space: nowrap; }
+.desktop-capabilities-server summary em { color: var(--text-dim); font-size: 8px; font-style: normal; text-transform: uppercase; }
+.desktop-capabilities-server summary i { flex: none; width: 6px; height: 6px; align-self: center; border-radius: 50%; background: #5d625d; }
+.desktop-capabilities-server summary i.status-connected { background: #8fc4a8; }
+.desktop-capabilities-server summary i.status-failed { background: #cc887e; }
+.desktop-capabilities-server summary i.status-pending { background: #d3ad62; }
+.desktop-capabilities-server summary i.status-needs_auth { background: transparent; box-shadow: inset 0 0 0 1px #8a8f8a; }
+.desktop-capabilities-server ul { padding: 2px 0 4px 12px; }
