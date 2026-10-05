@@ -81,7 +81,7 @@ export function parseClaudeEvent(
       const content = message.content as Record<string, unknown>[];
       const hasToolResult = content.some((b) => b.type === "tool_result");
       if (hasToolResult) {
-        return parseToolResults(content, ts);
+        return [...parseToolResults(content, ts), ...parseBashEditDiff(obj, content, ts)];
       }
       // Newer Claude builds prepend injected context as its own text block in
       // the same message as the typed prompt, so filter per block.
@@ -209,6 +209,57 @@ function parseToolResults(
     }
   }
   return events;
+}
+
+interface BashEditHunk {
+  oldStart?: number;
+  oldLines?: number;
+  newStart?: number;
+  newLines?: number;
+  lines?: unknown[];
+}
+
+/**
+ * Claude Code diffs the files a Bash command changed on disk and stores it as
+ * `toolUseResult.bashEditDiff`; the CLI shows these as "Updated <file>".
+ */
+function parseBashEditDiff(
+  obj: Record<string, unknown>,
+  content: Record<string, unknown>[],
+  ts: string,
+): AppEvent[] {
+  const result = obj.toolUseResult as Record<string, unknown> | undefined;
+  const diff = result?.bashEditDiff as { files?: unknown[] } | undefined;
+  if (!Array.isArray(diff?.files)) return [];
+  const files: FileInfo[] = [];
+  const blocks: string[] = [];
+  for (const entry of diff.files) {
+    const file = entry as { filePath?: unknown; hunks?: unknown[] } | null;
+    if (typeof file?.filePath !== "string" || !Array.isArray(file.hunks) || !file.hunks.length) continue;
+    const hunks = file.hunks as BashEditHunk[];
+    const action: FileInfo["action"] = hunks.every((hunk) => !hunk.oldStart && !hunk.oldLines)
+      ? "add"
+      : hunks.every((hunk) => !hunk.newStart && !hunk.newLines) ? "delete" : "update";
+    files.push({ action, path: file.filePath });
+    blocks.push([
+      `*** ${action === "add" ? "Add" : action === "delete" ? "Delete" : "Update"} File: ${file.filePath}`,
+      ...hunks.flatMap((hunk) => [
+        `@@ -${hunk.oldStart ?? 0},${hunk.oldLines ?? 0} +${hunk.newStart ?? 0},${hunk.newLines ?? 0} @@`,
+        ...(hunk.lines || []).filter((line): line is string => typeof line === "string"),
+      ]),
+    ].join("\n"));
+  }
+  if (!files.length) return [];
+  const toolResult = content.find((block) => block.type === "tool_result");
+  return [{
+    kind: "file_change",
+    ts,
+    patch: blocks.join("\n"),
+    files,
+    callId: typeof toolResult?.tool_use_id === "string" ? toolResult.tool_use_id : undefined,
+    toolName: "Bash",
+    attribution: "tool_completed",
+  }];
 }
 
 /**

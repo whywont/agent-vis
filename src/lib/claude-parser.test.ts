@@ -473,3 +473,57 @@ describe("parseClaudeEvent — token accumulation", () => {
     expect(events.some((e) => e.kind === "agent_message")).toBe(true);
   });
 });
+
+describe("parseClaudeEvent - Bash edit diffs", () => {
+  it("turns bashEditDiff into a file_change attached to the command", () => {
+    const events = parseClaudeEvent({
+      timestamp: TS,
+      type: "user",
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "ok" }] },
+      toolUseResult: {
+        stdout: "ok",
+        bashEditDiff: {
+          files: [
+            {
+              filePath: "/repo/tasks/main.yml",
+              hunks: [{ oldStart: 10, oldLines: 1, newStart: 10, newLines: 2, lines: ["-  - old", "+  # why", "+  - new"] }],
+            },
+            { filePath: "/repo/new.txt", hunks: [{ oldStart: 0, oldLines: 0, newStart: 1, newLines: 1, lines: ["+hello"] }] },
+            { filePath: "/repo/skipped.txt", hunks: [] },
+          ],
+          moreFiles: 0,
+          changedFiles: ["/repo/tasks/main.yml", "/repo/new.txt", "/repo/skipped.txt"],
+        },
+      },
+    }, makeAccum());
+    expect(events.map((event) => event.kind)).toEqual(["tool_output", "file_change"]);
+    expect(events[1]).toEqual({
+      kind: "file_change",
+      ts: TS,
+      callId: "toolu_1",
+      toolName: "Bash",
+      attribution: "tool_completed",
+      files: [{ action: "update", path: "/repo/tasks/main.yml" }, { action: "add", path: "/repo/new.txt" }],
+      patch: [
+        "*** Update File: /repo/tasks/main.yml",
+        "@@ -10,1 +10,2 @@",
+        "-  - old",
+        "+  # why",
+        "+  - new",
+        "*** Add File: /repo/new.txt",
+        "@@ -0,0 +1,1 @@",
+        "+hello",
+      ].join("\n"),
+    });
+  });
+
+  it("ignores tool results without an edit diff", () => {
+    const events = parseClaudeEvent({
+      timestamp: TS,
+      type: "user",
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_2", content: "done" }] },
+      toolUseResult: { stdout: "done" },
+    }, makeAccum());
+    expect(events.map((event) => event.kind)).toEqual(["tool_output"]);
+  });
+});
