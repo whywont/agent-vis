@@ -127,8 +127,34 @@ export interface TokenUsageEvent {
   last_output: number;
 }
 
+/**
+ * What the agent had available, as Claude records it. Claude mostly writes
+ * deltas, so fields are applied in order: list fields named `*Added` /
+ * `*Removed` adjust the running set, the others replace it.
+ */
+export interface CapabilitiesEvent {
+  kind: "capabilities";
+  ts: string;
+  /** Tools loaded into every request (replaces the previous list). */
+  tools?: string[];
+  /** Tools available on demand, including every MCP tool. */
+  toolsAdded?: string[];
+  toolsRemoved?: string[];
+  /** MCP servers with an explicit status (replaces the previous list). */
+  mcpServers?: { name: string; status: string }[];
+  failedMcpServers?: string[];
+  pendingMcpServers?: string[];
+  needsAuthMcpServers?: string[];
+  skills?: string[];
+  skillsAdded?: string[];
+  agentsAdded?: string[];
+  agentsRemoved?: string[];
+  plugins?: string[];
+}
+
 export type AppEvent =
   | SessionStartEvent
+  | CapabilitiesEvent
   | UserMessageEvent
   | AgentMessageEvent
   | ReasoningEvent
